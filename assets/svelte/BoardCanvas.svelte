@@ -324,29 +324,22 @@
       </g>
     {/each}
 
-    <!-- live head crosshair. Colour + style encode how much to trust this
-         board position: solid cyan when fully aligned; dashed amber while it's
-         only an estimate (1 capture) or rough (2 captures). Hidden entirely at
-         0 captures (head is null) — we don't fake a board position. -->
+    <!-- live drill-bit marker: a light, rotating crosshair (the spin reads as
+         "the bit"). Blue and deliberately UNLIKE the hole/fiducial markers
+         (which are filled/ringed circles) so it never reads as a hole. Hidden
+         at 0 captures (head is null) — we don't fake a board position. While the
+         position is only an estimate/rough it pulses to flag low confidence. -->
     {#if projectedHead}
       {@const hd = projectedHead}
-      {@const arm = 2.5 * mark}
-      {@const col = headConfidence === "aligned" ? "#22d3ee" : "#ffb300"}
-      {@const dash = headConfidence === "aligned" ? "none" : `${0.6 * mark} ${0.6 * mark}`}
+      {@const arm = 2.4 * mark}
+      {@const gap = 0.7 * mark}
       <g class="head" class:estimate={headConfidence !== "aligned"}>
-        <line x1={hd.px - arm} y1={hd.py} x2={hd.px + arm} y2={hd.py} stroke={col} stroke-width={0.2 * mark} />
-        <line x1={hd.px} y1={hd.py - arm} x2={hd.px} y2={hd.py + arm} stroke={col} stroke-width={0.2 * mark} />
-        <circle
-          cx={hd.px}
-          cy={hd.py}
-          r={1.8 * mark}
-          fill="none"
-          stroke={col}
-          stroke-width={0.2 * mark}
-          stroke-dasharray={dash}
-          opacity="0.7"
-        />
-        <circle cx={hd.px} cy={hd.py} r={0.4 * mark} fill={col} />
+        <!-- four crosshair ticks with a centre gap (no enclosing ring/dot) -->
+        <line x1={hd.px - arm} y1={hd.py} x2={hd.px - gap} y2={hd.py} stroke="#22d3ee" stroke-width={0.22 * mark} stroke-linecap="round" />
+        <line x1={hd.px + gap} y1={hd.py} x2={hd.px + arm} y2={hd.py} stroke="#22d3ee" stroke-width={0.22 * mark} stroke-linecap="round" />
+        <line x1={hd.px} y1={hd.py - arm} x2={hd.px} y2={hd.py - gap} stroke="#22d3ee" stroke-width={0.22 * mark} stroke-linecap="round" />
+        <line x1={hd.px} y1={hd.py + gap} x2={hd.px} y2={hd.py + arm} stroke="#22d3ee" stroke-width={0.22 * mark} stroke-linecap="round" />
+        <circle cx={hd.px} cy={hd.py} r={0.3 * mark} fill="#22d3ee" />
       </g>
     {/if}
   </svg>
@@ -487,8 +480,11 @@
     stroke: #40e56c;
   }
   /* low-confidence head marker pulses to read as "approximate, not exact" */
+  /* low-confidence marker keeps spinning but also pulses to read as "approximate" */
   .head.estimate {
-    animation: pulse 1.4s ease-in-out infinite;
+    animation:
+      spin 6s linear infinite,
+      pulse 1.4s ease-in-out infinite;
   }
   .head-confidence {
     position: absolute;
