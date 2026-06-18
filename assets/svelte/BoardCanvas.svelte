@@ -465,6 +465,17 @@
     cursor: pointer;
     filter: drop-shadow(0 0 4px rgba(255, 179, 0, 0.7));
   }
+  /* Suppress the browser's default focus ring on the clickable marker groups —
+     on an SVG <g> it renders as a thick blue/white halo (~5px "auto" outline)
+     that swamps the marker. The current-target's own amber blink is the visual
+     indicator; keyboard users get a subtle custom ring via :focus-visible. */
+  .fid:focus {
+    outline: none;
+  }
+  .fid:focus-visible circle:first-of-type {
+    stroke: #ffd79b;
+    stroke-width: 0.4px;
+  }
   /* pending: faded, static — click to make it the current target */
   .fid.pending circle {
     stroke: #ffb300;
