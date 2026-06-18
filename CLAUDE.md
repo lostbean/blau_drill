@@ -56,6 +56,13 @@ This repo uses a Nix-native dev setup. The toolchain is **Erlang/OTP 28** with
   motion.
 - Treat the five-stage flow as **linear**: a stage's preconditions must hold
   before advancing.
+- **Verify UI/layout changes in a real browser viewport, not by inspecting
+  rendered output.** A correct-looking attribute (e.g. an SSR'd SVG `viewBox`)
+  is not proof the user sees the right thing — layout, overflow, and fit bugs
+  only surface when the page is actually rendered at size. For the board canvas
+  specifically, take a full-page screenshot (the Svelte SVG lives in a shadow
+  DOM, so `document.querySelector` can't reach it) and confirm the whole board
+  is visible. Trust what's on screen over what the markup says.
 
 ### Don't
 
