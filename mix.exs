@@ -43,6 +43,7 @@ defmodule BlauDrill.MixProject do
   # app. There is intentionally NO database — no Ecto, Repo, or DB driver.
   defp deps do
     [
+      {:tidewave, "~> 0.6", only: [:dev]},
       # --- Phoenix / LiveView web stack ---
       {:phoenix, "~> 1.8"},
       {:phoenix_html, "~> 4.3"},
@@ -73,7 +74,11 @@ defmodule BlauDrill.MixProject do
       {:circuits_uart, "~> 1.6"},
 
       # --- Property-based testing for safety-invariant tests (test/dev) ---
-      {:stream_data, "~> 1.3", only: [:dev, :test]}
+      {:stream_data, "~> 1.3", only: [:dev, :test]},
+
+      # --- Codemod tooling: provides `mix igniter.install` and powers
+      #     Tidewave's installer (which wires its plug into the endpoint). ---
+      {:igniter, "~> 0.6", only: [:dev, :test]}
     ]
   end
 
