@@ -21,3 +21,13 @@ blau_drill-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+
+# Nix / direnv dev environment.
+.direnv/
+
+# Project-local Mix/Hex state (see flake.nix shellHook).
+/.mix/
+/.hex/
+
+# ElixirLS workspace.
+/.elixir_ls/

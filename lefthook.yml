@@ -1,0 +1,14 @@
+# Install the hooks with `lefthook install` (lefthook is provided by the flake
+# devShell).
+#
+# The pre-commit hook formats only STAGED files via `nix fmt` and re-stages the
+# results (stage_fixed: true). A commit with unformatted code is fixed in place
+# and succeeds — no re-commit needed — and unstaged hunks of a partially-staged
+# file are left untouched.
+pre-commit:
+  commands:
+    format:
+      # treefmt (via `nix fmt`) accepts explicit file paths; lefthook passes
+      # the staged files in {staged_files}.
+      run: nix fmt -- {staged_files}
+      stage_fixed: true
