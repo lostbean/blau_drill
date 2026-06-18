@@ -35,10 +35,15 @@
   )
 
   // ── projection ────────────────────────────────────────────────────────────
-  const PAD = 24 // viewBox padding (board units), so marks near the edge show
-  const VIEW = 1000 // square viewBox; we letterbox within it
+  // The SVG viewBox is sized to the board's OWN aspect ratio (plus padding), so
+  // `preserveAspectRatio="xMidYMid meet"` fits the whole board into whatever
+  // shape the container is — width AND height — without cropping. A square
+  // viewBox letterboxed inside a non-square container was what clipped the board
+  // vertically before. One board unit (mm) maps to one viewBox unit, so marks
+  // keep a consistent on-screen size regardless of board dimensions.
+  const PAD = 8 // viewBox padding in board units (mm), so edge marks aren't clipped
 
-  const box = $derived(() => {
+  const box = $derived.by(() => {
     if (bbox && bbox.length === 4) {
       const [minx, miny, maxx, maxy] = bbox
       return { minx, miny, maxx, maxy }
@@ -57,39 +62,92 @@
     return { minx: 0, miny: 0, maxx: 1, maxy: 1 }
   })
 
-  const span = $derived(() => {
-    const b = box()
-    const w = Math.max(b.maxx - b.minx, 0.001)
-    const h = Math.max(b.maxy - b.miny, 0.001)
-    const s = (VIEW - 2 * PAD) / Math.max(w, h)
-    // Centre the board in the square viewBox.
-    const offX = PAD + (VIEW - 2 * PAD - w * s) / 2
-    const offY = PAD + (VIEW - 2 * PAD - h * s) / 2
-    return { s, offX, offY, w, h, b }
+  // Board span in mm, padded. The viewBox is exactly this size, so aspect ratio
+  // is preserved by the SVG itself.
+  const span = $derived.by(() => {
+    const b = box
+    const w = Math.max(b.maxx - b.minx, 0.001) + 2 * PAD
+    const h = Math.max(b.maxy - b.miny, 0.001) + 2 * PAD
+    return { w, h, b }
   })
 
-  // Board point -> SVG point. Y is flipped: board +Y is up, SVG +Y is down.
+  // ── zoom + pan ──────────────────────────────────────────────────────────────
+  // zoom 1 = whole board fits. >1 zooms in. The visible window is the full span
+  // divided by zoom, centred on a pan point (cx, cy) expressed as a fraction of
+  // the span. The viewBox is recomputed from these so vector marks stay crisp.
+  const MIN_ZOOM = 1
+  const MAX_ZOOM = 12
+  let zoom = $state(1)
+  let panX = $state(0.5) // centre, as a 0..1 fraction of the (padded) span
+  let panY = $state(0.5)
+
+  const viewBox = $derived.by(() => {
+    const { w, h } = span
+    const vw = w / zoom
+    const vh = h / zoom
+    // Clamp the pan so the window stays inside the board span.
+    const cx = Math.min(Math.max(panX, vw / 2 / w), 1 - vw / 2 / w)
+    const cy = Math.min(Math.max(panY, vh / 2 / h), 1 - vh / 2 / h)
+    const x = cx * w - vw / 2
+    const y = cy * h - vh / 2
+    return { x, y, vw, vh }
+  })
+
+  const viewBoxStr = $derived.by(
+    () => `${viewBox.x.toFixed(2)} ${viewBox.y.toFixed(2)} ${viewBox.vw.toFixed(2)} ${viewBox.vh.toFixed(2)}`,
+  )
+
+  function zoomBy(factor) {
+    zoom = Math.min(Math.max(zoom * factor, MIN_ZOOM), MAX_ZOOM)
+    if (zoom === MIN_ZOOM) {
+      panX = 0.5
+      panY = 0.5
+    }
+  }
+
+  function resetView() {
+    zoom = MIN_ZOOM
+    panX = 0.5
+    panY = 0.5
+  }
+
+  function onWheel(e) {
+    e.preventDefault()
+    zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15)
+  }
+
+  // Board point -> viewBox point. Y is flipped: board +Y is up, SVG +Y is down.
+  // The padded span places (minx - PAD, ...) at viewBox origin.
   function project(x, y) {
-    const { s, offX, offY, b, h } = span()
-    const px = offX + (x - b.minx) * s
-    const py = offY + (h - (y - b.miny)) * s
+    const { b, h } = span
+    const px = x - b.minx + PAD
+    const py = h - (y - b.miny + PAD)
     return [px, py]
   }
+
+  // A constant on-screen size for marks regardless of zoom: divide by zoom so a
+  // 5mm-radius dot doesn't balloon when you zoom in.
+  const mark = $derived(1 / zoom)
 
   const projectedHoles = $derived(
     holes.map((hole) => {
       const [px, py] = project(hole.x, hole.y)
-      return { ...hole, px, py, color: toolColor[hole.tool] || "#00ffff" }
+      // Draw each hole near its TRUE physical size (tool diameter in mm), with a
+      // readable floor so tiny bits don't vanish. This keeps dense rows legible
+      // instead of overlapping blobs.
+      const dia = tools[hole.tool]
+      const trueR = dia ? dia / 2 : 0.4
+      return { ...hole, px, py, baseR: trueR, color: toolColor[hole.tool] || "#00ffff" }
     }),
   )
 
-  const outlinePath = $derived(() => {
+  const outlinePath = $derived.by(() => {
     if (!outline || !outline.length) return null
     return (
       outline
         .map((pt, i) => {
           const [px, py] = project(pt[0], pt[1])
-          return `${i === 0 ? "M" : "L"}${px.toFixed(1)},${py.toFixed(1)}`
+          return `${i === 0 ? "M" : "L"}${px.toFixed(2)},${py.toFixed(2)}`
         })
         .join(" ") + " Z"
     )
@@ -102,7 +160,7 @@
     }),
   )
 
-  const projectedHead = $derived(() => {
+  const projectedHead = $derived.by(() => {
     if (!head) return null
     const [px, py] = project(head.x, head.y)
     return { px, py }
@@ -116,30 +174,38 @@
 </script>
 
 <div class="board-canvas" data-stage={stage}>
-  <svg viewBox="0 0 {VIEW} {VIEW}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="PCB board view">
-    <!-- substrate -->
-    <rect x="0" y="0" width={VIEW} height={VIEW} fill="#0a2e14" />
-    <rect x="0" y="0" width={VIEW} height={VIEW} fill="url(#grid)" />
+  <svg
+    viewBox={viewBoxStr}
+    preserveAspectRatio="xMidYMid meet"
+    role="img"
+    aria-label="PCB board view"
+    onwheel={onWheel}
+  >
+    <!-- substrate: covers the full padded board span -->
+    <rect x="0" y="0" width={span.w} height={span.h} fill="#0a2e14" />
+    <rect x="0" y="0" width={span.w} height={span.h} fill="url(#grid)" />
     <defs>
-      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-        <path d="M40 0 L0 0 0 40" fill="none" stroke="#0e3a1b" stroke-width="1" />
+      <!-- 5mm grid in board units -->
+      <pattern id="grid" width="5" height="5" patternUnits="userSpaceOnUse">
+        <path d="M5 0 L0 0 0 5" fill="none" stroke="#0e3a1b" stroke-width={0.15 * mark} />
       </pattern>
     </defs>
 
     <!-- board outline -->
-    {#if outlinePath()}
-      <path d={outlinePath()} fill="none" stroke="#40e56c" stroke-width="2" opacity="0.5" />
+    {#if outlinePath}
+      <path d={outlinePath} fill="none" stroke="#40e56c" stroke-width={0.2 * mark} opacity="0.5" />
     {/if}
 
-    <!-- holes -->
+    <!-- holes: drawn at their true tool diameter (mm), floored so they stay
+         visible, with a thin zoom-compensated stroke. -->
     {#each projectedHoles as hole}
       <circle
         cx={hole.px}
         cy={hole.py}
-        r={hole.status === "active" ? 9 : 5}
+        r={Math.max(hole.baseR, 0.35 * mark) * (hole.status === "active" ? 1.5 : 1)}
         fill={hole.status === "pending" || hole.status === undefined ? "none" : holeFill(hole)}
         stroke={holeFill(hole)}
-        stroke-width="2"
+        stroke-width={0.18 * mark}
         class:done={hole.status === "done"}
         class:active={hole.status === "active"}
       />
@@ -148,33 +214,42 @@
     <!-- fiducials -->
     {#each projectedFids as fid}
       <g class="fid {fid.state}">
-        <circle cx={fid.px} cy={fid.py} r="16" fill="none" stroke-width="3" />
+        <circle cx={fid.px} cy={fid.py} r={1.6 * mark} fill="none" stroke-width={0.3 * mark} />
         {#if fid.state === "captured"}
           <path
-            d="M{fid.px - 7},{fid.py} l5,6 l9,-12"
+            d="M{fid.px - 0.7 * mark},{fid.py} l{0.45 * mark},{0.55 * mark} l{0.8 * mark},{-1.1 * mark}"
             fill="none"
             stroke="#40e56c"
-            stroke-width="3"
+            stroke-width={0.3 * mark}
             stroke-linecap="round"
             stroke-linejoin="round"
           />
         {:else}
-          <circle cx={fid.px} cy={fid.py} r="4" fill="#ffb300" />
+          <circle cx={fid.px} cy={fid.py} r={0.4 * mark} fill="#ffb300" />
         {/if}
       </g>
     {/each}
 
     <!-- live head crosshair -->
-    {#if projectedHead()}
-      {@const h = projectedHead()}
+    {#if projectedHead}
+      {@const hd = projectedHead}
+      {@const arm = 2.5 * mark}
       <g class="head">
-        <line x1={h.px - 28} y1={h.py} x2={h.px + 28} y2={h.py} stroke="#22d3ee" stroke-width="2" />
-        <line x1={h.px} y1={h.py - 28} x2={h.px} y2={h.py + 28} stroke="#22d3ee" stroke-width="2" />
-        <circle cx={h.px} cy={h.py} r="20" fill="none" stroke="#22d3ee" stroke-width="2" opacity="0.6" />
-        <circle cx={h.px} cy={h.py} r="4" fill="#22d3ee" />
+        <line x1={hd.px - arm} y1={hd.py} x2={hd.px + arm} y2={hd.py} stroke="#22d3ee" stroke-width={0.2 * mark} />
+        <line x1={hd.px} y1={hd.py - arm} x2={hd.px} y2={hd.py + arm} stroke="#22d3ee" stroke-width={0.2 * mark} />
+        <circle cx={hd.px} cy={hd.py} r={1.8 * mark} fill="none" stroke="#22d3ee" stroke-width={0.2 * mark} opacity="0.6" />
+        <circle cx={hd.px} cy={hd.py} r={0.4 * mark} fill="#22d3ee" />
       </g>
     {/if}
   </svg>
+
+  <!-- zoom controls -->
+  <div class="zoom-controls">
+    <button type="button" onclick={() => zoomBy(1.3)} aria-label="Zoom in" title="Zoom in">+</button>
+    <button type="button" onclick={() => zoomBy(1 / 1.3)} aria-label="Zoom out" title="Zoom out">−</button>
+    <button type="button" class="reset" onclick={resetView} aria-label="Fit board" title="Fit board">⤢</button>
+    <span class="zoom-level">{Math.round(zoom * 100)}%</span>
+  </div>
 
   <!-- tool legend -->
   {#if toolIds.length}
@@ -203,6 +278,49 @@
     height: 100%;
     border-radius: 0.25rem;
     box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.6);
+    touch-action: none;
+  }
+  .zoom-controls {
+    position: absolute;
+    right: 1rem;
+    top: 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+    z-index: 2;
+  }
+  .zoom-controls button {
+    width: 2rem;
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    line-height: 1;
+    color: #e5e2e1;
+    background: rgba(19, 19, 19, 0.85);
+    border: 1px solid #514532;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+  }
+  .zoom-controls button:hover {
+    border-color: #ffb300;
+    color: #ffb300;
+  }
+  .zoom-controls .reset {
+    font-size: 0.9rem;
+  }
+  .zoom-level {
+    text-align: center;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.6rem;
+    color: #d6c4ac;
+    background: rgba(19, 19, 19, 0.85);
+    border: 1px solid #514532;
+    border-radius: 0.25rem;
+    padding: 0.1rem 0;
   }
   circle.done {
     filter: drop-shadow(0 0 6px rgba(0, 200, 83, 0.6));

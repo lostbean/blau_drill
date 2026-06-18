@@ -44,3 +44,6 @@ blau_drill-*.tar
 /priv/static/cache_manifest.json
 # Node modules for the asset build (esbuild-svelte, svelte, ...).
 /assets/node_modules/
+
+# Local Claude Code settings (per-developer MCP approvals, etc.)
+.claude/settings.local.json
