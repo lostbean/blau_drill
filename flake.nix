@@ -44,6 +44,7 @@
             elixir
             beam.elixir-ls # Elixir language server (matches the OTP/Elixir set)
             pkgs.lefthook
+            pkgs.nodejs # Node runtime for the live_svelte / esbuild asset pipeline
           ];
 
           # Keep Hex/Rebar/Mix state local to the project instead of $HOME.

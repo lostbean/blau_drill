@@ -31,3 +31,16 @@ blau_drill-*.tar
 
 # ElixirLS workspace.
 /.elixir_ls/
+
+# Phoenix / asset pipeline.
+# Compiled/digested static assets (built by tailwind + assets/build.js).
+# The directories themselves are kept via .gitkeep; only built files are ignored.
+/priv/static/assets/js/*
+!/priv/static/assets/js/.gitkeep
+/priv/static/assets/css/*
+!/priv/static/assets/css/.gitkeep
+/priv/svelte/*
+!/priv/svelte/.gitkeep
+/priv/static/cache_manifest.json
+# Node modules for the asset build (esbuild-svelte, svelte, ...).
+/assets/node_modules/

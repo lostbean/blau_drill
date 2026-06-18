@@ -1,8 +1,7 @@
 defmodule BlauDrillTest do
-  use ExUnit.Case
-  doctest BlauDrill
+  use ExUnit.Case, async: true
 
-  test "greets the world" do
-    assert BlauDrill.hello() == :world
+  test "the business-logic context module is defined" do
+    assert Code.ensure_loaded?(BlauDrill)
   end
 end
