@@ -394,6 +394,56 @@ defmodule BlauDrillWeb.SessionLiveTest do
     assert hd(current2)["index"] == 2
   end
 
+  # ── live head confidence ────────────────────────────────────────────────────
+
+  test "the live head marker's confidence grows none -> estimate -> rough -> aligned",
+       %{conn: conn} do
+    {conn, name} = with_printer(conn)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    to_registering(view)
+
+    # 0 captures: no usable transform — no in-board marker, confidence "none".
+    # (The Svelte caption itself is client-rendered, so it's verified in-browser;
+    # here we assert the prop contract the canvas reads.)
+    assert canvas_props(view)["head_confidence"] == "none"
+    assert canvas_props(view)["head"] == nil
+
+    candidates = BlauDrillWeb.SessionLive.feature_candidates(board_for(view))
+
+    # Capture point 1 → translation-only estimate.
+    capture_at(view, name, Enum.at(candidates, 0))
+    assert canvas_props(view)["head_confidence"] == "estimate"
+    assert canvas_props(view)["head"]
+
+    # Capture point 2 → similarity (rough).
+    render_hook(view, "set_current_target", %{"index" => 1})
+    capture_at(view, name, Enum.at(candidates, 1))
+    assert canvas_props(view)["head_confidence"] == "rough"
+
+    # Capture point 3 + fit → full affine (aligned).
+    render_hook(view, "set_current_target", %{"index" => 2})
+    capture_at(view, name, Enum.at(candidates, 2))
+    render_click(element(view, "[data-test='fit-alignment']"))
+    assert canvas_props(view)["head_confidence"] == "aligned"
+  end
+
+  # The parsed board behind the current view (for candidate coordinates).
+  defp board_for(view) do
+    {:ok, board} =
+      BlauDrill.BoardModel.parse_drl(File.read!("test/support/fixtures/segby_v1.drl"))
+
+    _ = view
+    board
+  end
+
+  # Jog the (sim) head onto a board point's coordinates and capture it. With the
+  # sim, machine == board here, so captures give a clean identity-ish fit.
+  defp capture_at(view, name, {bx, by}) do
+    jog_to(view, name, {bx, by})
+    render_click(element(view, "[data-test='capture-fiducial']"))
+  end
+
   test "abort + emergency stop are present while drilling, and aborting faults the job",
        %{conn: conn} do
     {conn, name} = with_printer(conn)

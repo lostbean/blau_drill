@@ -24,13 +24,19 @@
     bbox = null,
     head = null,
     stage = "align",
-    // headConfidence: "none" | "estimate" | "rough" | "aligned" — how much to
-    // trust the live head's projected board position (set #18).
-    headConfidence = "aligned",
+    // head_confidence: "none" | "estimate" | "rough" | "aligned" — how much to
+    // trust the live head's projected board position (set #18). Named in
+    // snake_case to match the prop the LiveView sends (live_svelte passes props
+    // through verbatim, so the key must match exactly). Default "none" so a
+    // missing/old value reads as untrusted, never falsely "aligned".
+    head_confidence = "none",
     // live is injected by LiveSvelte; lets the canvas push events to the
     // LiveView (select a registration target, jump the head to a clicked point).
     live = null,
   } = $props()
+
+  // Local alias for readability in the template.
+  const headConfidence = $derived(head_confidence)
 
   // Clicking a registration marker makes it the current target (operator-driven
   // capture order). The LiveView decides what to do (select, and later jog).
@@ -286,18 +292,48 @@
       </g>
     {/each}
 
-    <!-- live head crosshair -->
+    <!-- live head crosshair. Colour + style encode how much to trust this
+         board position: solid cyan when fully aligned; dashed amber while it's
+         only an estimate (1 capture) or rough (2 captures). Hidden entirely at
+         0 captures (head is null) — we don't fake a board position. -->
     {#if projectedHead}
       {@const hd = projectedHead}
       {@const arm = 2.5 * mark}
-      <g class="head">
-        <line x1={hd.px - arm} y1={hd.py} x2={hd.px + arm} y2={hd.py} stroke="#22d3ee" stroke-width={0.2 * mark} />
-        <line x1={hd.px} y1={hd.py - arm} x2={hd.px} y2={hd.py + arm} stroke="#22d3ee" stroke-width={0.2 * mark} />
-        <circle cx={hd.px} cy={hd.py} r={1.8 * mark} fill="none" stroke="#22d3ee" stroke-width={0.2 * mark} opacity="0.6" />
-        <circle cx={hd.px} cy={hd.py} r={0.4 * mark} fill="#22d3ee" />
+      {@const col = headConfidence === "aligned" ? "#22d3ee" : "#ffb300"}
+      {@const dash = headConfidence === "aligned" ? "none" : `${0.6 * mark} ${0.6 * mark}`}
+      <g class="head" class:estimate={headConfidence !== "aligned"}>
+        <line x1={hd.px - arm} y1={hd.py} x2={hd.px + arm} y2={hd.py} stroke={col} stroke-width={0.2 * mark} />
+        <line x1={hd.px} y1={hd.py - arm} x2={hd.px} y2={hd.py + arm} stroke={col} stroke-width={0.2 * mark} />
+        <circle
+          cx={hd.px}
+          cy={hd.py}
+          r={1.8 * mark}
+          fill="none"
+          stroke={col}
+          stroke-width={0.2 * mark}
+          stroke-dasharray={dash}
+          opacity="0.7"
+        />
+        <circle cx={hd.px} cy={hd.py} r={0.4 * mark} fill={col} />
       </g>
     {/if}
   </svg>
+
+  <!-- head-confidence caption: tells the operator how trustworthy the live
+       marker is, so the early-alignment position doesn't read as exact. -->
+  {#if stage === "align"}
+    <div class="head-confidence {headConfidence}">
+      {#if headConfidence === "none"}
+        HEAD: not yet located — capture a point
+      {:else if headConfidence === "estimate"}
+        HEAD: estimated (1 point)
+      {:else if headConfidence === "rough"}
+        HEAD: rough (2 points)
+      {:else}
+        HEAD: aligned
+      {/if}
+    </div>
+  {/if}
 
   <!-- zoom controls -->
   <div class="zoom-controls">
@@ -414,6 +450,36 @@
   }
   .fid.captured circle {
     stroke: #40e56c;
+  }
+  /* low-confidence head marker pulses to read as "approximate, not exact" */
+  .head.estimate {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  .head-confidence {
+    position: absolute;
+    left: 1rem;
+    top: 1rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.25rem;
+    background: rgba(19, 19, 19, 0.85);
+    border: 1px solid #514532;
+  }
+  .head-confidence.none {
+    color: #9e8e78;
+  }
+  .head-confidence.estimate,
+  .head-confidence.rough {
+    color: #ffb300;
+    border-color: #604100;
+  }
+  .head-confidence.aligned {
+    color: #22d3ee;
+    border-color: #155e6b;
   }
   .head {
     animation: spin 6s linear infinite;

@@ -455,10 +455,9 @@ defmodule BlauDrillWeb.SessionComponents do
     ~H"""
     <div class="flex h-full gap-4">
       <div class="relative flex-1 overflow-hidden rounded-lg border border-outline-variant">
+        <%!-- The BoardCanvas renders its own head-confidence caption (top-left),
+              which carries the live-position status plus how much to trust it. --%>
         <.svelte name="BoardCanvas" props={canvas_props(assigns)} socket={@socket} />
-        <span class="absolute left-4 top-4 rounded bg-surface-container/80 px-2 py-1 font-data text-xs uppercase tracking-widest text-cyan-400">
-          Live Pos
-        </span>
       </div>
 
       <aside class="flex w-[360px] flex-none flex-col gap-4 overflow-y-auto">
@@ -892,6 +891,7 @@ defmodule BlauDrillWeb.SessionComponents do
       tools: job.board.tools,
       bbox: bbox_list(job.board.bbox),
       head: head_in_board(assigns),
+      head_confidence: head_confidence(assigns),
       stage: assigns.stage
     }
   end
@@ -928,20 +928,90 @@ defmodule BlauDrillWeb.SessionComponents do
 
   defp bbox_list({a, b, c, d}), do: [a, b, c, d]
 
-  # Map the live machine head back into board space for the crosshair, using the
-  # inverse of the alignment transform once one is solved.
+  # The live head marker, mapped from machine space into board space — but the
+  # mapping is only as trustworthy as the registration we have so far. We return
+  # a `confidence` so the canvas can show HOW MUCH to trust the position:
+  #
+  #   nil          0 captures — machine ↔ board are unrelated, so a board
+  #                position would be a fabrication. Show no in-board marker;
+  #                the raw X/Y in the data bar is the honest readout.
+  #   "estimate"   1 capture  — translation only (offset from the one pair).
+  #   "rough"      2 captures — translation + rotation/scale (similarity fit).
+  #   "aligned"    full %Alignment{} — the solved affine, fully trustworthy.
+  #
+  # The marker carries `confidence` for styling; head_confidence/1 surfaces it as
+  # a top-level prop too.
   defp head_in_board(%{job: %Job{alignment: %BlauDrill.Alignment{transform: t}}, head: head}) do
     case BlauDrill.Transform2D.invert(t) do
       {:ok, inv} ->
         {bx, by} = BlauDrill.Transform2D.apply(inv, {head.x, head.y})
-        %{x: bx, y: by}
+        %{x: bx, y: by, confidence: "aligned"}
 
       {:error, _} ->
-        %{x: head.x, y: head.y}
+        nil
     end
   end
 
-  defp head_in_board(%{head: head}), do: %{x: head.x, y: head.y}
+  defp head_in_board(%{job: %Job{} = job, head: head}) do
+    corrs = pending_correspondences(job)
+
+    case estimate_board_point(corrs, {head.x, head.y}) do
+      {bx, by, confidence} -> %{x: bx, y: by, confidence: confidence}
+      :none -> nil
+    end
+  end
+
+  defp head_in_board(_assigns), do: nil
+
+  # Top-level confidence prop ("none" | "estimate" | "rough" | "aligned") for the
+  # canvas to label/colour the marker even when head_in_board is nil.
+  defp head_confidence(assigns) do
+    case head_in_board(assigns) do
+      %{confidence: c} -> c
+      _ -> "none"
+    end
+  end
+
+  defp pending_correspondences(%Job{pending: %BlauDrill.PendingAlignment{captured: c}}), do: c
+  defp pending_correspondences(_), do: []
+
+  # Build the best board-point estimate for a machine point from the captures so
+  # far, returning {board_x, board_y, confidence} or :none.
+  defp estimate_board_point([], _machine), do: :none
+
+  # 1 capture → translation only: board ≈ machine + (board₁ − machine₁).
+  defp estimate_board_point(
+         [%BlauDrill.Correspondence{board: {bx, by}, machine: {mx, my}}],
+         {hx, hy}
+       ) do
+    {hx + (bx - mx), hy + (by - my), "estimate"}
+  end
+
+  # 2+ captures (but no solved alignment yet) → similarity (translation + uniform
+  # scale + rotation) from the first two pairs. Enough to confirm the board is
+  # roughly where we think; full affine waits for the 3rd point and the fit.
+  defp estimate_board_point([c1, c2 | _], {hx, hy}) do
+    %{board: {b1x, b1y}, machine: {m1x, m1y}} = c1
+    %{board: {b2x, b2y}, machine: {m2x, m2y}} = c2
+
+    # Vector between the two machine points and the two board points.
+    {mdx, mdy} = {m2x - m1x, m2y - m1y}
+    {bdx, bdy} = {b2x - b1x, b2y - b1y}
+    mlen2 = mdx * mdx + mdy * mdy
+
+    if mlen2 < 1.0e-9 do
+      # Degenerate (the two machine captures coincide) — fall back to translation.
+      {hx + (b1x - m1x), hy + (b1y - m1y), "estimate"}
+    else
+      # Complex-number similarity: s = bd/md, applied to (head − m1) + b1.
+      sr = (bdx * mdx + bdy * mdy) / mlen2
+      si = (bdy * mdx - bdx * mdy) / mlen2
+      {dx, dy} = {hx - m1x, hy - m1y}
+      bx = b1x + (sr * dx - si * dy)
+      by = b1y + (si * dx + sr * dy)
+      {bx, by, "rough"}
+    end
+  end
 
   defp can?(nil, _event), do: false
   defp can?(%Job{} = job, event), do: Job.can?(job, event)
