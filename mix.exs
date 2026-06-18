@@ -25,6 +25,12 @@ defmodule BlauDrill.MixProject do
     ]
   end
 
+  # Run the multi-step aliases that end in `test` under MIX_ENV=test, so the
+  # whole alias (compile + test) shares the test environment.
+  def cli do
+    [preferred_envs: [ci: :test, precommit: :test]]
+  end
+
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
@@ -94,7 +100,16 @@ defmodule BlauDrill.MixProject do
         "cmd --cd assets node build.js --deploy",
         "phx.digest"
       ],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"],
+      # Non-mutating CI gate: verify formatting, fail on any compile warning,
+      # then run the suite — in that order, so a cheap check fails fast before
+      # the expensive one. `format --check-formatted` only reports drift (it
+      # does not rewrite files), which is what a CI gate wants.
+      ci: [
+        "format --check-formatted",
+        "compile --warnings-as-errors --force",
+        "test"
+      ]
     ]
   end
 end
