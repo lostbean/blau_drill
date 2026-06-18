@@ -267,15 +267,21 @@
 
 <style>
   .board-canvas {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    min-height: 360px;
-    display: flex;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
   }
   svg {
+    /* Lock the SVG to the container's EXACT pixel box (absolute inset) so its
+       own intrinsic aspect-ratio sizing can never make it taller than the
+       container and overflow the bottom. preserveAspectRatio="xMidYMid meet"
+       then letterboxes the board inside this fixed box — fitting BOTH width
+       and height. `display:block` avoids the inline-SVG baseline gap. */
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
+    display: block;
     border-radius: 0.25rem;
     box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.6);
     touch-action: none;

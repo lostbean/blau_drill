@@ -176,6 +176,53 @@ defmodule BlauDrillWeb.SessionLiveTest do
     assert has_element?(view, "[data-test='proceed-align']:not([disabled])")
   end
 
+  test "the board canvas receives the bbox and tools it needs to fit the whole board to view",
+       %{conn: conn} do
+    # The canvas sizes its SVG viewBox to the board's bbox (so the WHOLE board
+    # fits, aspect ratio preserved — not just the width) and draws holes at their
+    # true tool diameter. Both come from the live_svelte props (`data-props`).
+    # This locks the data contract the fit-to-view + true-size-hole rendering
+    # depends on; the visual fit itself is verified in-browser.
+    {conn, _name} = with_printer(conn)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    html = upload_fixture(view)
+
+    # The SvelteHook element carries the BoardCanvas props as a JSON
+    # `data-props` attribute (HTML-escaped). Pull it out without adding an HTML
+    # parser dep: grab the attribute value, then unescape and decode it.
+    [_, raw] = Regex.run(~r/data-props="([^"]*)"/, html)
+
+    props_json =
+      raw
+      |> String.replace("&quot;", "\"")
+      |> String.replace("&#39;", "'")
+      |> String.replace("&amp;", "&")
+      |> String.replace("&lt;", "<")
+      |> String.replace("&gt;", ">")
+
+    props = Jason.decode!(props_json)
+
+    # bbox = [minx, miny, maxx, maxy] of the real fixture; the viewBox is derived
+    # from this, so its span (and thus aspect ratio) must reflect the board.
+    assert [minx, miny, maxx, maxy] = props["bbox"]
+    assert_in_delta maxx - minx, 81.28, 0.01
+    assert_in_delta maxy - miny, 83.82, 0.01
+
+    # Tool diameters drive the true-size hole radii.
+    assert props["tools"] == %{
+             "T1" => 0.6,
+             "T2" => 0.7,
+             "T3" => 0.8,
+             "T4" => 1.0,
+             "T5" => 1.2
+           }
+
+    # 130 holes carried through, each with a tool ref for sizing/colour.
+    assert length(props["holes"]) == 130
+    assert Enum.all?(props["holes"], &(Map.has_key?(&1, "tool") and Map.has_key?(&1, "x")))
+  end
+
   test "an absolute-page-coordinate export shows the trap error and does NOT advance",
        %{conn: conn} do
     {conn, _name} = with_printer(conn)
