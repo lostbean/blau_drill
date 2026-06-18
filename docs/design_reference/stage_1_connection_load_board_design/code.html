@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>blau-drill Control Panel</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "error-container": "#93000a",
+                        "on-tertiary-fixed-variant": "#0c5216",
+                        "tertiary-fixed": "#acf4a4",
+                        "tertiary": "#a7ef9f",
+                        "inverse-surface": "#e5e2e1",
+                        "surface-bright": "#393939",
+                        "on-secondary": "#003912",
+                        "on-tertiary-container": "#185b1d",
+                        "on-tertiary-fixed": "#002203",
+                        "surface-dim": "#131313",
+                        "on-tertiary": "#003909",
+                        "secondary-container": "#02c953",
+                        "inverse-primary": "#7e5700",
+                        "primary-container": "#ffb300",
+                        "on-secondary-fixed": "#002108",
+                        "outline-variant": "#514532",
+                        "secondary-fixed": "#69ff87",
+                        "primary-fixed-dim": "#ffba38",
+                        "outline": "#9e8e78",
+                        "surface": "#131313",
+                        "on-surface": "#e5e2e1",
+                        "surface-tint": "#ffba38",
+                        "surface-container-lowest": "#0e0e0e",
+                        "on-primary-fixed": "#281900",
+                        "tertiary-fixed-dim": "#91d78a",
+                        "on-primary-container": "#6b4900",
+                        "tertiary-container": "#8cd286",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-low": "#1c1b1b",
+                        "primary-fixed": "#ffdeac",
+                        "on-surface-variant": "#d6c4ac",
+                        "surface-variant": "#353534",
+                        "surface-container": "#201f1f",
+                        "on-background": "#e5e2e1",
+                        "secondary-fixed-dim": "#3ce36a",
+                        "background": "#131313",
+                        "inverse-on-surface": "#313030",
+                        "primary": "#ffd79b",
+                        "surface-container-highest": "#353534",
+                        "on-primary-fixed-variant": "#604100",
+                        "on-secondary-fixed-variant": "#00531e",
+                        "on-error": "#690005",
+                        "surface-container-high": "#2a2a2a",
+                        "secondary": "#40e56c",
+                        "on-secondary-container": "#004d1b",
+                        "on-primary": "#432c00",
+                        "error": "#ffb4ab"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    spacing: {
+                        "margin-edge": "24px",
+                        "unit": "4px",
+                        "canvas-padding": "32px",
+                        "gutter": "16px",
+                        "control-gap": "12px"
+                    },
+                    fontFamily: {
+                        "data-lg": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "label-caps": ["JetBrains Mono"],
+                        "data-md": ["JetBrains Mono"]
+                    },
+                    fontSize: {
+                        "data-lg": ["20px", { "lineHeight": "28px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "label-caps": ["12px", { "lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700" }],
+                        "data-md": ["14px", { "lineHeight": "20px", "fontWeight": "500" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { background-color: theme('colors.background'); color: theme('colors.on-background'); }
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .icon-fill { font-variation-settings: 'FILL' 1; }
+        
+        /* Substrate pattern for canvas */
+        .bg-substrate {
+            background-color: theme('colors.surface-container-lowest');
+            background-image: radial-gradient(theme('colors.surface-variant') 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        /* Glitch effect for testing/mocking */
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        .animate-blink { animation: blink 1s step-end infinite; }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden font-body-lg text-body-lg">
+<!-- TopAppBar -->
+<header class="bg-surface docked full-width top-0 border-b border-outline-variant flex justify-between items-center w-full px-margin-edge h-16 shrink-0 z-20 relative shadow-none">
+<div class="flex items-center gap-control-gap">
+<h1 class="font-headline-md text-headline-md font-bold text-primary">blau-drill</h1>
+</div>
+<!-- Stepper (Load -> Align -> Dry-run -> Drill -> Done) -->
+<div class="hidden md:flex items-center gap-4 flex-1 justify-center max-w-2xl px-8">
+<div class="flex flex-col items-center group cursor-pointer" onclick="resetCanvas()">
+<div class="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center border-2 border-primary font-data-md text-data-md">1</div>
+<span class="font-label-caps text-label-caps mt-1 text-primary animate-pulse">Load</span>
+</div>
+<div class="h-px bg-outline-variant flex-1 mb-5"></div>
+<div class="flex flex-col items-center text-on-surface-variant">
+<div class="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center border border-outline-variant font-data-md text-data-md">2</div>
+<span class="font-label-caps text-label-caps mt-1">Align</span>
+</div>
+<div class="h-px bg-outline-variant flex-1 mb-5"></div>
+<div class="flex flex-col items-center text-on-surface-variant">
+<div class="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center border border-outline-variant font-data-md text-data-md">3</div>
+<span class="font-label-caps text-label-caps mt-1">Dry-run</span>
+</div>
+<div class="h-px bg-outline-variant flex-1 mb-5"></div>
+<div class="flex flex-col items-center text-on-surface-variant">
+<div class="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center border border-outline-variant font-data-md text-data-md">4</div>
+<span class="font-label-caps text-label-caps mt-1">Drill</span>
+</div>
+<div class="h-px bg-outline-variant flex-1 mb-5"></div>
+<div class="flex flex-col items-center text-on-surface-variant">
+<div class="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center border border-outline-variant font-data-md text-data-md">5</div>
+<span class="font-label-caps text-label-caps mt-1">Done</span>
+</div>
+</div>
+<div class="flex items-center gap-control-gap text-on-surface-variant">
+<button class="p-2 hover:bg-surface-variant rounded transition-all duration-200">
+<span class="material-symbols-outlined">settings</span>
+</button>
+<button class="p-2 hover:bg-surface-variant rounded transition-all duration-200">
+<span class="material-symbols-outlined">help</span>
+</button>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden relative z-10">
+<!-- SideNavBar -->
+<aside class="hidden md:flex bg-surface-container docked left-0 h-full w-[320px] border-r border-outline-variant flex-col py-canvas-padding shrink-0 shadow-none z-10 relative">
+<div class="px-margin-edge mb-8">
+<h2 class="font-headline-md text-headline-md text-primary font-bold">Control Panel</h2>
+<div class="flex items-center gap-2 mt-2">
+<span class="w-2 h-2 rounded-full bg-secondary animate-blink"></span>
+<p class="font-label-caps text-label-caps text-secondary">Machine Ready</p>
+</div>
+</div>
+<nav class="flex flex-col gap-unit px-margin-edge flex-1">
+<div class="font-label-caps text-label-caps mb-2 text-on-surface-variant tracking-widest border-b border-outline-variant pb-2">STAGES</div>
+<!-- Active Nav Item -->
+<button class="flex items-center gap-3 p-3 bg-primary-container text-on-primary-container rounded-lg font-label-caps text-label-caps active:scale-95 transition-transform border-2 border-primary text-left">
+<span class="material-symbols-outlined icon-fill">upload_file</span>
+                    Load
+                </button>
+<button class="flex items-center gap-3 p-3 text-on-surface-variant hover:bg-surface-container-high rounded font-label-caps text-label-caps active:scale-95 transition-transform text-left">
+<span class="material-symbols-outlined">ads_click</span>
+                    Align
+                </button>
+<button class="flex items-center gap-3 p-3 text-on-surface-variant hover:bg-surface-container-high rounded font-label-caps text-label-caps active:scale-95 transition-transform text-left">
+<span class="material-symbols-outlined">play_circle</span>
+                    Dry-run
+                </button>
+<button class="flex items-center gap-3 p-3 text-on-surface-variant hover:bg-surface-container-high rounded font-label-caps text-label-caps active:scale-95 transition-transform text-left opacity-50 cursor-not-allowed">
+<span class="material-symbols-outlined">precision_manufacturing</span>
+                    Drill
+                </button>
+<button class="flex items-center gap-3 p-3 text-on-surface-variant hover:bg-surface-container-high rounded font-label-caps text-label-caps active:scale-95 transition-transform text-left opacity-50 cursor-not-allowed">
+<span class="material-symbols-outlined">check_circle</span>
+                    Done
+                </button>
+</nav>
+<!-- Instructions Area (Replaces footer tabs for this stage) -->
+<div class="px-margin-edge mb-4">
+<div class="bg-surface-container-highest border border-outline-variant p-4 rounded-lg">
+<h3 class="font-label-caps text-label-caps text-primary mb-4 flex items-center justify-between">
+<span class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">settings_input_component</span>
+                Connection
+            </span>
+<span class="flex items-center gap-1 text-secondary">
+<span class="w-2 h-2 rounded-full bg-secondary animate-blink"></span>
+<span class="text-[10px] uppercase tracking-tighter">Connected</span>
+</span>
+</h3>
+<div class="space-y-3">
+<div class="flex gap-2">
+<div class="relative flex-1">
+<select class="w-full bg-surface-container-low border border-outline-variant text-on-surface font-data-md text-data-md rounded px-3 py-2 appearance-none focus:border-primary outline-none">
+<option>COM3 (Arduino Uno)</option>
+<option>/dev/ttyUSB0</option>
+<option>COM1</option>
+</select>
+<span class="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-on-surface-variant text-sm">expand_more</span>
+</div>
+<button class="p-2 bg-surface-container border border-outline-variant rounded hover:bg-surface-variant text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-[20px]">refresh</span>
+</button>
+</div>
+<button class="w-full py-2 bg-primary text-on-primary-fixed font-label-caps text-label-caps rounded hover:bg-primary-fixed-dim transition-colors active:scale-95">
+                Connect Machine
+            </button>
+</div>
+</div>
+</div><div class="px-margin-edge mt-auto mb-8">
+<div class="bg-surface-container-highest border border-outline-variant p-4 rounded-lg">
+<h3 class="font-label-caps text-label-caps text-primary mb-2 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">info</span>
+                        Instructions
+                    </h3>
+<p class="text-sm text-on-surface-variant leading-relaxed">Upload your design to begin. Ensure files are in Gerber (.gbr) or Excellon (.drl) format. The system will automatically parse tool sizes and hole coordinates.</p>
+</div>
+</div>
+<!-- CTA -->
+<div class="px-margin-edge">
+<button class="w-full bg-error-container text-on-error-container border border-error p-4 rounded font-headline-md text-headline-md active:scale-95 transition-transform flex justify-center items-center gap-2 shadow-[inset_0_2px_4px_rgba(255,255,255,0.1)] relative overflow-hidden" style="background-image: repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,0.1) 10px, rgba(0,0,0,0.1) 20px);">
+<span class="material-symbols-outlined text-[32px]">warning</span>
+                    EMERGENCY STOP
+                </button>
+</div>
+</aside>
+<!-- Main Canvas Area -->
+<main class="flex-1 bg-surface-dim relative p-canvas-padding overflow-hidden flex flex-col pb-20"> <!-- pb-20 to clear bottom nav -->
+<div class="w-full h-full border border-outline-variant bg-surface-container-lowest relative rounded flex flex-col shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]">
+<!-- EMPTY STATE (Dropzone) -->
+<div class="absolute inset-0 flex flex-col items-center justify-center p-8 bg-substrate transition-opacity duration-300 z-10" id="empty-state">
+<div class="border-2 border-dashed border-outline-variant hover:border-primary-container rounded-xl w-full max-w-3xl h-full max-h-[500px] flex flex-col items-center justify-center bg-surface-container-low transition-colors duration-200 cursor-pointer group relative" onclick="loadMockFile()">
+<div class="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity rounded-xl"></div>
+<span class="material-symbols-outlined text-[80px] text-outline-variant group-hover:text-primary-container mb-6 transition-colors">file_upload</span>
+<h2 class="font-headline-lg text-headline-lg text-on-surface mb-2">Drop PCB files here</h2>
+<p class="text-on-surface-variant font-data-md text-data-md">Supports Gerber (.gbr) and Excellon (.drl)</p>
+<button class="mt-8 px-6 py-3 bg-surface-container-highest border border-outline text-on-surface rounded font-label-caps text-label-caps hover:bg-surface-variant hover:border-primary transition-all">Browse Files</button>
+</div>
+</div>
+<!-- LOADED STATE (Mocked Preview) -->
+<div class="absolute inset-0 flex flex-col opacity-0 pointer-events-none transition-opacity duration-300 z-0 bg-substrate" id="loaded-state">
+<!-- Diagnostic Bar -->
+<div class="h-12 border-b border-outline-variant bg-surface-container-low flex justify-between items-center px-4 shrink-0">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-secondary icon-fill">check_circle</span>
+<span class="font-data-md text-data-md text-secondary tracking-wide">FILE VALID: controller_v2.drl</span>
+</div>
+<div class="flex gap-4 font-data-md text-data-md text-on-surface-variant">
+<span>Holes: <strong class="text-on-surface">342</strong></span>
+<span>Tools: <strong class="text-on-surface">4</strong></span>
+<span>Dimensions: <strong class="text-on-surface">100 x 80 mm</strong></span>
+</div>
+</div>
+<!-- PCB Preview Canvas (Simulated) -->
+<div class="flex-1 relative overflow-hidden flex items-center justify-center p-8">
+<div class="w-full max-w-2xl aspect-[4/3] relative border border-outline bg-[#001a14] shadow-2xl rounded-sm" data-alt="A macro, top-down view of a dark green raw printed circuit board (PCB) substrate in a modern industrial setting. The surface is matte and precise. Hundreds of tiny, glowing cyan and amber drill holes are scattered across the board in intricate patterns. High-contrast, clean, technical lighting emphasizes the depth of the holes and the sharp edges of the board against a dark charcoal workspace. Calm, expert, utilitarian aesthetic." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuDPr8H7sqJPFriiOiV2x2nnoT-vYMotqpxtH2H1vSCnOhWPYzjCpG94UnYHxS_j3D4EUHZAEFzLnP-4aHSBnOyjuZ17oYi8KI0m-SumS380QOY5XDZHW0e-jIOVK0GOI5Vxggr__HqwunSsf4SfADajldFvoBun9iF6kTgNx6FGvWRIT0tAyQLhHeAknKmk7Cm-H_-cwWhnwUvaWgNZjX0Rp7XxHTWTzm0zttS1FNUJ1dAhXX8qo4QrqJImqAyf_a3vOmq5S-JiVw')">
+<!-- Overlay UI on top of image to simulate tools -->
+<div class="absolute bottom-4 left-4 bg-surface-container-highest border border-outline-variant p-3 rounded opacity-90 backdrop-blur-sm">
+<h4 class="font-label-caps text-label-caps text-on-surface-variant mb-2">Tool Legend</h4>
+<ul class="space-y-2">
+<li class="flex items-center gap-2 text-sm"><span class="w-3 h-3 rounded-full bg-cyan-400"></span> T01 - 0.8mm (Vias)</li>
+<li class="flex items-center gap-2 text-sm"><span class="w-3 h-3 rounded-full bg-primary"></span> T02 - 1.0mm (Headers)</li>
+</ul>
+</div>
+<div class="absolute top-4 right-4 flex gap-2">
+<button class="w-10 h-10 bg-surface-container border border-outline-variant rounded flex items-center justify-center text-on-surface hover:text-primary transition-colors"><span class="material-symbols-outlined">zoom_in</span></button>
+<button class="w-10 h-10 bg-surface-container border border-outline-variant rounded flex items-center justify-center text-on-surface hover:text-primary transition-colors"><span class="material-symbols-outlined">zoom_out</span></button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+<!-- BottomNavBar -->
+<footer class="docked fixed bottom-0 w-full z-50 flex justify-around items-center h-12 px-margin-edge bg-surface-container-lowest border-t-2 border-outline shadow-none">
+<!-- Status Indicator Added to Nav -->
+<div class="flex items-center gap-2 mr-auto">
+<span class="w-2 h-2 bg-secondary rounded-full"></span>
+<span class="font-label-caps text-label-caps text-secondary uppercase">Machine Connected</span>
+</div>
+<div class="flex gap-8 justify-center flex-1">
+<div class="flex items-center gap-2 text-on-surface">
+<span class="material-symbols-outlined text-[18px]">straighten</span>
+<span class="font-data-md text-data-md text-secondary font-bold">X: 0.000</span>
+</div>
+<div class="flex items-center gap-2 text-on-surface">
+<span class="material-symbols-outlined text-[18px]">straighten</span>
+<span class="font-data-md text-data-md text-secondary font-bold">Y: 0.000</span>
+</div>
+<div class="flex items-center gap-2 text-on-surface">
+<span class="material-symbols-outlined text-[18px]">vertical_align_bottom</span>
+<span class="font-data-md text-data-md text-secondary font-bold">Z: 0.000</span>
+</div>
+<div class="flex items-center gap-2 text-on-surface border-l border-outline-variant pl-8 ml-4">
+<span class="material-symbols-outlined text-[18px]">architecture</span>
+<span class="font-data-md text-data-md text-secondary font-bold">Bit: 0.8mm</span>
+</div>
+</div>
+<div class="ml-auto w-32 flex justify-end">
+<!-- Space filler to balance the left status indicator -->
+</div>
+</footer>
+<script>
+        function loadMockFile() {
+            const emptyState = document.getElementById('empty-state');
+            const loadedState = document.getElementById('loaded-state');
+            
+            emptyState.style.opacity = '0';
+            setTimeout(() => {
+                emptyState.style.pointerEvents = 'none';
+                emptyState.classList.remove('z-10');
+                
+                loadedState.classList.add('z-10');
+                loadedState.style.pointerEvents = 'auto';
+                loadedState.style.opacity = '1';
+                
+                // Enable next step button visually
+                const alignBtn = document.querySelectorAll('aside nav button')[1];
+                alignBtn.classList.remove('text-on-surface-variant');
+                alignBtn.classList.add('text-primary');
+                alignBtn.innerHTML = '<span class="material-symbols-outlined text-primary">ads_click</span> Proceed to Align';
+            }, 300);
+        }
+
+        function resetCanvas() {
+            const emptyState = document.getElementById('empty-state');
+            const loadedState = document.getElementById('loaded-state');
+            
+            loadedState.style.opacity = '0';
+            loadedState.style.pointerEvents = 'none';
+            loadedState.classList.remove('z-10');
+
+            setTimeout(() => {
+                emptyState.classList.add('z-10');
+                emptyState.style.pointerEvents = 'auto';
+                emptyState.style.opacity = '1';
+            }, 300);
+        }
+    </script>
+</body></html>

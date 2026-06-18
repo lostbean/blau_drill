@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Drill Stage - Control Panel</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error-container": "#93000a",
+                        "on-tertiary-fixed-variant": "#0c5216",
+                        "tertiary-fixed": "#acf4a4",
+                        "tertiary": "#a7ef9f",
+                        "inverse-surface": "#e5e2e1",
+                        "surface-bright": "#393939",
+                        "on-secondary": "#003912",
+                        "on-tertiary-container": "#185b1d",
+                        "on-tertiary-fixed": "#002203",
+                        "surface-dim": "#131313",
+                        "on-tertiary": "#003909",
+                        "secondary-container": "#02c953",
+                        "inverse-primary": "#7e5700",
+                        "primary-container": "#ffb300",
+                        "on-secondary-fixed": "#002108",
+                        "outline-variant": "#514532",
+                        "secondary-fixed": "#69ff87",
+                        "primary-fixed-dim": "#ffba38",
+                        "outline": "#9e8e78",
+                        "surface": "#131313",
+                        "on-surface": "#e5e2e1",
+                        "surface-tint": "#ffba38",
+                        "surface-container-lowest": "#0e0e0e",
+                        "on-primary-fixed": "#281900",
+                        "tertiary-fixed-dim": "#91d78a",
+                        "on-primary-container": "#6b4900",
+                        "tertiary-container": "#8cd286",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-low": "#1c1b1b",
+                        "primary-fixed": "#ffdeac",
+                        "on-surface-variant": "#d6c4ac",
+                        "surface-variant": "#353534",
+                        "surface-container": "#201f1f",
+                        "on-background": "#e5e2e1",
+                        "secondary-fixed-dim": "#3ce36a",
+                        "background": "#131313",
+                        "inverse-on-surface": "#313030",
+                        "primary": "#ffd79b",
+                        "surface-container-highest": "#353534",
+                        "on-primary-fixed-variant": "#604100",
+                        "on-secondary-fixed-variant": "#00531e",
+                        "on-error": "#690005",
+                        "surface-container-high": "#2a2a2a",
+                        "secondary": "#40e56c",
+                        "on-secondary-container": "#004d1b",
+                        "on-primary": "#432c00",
+                        "error": "#ffb4ab"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "margin-edge": "24px",
+                        "unit": "4px",
+                        "canvas-padding": "32px",
+                        "gutter": "16px",
+                        "control-gap": "12px"
+                    },
+                    "fontFamily": {
+                        "data-lg": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "label-caps": ["JetBrains Mono"],
+                        "data-md": ["JetBrains Mono"]
+                    },
+                    "fontSize": {
+                        "data-lg": ["20px", { "lineHeight": "28px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "label-caps": ["12px", { "lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700" }],
+                        "data-md": ["14px", { "lineHeight": "20px", "fontWeight": "500" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .hazard-stripes {
+            background-image: repeating-linear-gradient(
+                -45deg,
+                transparent,
+                transparent 10px,
+                rgba(0, 0, 0, 0.2) 10px,
+                rgba(0, 0, 0, 0.2) 20px
+            );
+        }
+        .pcb-grid {
+            background-image: 
+                linear-gradient(to right, rgba(158, 142, 120, 0.1) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(158, 142, 120, 0.1) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.5; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+            100% { transform: scale(0.95); opacity: 0.5; }
+        }
+        .cursor-pulse {
+            animation: pulse-ring 2s infinite ease-in-out;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.2; }
+        }
+        .warning-blink {
+            animation: blink 1s infinite;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-lg h-screen w-full flex overflow-hidden">
+<!-- SideNavBar (JSON Component) -->
+<nav class="bg-surface-container text-primary font-label-caps text-label-caps docked fixed left-0 h-full w-[320px] border-r border-outline-variant flat no shadows flex flex-col py-canvas-padding z-40">
+<div class="px-gutter mb-8">
+<h1 class="font-headline-md text-headline-md text-primary tracking-tight">Control Panel</h1>
+<p class="font-data-md text-data-md text-primary-container mt-1 uppercase warning-blink">DRILLING...</p>
+</div>
+<ul class="flex flex-col gap-unit px-unit flex-1">
+<li>
+<a class="text-on-surface-variant hover:bg-surface-container-high active:scale-95 transition-transform flex items-center gap-3 px-gutter py-3 rounded-lg" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">upload_file</span>
+                    Load
+                </a>
+</li>
+<li>
+<a class="text-on-surface-variant hover:bg-surface-container-high active:scale-95 transition-transform flex items-center gap-3 px-gutter py-3 rounded-lg" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">ads_click</span>
+                    Align
+                </a>
+</li>
+<li>
+<a class="text-on-surface-variant hover:bg-surface-container-high active:scale-95 transition-transform flex items-center gap-3 px-gutter py-3 rounded-lg" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">play_circle</span>
+                    Dry-run
+                </a>
+</li>
+<li>
+<a class="bg-primary-container text-on-primary-container rounded-lg active:scale-95 transition-transform flex items-center gap-3 px-gutter py-3" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">precision_manufacturing</span>
+                    Drill
+                </a>
+</li>
+<li>
+<a class="text-on-surface-variant hover:bg-surface-container-high active:scale-95 transition-transform flex items-center gap-3 px-gutter py-3 rounded-lg" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">check_circle</span>
+                    Done
+                </a>
+</li>
+</ul>
+<div class="px-gutter mt-auto mb-6">
+<button class="w-full bg-error text-on-error font-label-caps text-label-caps py-4 rounded hazard-stripes flex items-center justify-center gap-2 uppercase tracking-widest hover:brightness-110 transition-all shadow-md">
+<span class="material-symbols-outlined">warning</span>
+                EMERGENCY STOP
+            </button>
+</div>
+<div class="border-t border-outline-variant pt-4 px-gutter flex gap-4">
+<button class="flex-1 text-on-surface-variant hover:bg-surface-container-high flex flex-col items-center py-2 rounded transition-colors">
+<span class="material-symbols-outlined mb-1">settings_input_component</span>
+                Motors
+            </button>
+<button class="flex-1 text-on-surface-variant hover:bg-surface-container-high flex flex-col items-center py-2 rounded transition-colors">
+<span class="material-symbols-outlined mb-1">air</span>
+                Vacuum
+            </button>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="flex-1 ml-[320px] flex flex-col h-full relative">
+<!-- TopAppBar (JSON Component) -->
+<header class="bg-surface text-primary font-headline-md text-headline-md docked full-width top-0 border-b border-outline-variant flat no shadows transition-all duration-200 flex justify-between items-center w-full px-margin-edge h-16 z-30">
+<div class="font-headline-md text-headline-md font-bold text-primary tracking-tight">
+                blau-drill
+            </div>
+<div class="flex items-center gap-4 text-on-surface-variant">
+<button class="hover:bg-surface-variant p-2 rounded-full transition-all duration-200">
+<span class="material-symbols-outlined">settings</span>
+</button>
+<button class="hover:bg-surface-variant p-2 rounded-full transition-all duration-200">
+<span class="material-symbols-outlined">help</span>
+</button>
+</div>
+</header>
+<!-- Canvas Area -->
+<section class="flex-1 bg-surface-dim p-canvas-padding relative overflow-hidden flex items-center justify-center pcb-grid">
+<!-- Simulated PCB Board -->
+<div class="absolute inset-canvas-padding border border-outline-variant bg-[#1a1a1a] shadow-inner rounded overflow-hidden opacity-80">
+<!-- Drilled Holes (Green) -->
+<div class="absolute top-[20%] left-[30%] w-3 h-3 bg-secondary rounded-full shadow-[0_0_8px_rgba(64,229,108,0.5)]"></div>
+<div class="absolute top-[25%] left-[32%] w-3 h-3 bg-secondary rounded-full shadow-[0_0_8px_rgba(64,229,108,0.5)]"></div>
+<div class="absolute top-[30%] left-[40%] w-3 h-3 bg-secondary rounded-full shadow-[0_0_8px_rgba(64,229,108,0.5)]"></div>
+<div class="absolute top-[40%] left-[35%] w-3 h-3 bg-secondary rounded-full shadow-[0_0_8px_rgba(64,229,108,0.5)]"></div>
+<div class="absolute top-[45%] left-[45%] w-3 h-3 bg-secondary rounded-full shadow-[0_0_8px_rgba(64,229,108,0.5)]"></div>
+<div class="absolute top-[50%] left-[50%] w-3 h-3 bg-secondary rounded-full shadow-[0_0_8px_rgba(64,229,108,0.5)]"></div>
+<!-- Upcoming Holes (White Outline) -->
+<div class="absolute top-[60%] left-[60%] w-3 h-3 border-2 border-outline rounded-full"></div>
+<div class="absolute top-[65%] left-[65%] w-3 h-3 border-2 border-outline rounded-full"></div>
+<div class="absolute top-[70%] left-[55%] w-3 h-3 border-2 border-outline rounded-full"></div>
+<div class="absolute top-[75%] left-[70%] w-3 h-3 border-2 border-outline rounded-full"></div>
+<!-- Active Cursor (Red) -->
+<div class="absolute top-[55%] left-[55%] flex items-center justify-center transform -translate-x-1/2 -translate-y-1/2">
+<div class="w-8 h-8 border border-error rounded-full absolute cursor-pulse"></div>
+<div class="w-2 h-2 bg-error rounded-full"></div>
+<!-- Crosshairs -->
+<div class="absolute w-12 h-[1px] bg-error/50"></div>
+<div class="absolute w-[1px] h-12 bg-error/50"></div>
+</div>
+</div>
+<!-- Central Progress Overlay -->
+<div class="relative z-10 flex flex-col items-center bg-surface-container/80 backdrop-blur-md p-8 rounded-full border border-outline-variant shadow-2xl">
+<div class="relative flex items-center justify-center">
+<svg class="w-64 h-64 transform -rotate-90">
+<circle class="text-surface-variant" cx="128" cy="128" fill="transparent" r="116" stroke="currentColor" stroke-width="16"></circle>
+<!-- 65% of 728.8 (2*pi*116) = 473.7. Offset = 728.8 - 473.7 = 255.1 -->
+<circle class="text-primary-container transition-all duration-1000 ease-out" cx="128" cy="128" fill="transparent" r="116" stroke="currentColor" stroke-dasharray="728.8" stroke-dashoffset="255.1" stroke-width="16"></circle>
+</svg>
+<div class="absolute flex flex-col items-center">
+<span class="font-headline-lg text-headline-lg text-primary-container">65%</span>
+<span class="font-data-md text-data-md text-on-surface-variant">142 / 218</span>
+</div>
+</div>
+<div class="mt-6 flex flex-col items-center">
+<span class="font-label-caps text-label-caps text-primary-container tracking-widest uppercase mb-4 warning-blink">
+                        Drilling in progress...
+                    </span>
+<button class="bg-error-container text-on-error-container font-label-caps text-label-caps py-3 px-8 rounded hazard-stripes uppercase tracking-widest hover:brightness-110 transition-all border border-error">
+                        ABORT DRILLING
+                    </button>
+</div>
+</div>
+<!-- Right Telemetry Panel -->
+<div class="absolute right-canvas-padding top-canvas-padding w-64 bg-surface-container-high border border-outline-variant rounded-lg p-gutter z-20 flex flex-col gap-control-gap shadow-lg">
+<h3 class="font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant pb-2 mb-2">Telemetry</h3>
+<div>
+<label class="font-label-caps text-[10px] text-outline uppercase block mb-1">Current Bit</label>
+<div class="bg-surface-dim font-data-lg text-data-lg text-primary px-3 py-2 border border-outline-variant rounded inset-shadow-sm flex justify-between items-center">
+<span>0.8</span>
+<span class="text-data-md text-outline">mm</span>
+</div>
+</div>
+<div>
+<label class="font-label-caps text-[10px] text-outline uppercase block mb-1">Est. Time Remaining</label>
+<div class="bg-surface-dim font-data-lg text-data-lg text-secondary px-3 py-2 border border-outline-variant rounded inset-shadow-sm flex justify-between items-center">
+<span>4:12</span>
+<span class="material-symbols-outlined text-outline" style="font-size: 18px;">timer</span>
+</div>
+</div>
+<div>
+<label class="font-label-caps text-[10px] text-outline uppercase block mb-1">Spindle RPM</label>
+<div class="bg-surface-dim font-data-lg text-data-lg text-on-surface px-3 py-2 border border-outline-variant rounded inset-shadow-sm flex justify-between items-center">
+<span>12,000</span>
+<span class="text-data-md text-outline">rpm</span>
+</div>
+</div>
+</div>
+</section>
+<!-- BottomNavBar (JSON Component) -->
+<footer class="bg-surface-container-lowest text-secondary font-data-md text-data-md docked fixed bottom-0 w-[calc(100%-320px)] left-[320px] border-t-2 border-outline flat no shadows z-50 flex justify-around items-center h-12 px-margin-edge">
+<div class="text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-outline" style="font-size: 18px;">straighten</span>
+                X: 0.000
+            </div>
+<div class="text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-outline" style="font-size: 18px;">straighten</span>
+                Y: 0.000
+            </div>
+<div class="text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-outline" style="font-size: 18px;">vertical_align_bottom</span>
+                Z: 0.000
+            </div>
+<div class="text-secondary font-bold flex items-center gap-2">
+<span class="material-symbols-outlined" style="font-size: 18px;">architecture</span>
+                Bit: 0.8mm
+            </div>
+</footer>
+</main>
+<!-- Simulated Modal Overlay -->
+<div class="fixed inset-0 z-[100] flex items-center justify-center bg-surface-dim/90 backdrop-blur-sm transition-opacity duration-300" id="bit-change-modal">
+<div class="bg-surface-container border-2 border-primary-container rounded-lg p-8 max-w-md w-full shadow-2xl relative">
+<div class="absolute -top-6 left-1/2 transform -translate-x-1/2 bg-surface-container rounded-full p-2 border-2 border-primary-container">
+<span class="material-symbols-outlined text-primary-container text-4xl warning-blink" style="font-variation-settings: 'FILL' 1;">warning</span>
+</div>
+<div class="mt-4 text-center">
+<h2 class="font-headline-md text-headline-md text-on-surface mb-2 tracking-tight">Bit Change Required</h2>
+<p class="font-label-caps text-label-caps text-primary-container uppercase tracking-widest mb-6">System Paused</p>
+<div class="bg-surface-container-low border border-outline-variant p-4 rounded mb-6 text-left">
+<p class="font-body-lg text-body-lg text-on-surface-variant leading-relaxed">
+                        Swap to <strong class="text-primary font-data-md">1.2mm</strong> bit to continue operation.
+                    </p>
+<div class="mt-4 flex items-start gap-3 text-error">
+<span class="material-symbols-outlined mt-0.5">report</span>
+<p class="font-body-lg text-[14px] leading-tight">
+<strong>Warning:</strong> Do not move board substrate during tool change. Calibration will be lost.
+                        </p>
+</div>
+</div>
+<button class="w-full bg-primary-container text-on-primary-container font-label-caps text-label-caps py-4 px-6 rounded uppercase tracking-widest hover:bg-primary transition-colors flex justify-center items-center gap-2" onclick="document.getElementById('bit-change-modal').style.display='none'">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">play_circle</span>
+                    [Resume Drilling]
+                </button>
+</div>
+</div>
+</div>
+</body></html>

@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Align Stage - Control Panel</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error-container": "#93000a",
+                        "on-tertiary-fixed-variant": "#0c5216",
+                        "tertiary-fixed": "#acf4a4",
+                        "tertiary": "#a7ef9f",
+                        "inverse-surface": "#e5e2e1",
+                        "surface-bright": "#393939",
+                        "on-secondary": "#003912",
+                        "on-tertiary-container": "#185b1d",
+                        "on-tertiary-fixed": "#002203",
+                        "surface-dim": "#131313",
+                        "on-tertiary": "#003909",
+                        "secondary-container": "#02c953",
+                        "inverse-primary": "#7e5700",
+                        "primary-container": "#ffb300",
+                        "on-secondary-fixed": "#002108",
+                        "outline-variant": "#514532",
+                        "secondary-fixed": "#69ff87",
+                        "primary-fixed-dim": "#ffba38",
+                        "outline": "#9e8e78",
+                        "surface": "#131313",
+                        "on-surface": "#e5e2e1",
+                        "surface-tint": "#ffba38",
+                        "surface-container-lowest": "#0e0e0e",
+                        "on-primary-fixed": "#281900",
+                        "tertiary-fixed-dim": "#91d78a",
+                        "on-primary-container": "#6b4900",
+                        "tertiary-container": "#8cd286",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-low": "#1c1b1b",
+                        "primary-fixed": "#ffdeac",
+                        "on-surface-variant": "#d6c4ac",
+                        "surface-variant": "#353534",
+                        "surface-container": "#201f1f",
+                        "on-background": "#e5e2e1",
+                        "secondary-fixed-dim": "#3ce36a",
+                        "background": "#131313",
+                        "inverse-on-surface": "#313030",
+                        "primary": "#ffd79b",
+                        "surface-container-highest": "#353534",
+                        "on-primary-fixed-variant": "#604100",
+                        "on-secondary-fixed-variant": "#00531e",
+                        "on-error": "#690005",
+                        "surface-container-high": "#2a2a2a",
+                        "secondary": "#40e56c",
+                        "on-secondary-container": "#004d1b",
+                        "on-primary": "#432c00",
+                        "error": "#ffb4ab"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "margin-edge": "24px",
+                        "unit": "4px",
+                        "canvas-padding": "32px",
+                        "gutter": "16px",
+                        "control-gap": "12px"
+                    },
+                    "fontFamily": {
+                        "data-lg": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "label-caps": ["JetBrains Mono"],
+                        "data-md": ["JetBrains Mono"]
+                    },
+                    "fontSize": {
+                        "data-lg": ["20px", { "lineHeight": "28px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "label-caps": ["12px", { "lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700" }],
+                        "data-md": ["14px", { "lineHeight": "20px", "fontWeight": "500" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.fill {
+            font-variation-settings: 'FILL' 1;
+        }
+        
+        /* Custom animations for industrial UI */
+        @keyframes pulse-warning {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.05); }
+        }
+        .animate-pulse-warning {
+            animation: pulse-warning 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes crosshair-sweep {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .animate-crosshair {
+            animation: crosshair-sweep 4s linear infinite;
+        }
+        
+        /* Hazard Stripes */
+        .bg-hazard-stripes {
+            background-image: repeating-linear-gradient(
+                45deg,
+                transparent,
+                transparent 10px,
+                rgba(0,0,0,0.2) 10px,
+                rgba(0,0,0,0.2) 20px
+            );
+        }
+        
+        /* Tactical Inner Shadow for Jog Buttons */
+        .tactical-shadow {
+            box-shadow: inset 0 2px 0 0 rgba(255,255,255,0.1), inset 0 -2px 0 0 rgba(0,0,0,0.5), 0 4px 6px -1px rgba(0,0,0,0.3);
+        }
+        .tactical-shadow:active:not(:disabled) {
+            box-shadow: inset 0 3px 5px rgba(0,0,0,0.6);
+            transform: translateY(2px);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-lg h-screen overflow-hidden flex flex-col md:flex-row">
+<!-- Mobile Top App Bar (Hidden on md+) -->
+<header class="md:hidden flex justify-between items-center w-full px-margin-edge h-16 bg-surface border-b border-outline-variant transition-all duration-200 z-50 shrink-0">
+<div class="font-headline-md text-headline-md font-bold text-primary">blau-drill</div>
+<div class="flex gap-control-gap">
+<span class="material-symbols-outlined text-on-surface-variant hover:bg-surface-variant p-2 rounded-full cursor-pointer">settings</span>
+<span class="material-symbols-outlined text-on-surface-variant hover:bg-surface-variant p-2 rounded-full cursor-pointer">help</span>
+</div>
+</header>
+<!-- Side Navigation (Control Panel) -->
+<nav class="hidden md:flex flex-col h-full py-canvas-padding bg-surface-container border-r border-outline-variant w-[320px] shrink-0 z-40">
+<div class="px-margin-edge mb-gutter">
+<div class="font-headline-md text-headline-md text-primary font-bold">Control Panel</div>
+<div class="font-label-caps text-label-caps text-on-surface-variant mt-1 uppercase tracking-wider">Machine Ready</div>
+</div>
+<ul class="flex-1 flex flex-col gap-2 px-gutter mt-8">
+<li>
+<a class="flex items-center gap-3 p-3 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-transform active:scale-95" href="#">
+<span class="material-symbols-outlined">upload_file</span>
+<span class="font-label-caps text-label-caps">Load</span>
+</a>
+</li>
+<li>
+<!-- ACTIVE NAV ITEM: ALIGN -->
+<a class="flex items-center gap-3 p-3 bg-primary-container text-on-primary-container rounded-lg transition-transform active:scale-95" href="#">
+<span class="material-symbols-outlined fill">ads_click</span>
+<span class="font-label-caps text-label-caps font-bold">Align</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 p-3 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-transform active:scale-95" href="#">
+<span class="material-symbols-outlined">play_circle</span>
+<span class="font-label-caps text-label-caps">Dry-run</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 p-3 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-transform active:scale-95" href="#">
+<span class="material-symbols-outlined">precision_manufacturing</span>
+<span class="font-label-caps text-label-caps">Drill</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 p-3 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-transform active:scale-95" href="#">
+<span class="material-symbols-outlined">check_circle</span>
+<span class="font-label-caps text-label-caps">Done</span>
+</a>
+</li>
+</ul>
+<div class="px-gutter mt-auto flex flex-col gap-4">
+<div class="flex justify-between px-2">
+<a class="flex flex-col items-center gap-1 text-on-surface-variant hover:text-primary transition-colors" href="#">
+<span class="material-symbols-outlined">settings_input_component</span>
+<span class="font-label-caps text-[10px]">Motors</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-on-surface-variant hover:text-primary transition-colors" href="#">
+<span class="material-symbols-outlined">air</span>
+<span class="font-label-caps text-[10px]">Vacuum</span>
+</a>
+</div>
+<button class="w-full py-4 bg-error-container text-on-error-container font-label-caps text-label-caps rounded-DEFAULT font-bold tracking-widest border border-error bg-hazard-stripes hover:bg-error transition-colors flex items-center justify-center gap-2 tactical-shadow">
+<span class="material-symbols-outlined fill">warning</span>
+                EMERGENCY STOP
+            </button>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col md:flex-row relative overflow-hidden bg-surface-dim">
+<!-- Central Canvas (PCB Board View) -->
+<section class="flex-1 relative p-canvas-padding flex items-center justify-center overflow-hidden">
+<!-- Simulated PCB Substrate -->
+<div class="relative w-full max-w-3xl aspect-[4/3] bg-[#0a2e14] border-2 border-outline-variant rounded-lg shadow-[inset_0_0_50px_rgba(0,0,0,0.8)] overflow-hidden">
+<!-- Grid Overlay -->
+<div class="absolute inset-0 opacity-10" style="background-image: linear-gradient(rgba(255,255,255,0.5) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.5) 1px, transparent 1px); background-size: 20px 20px;"></div>
+<!-- PCB Traces Decoration (Fake) -->
+<svg class="absolute inset-0 w-full h-full opacity-20 pointer-events-none" xmlns="http://www.w3.org/2000/svg">
+<path d="M50 50 L150 50 L200 100 L300 100 M400 200 L350 250 M100 300 L150 300 L200 250" fill="none" stroke="#40e56c" stroke-width="2"></path>
+</svg>
+<!-- Fiducial Marks -->
+<!-- Top Left: Captured -->
+<div class="absolute top-12 left-12 flex flex-col items-center gap-1">
+<div class="w-8 h-8 rounded-full border-2 border-secondary flex items-center justify-center bg-secondary/20">
+<span class="material-symbols-outlined text-secondary text-sm">check</span>
+</div>
+<span class="font-data-md text-[10px] text-secondary">FID-1 OK</span>
+</div>
+<!-- Bottom Right: Captured -->
+<div class="absolute bottom-12 right-12 flex flex-col items-center gap-1">
+<div class="w-8 h-8 rounded-full border-2 border-secondary flex items-center justify-center bg-secondary/20">
+<span class="material-symbols-outlined text-secondary text-sm">check</span>
+</div>
+<span class="font-data-md text-[10px] text-secondary">FID-4 OK</span>
+</div>
+<!-- Top Right: Pending -->
+<div class="absolute top-12 right-12 flex flex-col items-center gap-1">
+<div class="w-8 h-8 rounded-full border-2 border-primary animate-pulse-warning flex items-center justify-center">
+<div class="w-2 h-2 rounded-full bg-primary"></div>
+</div>
+<span class="font-data-md text-[10px] text-primary">FID-2 PND</span>
+</div>
+<!-- Bottom Left: Pending -->
+<div class="absolute bottom-12 left-12 flex flex-col items-center gap-1">
+<div class="w-8 h-8 rounded-full border-2 border-primary animate-pulse-warning flex items-center justify-center">
+<div class="w-2 h-2 rounded-full bg-primary"></div>
+</div>
+<span class="font-data-md text-[10px] text-primary">FID-3 PND</span>
+</div>
+<!-- Live Machine Crosshair -->
+<div class="absolute top-[45%] left-[60%] -translate-x-1/2 -translate-y-1/2 z-10 pointer-events-none">
+<div class="relative w-16 h-16 animate-crosshair">
+<!-- Cross lines -->
+<div class="absolute top-1/2 left-0 right-0 h-[1px] bg-cyan-400"></div>
+<div class="absolute left-1/2 top-0 bottom-0 w-[1px] bg-cyan-400"></div>
+<!-- Center dot -->
+<div class="absolute top-1/2 left-1/2 w-2 h-2 rounded-full bg-cyan-400 -translate-x-1/2 -translate-y-1/2 shadow-[0_0_8px_rgba(34,211,238,0.8)]"></div>
+<!-- Outer ring -->
+<div class="absolute inset-0 rounded-full border border-cyan-400/50"></div>
+</div>
+<div class="absolute -bottom-6 left-1/2 -translate-x-1/2 bg-surface-container px-2 py-1 rounded font-data-md text-[10px] text-cyan-400 whitespace-nowrap border border-cyan-400/30">
+                        LIVE POS
+                    </div>
+</div>
+</div>
+</section>
+<!-- Right Side Panel (Action Controls) -->
+<aside class="w-full md:w-[360px] bg-surface border-l border-outline-variant flex flex-col shrink-0 z-30 pb-20 md:pb-0">
+<div class="p-gutter border-b border-outline-variant bg-surface-container-low">
+<h2 class="font-headline-md text-headline-md text-on-surface mb-1">Alignment Setup</h2>
+<p class="font-body-lg text-sm text-on-surface-variant">Capture 4 fiducials to align board.</p>
+</div>
+<div class="p-gutter flex-1 flex flex-col gap-6 overflow-y-auto">
+<!-- Section 1: Enable Motors Toggle -->
+<div class="bg-surface-container p-4 rounded-lg border border-outline-variant">
+<div class="flex justify-between items-center mb-4">
+<span class="font-label-caps text-label-caps text-on-surface">Axis Motors</span>
+<div class="px-2 py-1 rounded bg-error/10 text-error border border-error/30 font-data-md text-[10px] animate-pulse">OFFLINE</div>
+</div>
+<label class="relative inline-flex items-center cursor-pointer w-full group">
+<!-- Using a custom designed large toggle -->
+<div class="w-full h-14 bg-surface-variant rounded-full p-1 relative flex items-center border border-outline/30 tactical-shadow transition-colors" id="motor-toggle-container">
+<div class="w-1/2 h-full bg-surface-dim rounded-full flex items-center justify-center font-label-caps text-on-surface-variant z-10 transition-colors">OFF</div>
+<div class="w-1/2 h-full bg-transparent rounded-full flex items-center justify-center font-label-caps text-on-surface-variant z-10 transition-colors">ON</div>
+<!-- The sliding pill -->
+<div class="absolute left-1 w-[calc(50%-4px)] h-[calc(100%-8px)] bg-surface-container-highest rounded-full shadow-md border border-outline/50 transition-transform duration-300 ease-in-out z-0" id="motor-toggle-pill"></div>
+</div>
+</label>
+<p class="font-body-lg text-xs text-on-surface-variant mt-3 text-center">Enable motors to unlock jog controls.</p>
+</div>
+<!-- Section 2: Jog Controls (Visually locked initially) -->
+<!-- We simulate 'disabled' state with opacity and pointer-events -->
+<div class="bg-surface-container p-4 rounded-lg border border-outline-variant opacity-50 pointer-events-none transition-opacity duration-300" id="jog-controls-panel">
+<div class="flex justify-between items-center mb-4">
+<span class="font-label-caps text-label-caps text-on-surface">Manual Jog</span>
+<!-- Step Selector -->
+<div class="flex bg-surface-dim rounded border border-outline/30 p-0.5">
+<button class="px-2 py-1 font-data-md text-xs text-on-surface-variant hover:text-on-surface hover:bg-surface-variant rounded transition-colors">0.1</button>
+<button class="px-2 py-1 font-data-md text-xs bg-primary-container text-on-primary-container rounded font-bold">1.0</button>
+<button class="px-2 py-1 font-data-md text-xs text-on-surface-variant hover:text-on-surface hover:bg-surface-variant rounded transition-colors">10</button>
+</div>
+</div>
+<!-- D-Pad Layout for X/Y -->
+<div class="grid grid-cols-3 gap-2 w-48 mx-auto mb-4">
+<div></div>
+<button class="w-14 h-14 bg-surface-variant rounded-lg flex items-center justify-center text-on-surface hover:bg-surface-container-highest tactical-shadow active:bg-surface-dim transition-colors" disabled="">
+<span class="material-symbols-outlined">keyboard_arrow_up</span>
+<span class="absolute top-1 text-[8px] font-data-md opacity-50">+Y</span>
+</button>
+<div></div>
+<button class="w-14 h-14 bg-surface-variant rounded-lg flex items-center justify-center text-on-surface hover:bg-surface-container-highest tactical-shadow active:bg-surface-dim transition-colors" disabled="">
+<span class="material-symbols-outlined">keyboard_arrow_left</span>
+<span class="absolute left-1 text-[8px] font-data-md opacity-50">-X</span>
+</button>
+<div class="w-14 h-14 rounded-full border border-outline-variant flex items-center justify-center bg-surface-dim inner-shadow">
+<div class="w-2 h-2 rounded-full bg-primary/50"></div>
+</div>
+<button class="w-14 h-14 bg-surface-variant rounded-lg flex items-center justify-center text-on-surface hover:bg-surface-container-highest tactical-shadow active:bg-surface-dim transition-colors" disabled="">
+<span class="material-symbols-outlined">keyboard_arrow_right</span>
+<span class="absolute right-1 text-[8px] font-data-md opacity-50">+X</span>
+</button>
+<div></div>
+<button class="w-14 h-14 bg-surface-variant rounded-lg flex items-center justify-center text-on-surface hover:bg-surface-container-highest tactical-shadow active:bg-surface-dim transition-colors" disabled="">
+<span class="material-symbols-outlined">keyboard_arrow_down</span>
+<span class="absolute bottom-1 text-[8px] font-data-md opacity-50">-Y</span>
+</button>
+<div></div>
+</div>
+<!-- Z Axis Controls -->
+<div class="flex justify-center gap-4 pt-4 border-t border-outline-variant/50">
+<button class="w-12 h-16 bg-surface-variant rounded-lg flex flex-col items-center justify-center gap-1 text-on-surface hover:bg-surface-container-highest tactical-shadow active:bg-surface-dim transition-colors" disabled="">
+<span class="material-symbols-outlined text-sm">arrow_upward</span>
+<span class="text-[10px] font-data-md">+Z</span>
+</button>
+<button class="w-12 h-16 bg-surface-variant rounded-lg flex flex-col items-center justify-center gap-1 text-on-surface hover:bg-surface-container-highest tactical-shadow active:bg-surface-dim transition-colors" disabled="">
+<span class="text-[10px] font-data-md">-Z</span>
+<span class="material-symbols-outlined text-sm">arrow_downward</span>
+</button>
+</div>
+</div>
+<!-- Section 3: Capture Point -->
+<button class="w-full py-4 bg-surface-variant text-on-surface-variant font-label-caps text-label-caps rounded-lg border border-outline-variant flex items-center justify-center gap-2 transition-all opacity-50 cursor-not-allowed" disabled="" id="capture-btn">
+<span class="material-symbols-outlined">center_focus_strong</span>
+                    CAPTURE FIDUCIAL (2/4)
+                </button>
+<!-- Section 4: Alignment Quality -->
+<div class="mt-auto bg-surface-container-low p-4 rounded-lg border border-outline-variant">
+<div class="flex justify-between items-end mb-2">
+<span class="font-label-caps text-label-caps text-on-surface-variant">Est. Quality</span>
+<div class="flex items-baseline gap-1">
+<span class="font-data-lg text-2xl text-secondary">98%</span>
+<span class="font-label-caps text-xs text-secondary">GOOD</span>
+</div>
+</div>
+<!-- Progress bar -->
+<div class="w-full h-1 bg-surface-dim rounded-full mb-4 overflow-hidden">
+<div class="h-full bg-secondary w-[98%]"></div>
+</div>
+<button class="w-full py-3 bg-outline text-on-surface font-label-caps text-label-caps rounded-DEFAULT font-bold flex items-center justify-center gap-2 opacity-50 cursor-not-allowed">
+                        PROCEED TO DRY-RUN
+                        <span class="material-symbols-outlined">arrow_forward</span>
+</button>
+</div>
+</div>
+</aside>
+</main>
+<!-- Bottom Nav Bar (Coordinates Display) -->
+<!-- Applying rules: docked fixed bottom-0 w-full, border-t-2 border-outline, no shadows -->
+<footer class="fixed bottom-0 w-full z-50 flex justify-around items-center h-12 px-margin-edge bg-surface-container-lowest border-t-2 border-outline shrink-0">
+<!-- Using text-secondary font-bold as active style for primary readout (X/Y) -->
+<div class="flex items-center gap-2 text-secondary font-bold">
+<span class="material-symbols-outlined text-sm">straighten</span>
+<span class="font-data-md text-data-md">X: 142.500</span>
+</div>
+<div class="flex items-center gap-2 text-secondary font-bold">
+<span class="material-symbols-outlined text-sm">straighten</span>
+<span class="font-data-md text-data-md">Y: 88.200</span>
+</div>
+<div class="flex items-center gap-2 text-on-surface">
+<span class="material-symbols-outlined text-sm">vertical_align_bottom</span>
+<span class="font-data-md text-data-md">Z: 15.000</span>
+</div>
+<div class="flex items-center gap-2 text-on-surface hidden sm:flex">
+<span class="material-symbols-outlined text-sm">architecture</span>
+<span class="font-data-md text-data-md">Bit: 0.8mm</span>
+</div>
+</footer>
+<!-- Interactive script for the toggle to demonstrate UI reaction -->
+<script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const toggleContainer = document.getElementById('motor-toggle-container');
+            const pill = document.getElementById('motor-toggle-pill');
+            const jogPanel = document.getElementById('jog-controls-panel');
+            const captureBtn = document.getElementById('capture-btn');
+            const statusText = toggleContainer.parentElement.previousElementSibling.querySelector('div');
+            
+            let motorsEnabled = false;
+
+            toggleContainer.addEventListener('click', (e) => {
+                e.preventDefault();
+                motorsEnabled = !motorsEnabled;
+                
+                if(motorsEnabled) {
+                    // Turn ON
+                    pill.style.transform = 'translateX(100%)';
+                    pill.style.backgroundColor = '#ffb300'; // primary-container
+                    
+                    jogPanel.classList.remove('opacity-50', 'pointer-events-none');
+                    jogPanel.classList.add('border-primary/50');
+                    
+                    const buttons = jogPanel.querySelectorAll('button');
+                    buttons.forEach(b => b.removeAttribute('disabled'));
+
+                    captureBtn.classList.remove('opacity-50', 'bg-surface-variant', 'text-on-surface-variant', 'cursor-not-allowed');
+                    captureBtn.classList.add('bg-primary-container', 'text-on-primary-container', 'hover:bg-primary-fixed', 'tactical-shadow');
+                    captureBtn.removeAttribute('disabled');
+
+                    statusText.textContent = 'LIVE';
+                    statusText.className = 'px-2 py-1 rounded bg-primary/20 text-primary border border-primary/50 font-data-md text-[10px] animate-pulse';
+                } else {
+                    // Turn OFF
+                    pill.style.transform = 'translateX(0)';
+                    pill.style.backgroundColor = '#353534'; // surface-container-highest
+                    
+                    jogPanel.classList.add('opacity-50', 'pointer-events-none');
+                    jogPanel.classList.remove('border-primary/50');
+                    
+                    const buttons = jogPanel.querySelectorAll('button');
+                    buttons.forEach(b => b.setAttribute('disabled', 'true'));
+
+                    captureBtn.classList.add('opacity-50', 'bg-surface-variant', 'text-on-surface-variant', 'cursor-not-allowed');
+                    captureBtn.classList.remove('bg-primary-container', 'text-on-primary-container', 'hover:bg-primary-fixed', 'tactical-shadow');
+                    captureBtn.setAttribute('disabled', 'true');
+
+                    statusText.textContent = 'OFFLINE';
+                    statusText.className = 'px-2 py-1 rounded bg-error/10 text-error border border-error/30 font-data-md text-[10px] animate-pulse';
+                }
+            });
+        });
+    </script>
+</body></html>

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Drill Stage: Done</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error-container": "#93000a",
+                        "on-tertiary-fixed-variant": "#0c5216",
+                        "tertiary-fixed": "#acf4a4",
+                        "tertiary": "#a7ef9f",
+                        "inverse-surface": "#e5e2e1",
+                        "surface-bright": "#393939",
+                        "on-secondary": "#003912",
+                        "on-tertiary-container": "#185b1d",
+                        "on-tertiary-fixed": "#002203",
+                        "surface-dim": "#131313",
+                        "on-tertiary": "#003909",
+                        "secondary-container": "#02c953",
+                        "inverse-primary": "#7e5700",
+                        "primary-container": "#ffb300",
+                        "on-secondary-fixed": "#002108",
+                        "outline-variant": "#514532",
+                        "secondary-fixed": "#69ff87",
+                        "primary-fixed-dim": "#ffba38",
+                        "outline": "#9e8e78",
+                        "surface": "#131313",
+                        "on-surface": "#e5e2e1",
+                        "surface-tint": "#ffba38",
+                        "surface-container-lowest": "#0e0e0e",
+                        "on-primary-fixed": "#281900",
+                        "tertiary-fixed-dim": "#91d78a",
+                        "on-primary-container": "#6b4900",
+                        "tertiary-container": "#8cd286",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-low": "#1c1b1b",
+                        "primary-fixed": "#ffdeac",
+                        "on-surface-variant": "#d6c4ac",
+                        "surface-variant": "#353534",
+                        "surface-container": "#201f1f",
+                        "on-background": "#e5e2e1",
+                        "secondary-fixed-dim": "#3ce36a",
+                        "background": "#131313",
+                        "inverse-on-surface": "#313030",
+                        "primary": "#ffd79b",
+                        "surface-container-highest": "#353534",
+                        "on-primary-fixed-variant": "#604100",
+                        "on-secondary-fixed-variant": "#00531e",
+                        "on-error": "#690005",
+                        "surface-container-high": "#2a2a2a",
+                        "secondary": "#40e56c",
+                        "on-secondary-container": "#004d1b",
+                        "on-primary": "#432c00",
+                        "error": "#ffb4ab"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "margin-edge": "24px",
+                        "unit": "4px",
+                        "canvas-padding": "32px",
+                        "gutter": "16px",
+                        "control-gap": "12px"
+                    },
+                    "fontFamily": {
+                        "data-lg": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "label-caps": ["JetBrains Mono"],
+                        "data-md": ["JetBrains Mono"]
+                    },
+                    "fontSize": {
+                        "data-lg": ["20px", { "lineHeight": "28px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "label-caps": ["12px", { "lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700" }],
+                        "data-md": ["14px", { "lineHeight": "20px", "fontWeight": "500" }]
+                    }
+                }
+            }
+        };
+    </script>
+<style>
+        .blink { animation: blinker 1s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
+        .pcb-bg {
+            background-color: #1a1a1a;
+            background-image: radial-gradient(#333 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background min-h-screen flex flex-col font-body-lg overflow-hidden">
+<!-- Top AppBar (Web) -->
+<header class="hidden md:flex justify-between items-center w-full px-margin-edge h-16 bg-surface border-b border-outline-variant flat no shadows">
+<div class="font-headline-md text-headline-md font-bold text-primary flex items-center gap-2">
+<span class="material-symbols-outlined" data-weight="fill" style="font-variation-settings: 'FILL' 1;">precision_manufacturing</span>
+            blau-drill
+        </div>
+<div class="flex items-center gap-4 text-on-surface-variant">
+<button class="p-2 hover:bg-surface-variant transition-all duration-200 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined">settings</span>
+</button>
+<button class="p-2 hover:bg-surface-variant transition-all duration-200 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined">help</span>
+</button>
+</div>
+</header>
+<!-- Main Layout -->
+<div class="flex flex-1 overflow-hidden relative">
+<!-- Error Banner overlaying top of main area -->
+<div class="absolute top-0 left-0 right-0 z-50 bg-error-container text-on-error-container p-unit flex items-center justify-center gap-gutter font-data-md text-data-md border-b-2 border-error">
+<span class="material-symbols-outlined blink text-error">warning</span>
+<span>HARDWARE DISCONNECTED. Check USB cable and power.</span>
+<button class="ml-4 px-4 py-1 border border-error rounded hover:bg-error hover:text-on-error transition-colors font-label-caps text-label-caps uppercase">Reconnect</button>
+</div>
+<!-- SideNavBar (Web) -->
+<nav class="hidden md:flex flex-col h-full py-canvas-padding docked fixed left-0 w-[320px] bg-surface-container border-r border-outline-variant z-40 top-16">
+<div class="px-margin-edge mb-8">
+<h2 class="font-headline-md text-headline-md text-primary">Control Panel</h2>
+<p class="text-on-surface-variant font-data-md text-data-md mt-1">Machine Ready</p>
+</div>
+<div class="flex flex-col gap-2 px-gutter flex-1">
+<button class="flex items-center gap-4 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all font-label-caps text-label-caps text-left uppercase">
+<span class="material-symbols-outlined">upload_file</span> Load
+                </button>
+<button class="flex items-center gap-4 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all font-label-caps text-label-caps text-left uppercase">
+<span class="material-symbols-outlined">ads_click</span> Align
+                </button>
+<button class="flex items-center gap-4 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all font-label-caps text-label-caps text-left uppercase">
+<span class="material-symbols-outlined">play_circle</span> Dry-run
+                </button>
+<button class="flex items-center gap-4 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all font-label-caps text-label-caps text-left uppercase">
+<span class="material-symbols-outlined">precision_manufacturing</span> Drill
+                </button>
+<button class="flex items-center gap-4 px-4 py-3 rounded-lg bg-primary-container text-on-primary-container font-label-caps text-label-caps text-left uppercase">
+<span class="material-symbols-outlined">check_circle</span> Done
+                </button>
+</div>
+<div class="mt-auto px-gutter flex flex-col gap-2 mb-4">
+<button class="flex items-center gap-4 px-4 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all font-label-caps text-label-caps text-left uppercase opacity-50">
+<span class="material-symbols-outlined">settings_input_component</span> Motors
+                </button>
+<button class="flex items-center gap-4 px-4 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all font-label-caps text-label-caps text-left uppercase opacity-50">
+<span class="material-symbols-outlined">air</span> Vacuum
+                </button>
+</div>
+<div class="px-gutter pb-margin-edge">
+<button class="w-full bg-error-container text-on-error-container py-4 rounded-lg font-headline-md text-headline-md uppercase tracking-wider shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2" style="background-image: repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,0.1) 10px, rgba(0,0,0,0.1) 20px);">
+<span class="material-symbols-outlined">report</span> EMERGENCY STOP
+                </button>
+</div>
+</nav>
+<!-- Main Canvas Area -->
+<main class="flex-1 ml-[0px] md:ml-[320px] p-canvas-padding bg-surface-dim relative flex flex-col mt-12 md:mt-0">
+<!-- PCB Visualization Mock -->
+<div class="flex-1 pcb-bg rounded-xl border border-surface-bright shadow-inner relative overflow-hidden flex items-center justify-center opacity-40">
+<!-- Mock drill holes (all green for done) -->
+<div class="absolute w-3 h-3 rounded-full bg-secondary shadow-[0_0_8px_rgba(64,229,108,0.8)] top-[20%] left-[30%]"></div>
+<div class="absolute w-3 h-3 rounded-full bg-secondary shadow-[0_0_8px_rgba(64,229,108,0.8)] top-[25%] left-[60%]"></div>
+<div class="absolute w-3 h-3 rounded-full bg-secondary shadow-[0_0_8px_rgba(64,229,108,0.8)] top-[50%] left-[45%]"></div>
+<div class="absolute w-3 h-3 rounded-full bg-secondary shadow-[0_0_8px_rgba(64,229,108,0.8)] top-[70%] left-[20%]"></div>
+<div class="absolute w-3 h-3 rounded-full bg-secondary shadow-[0_0_8px_rgba(64,229,108,0.8)] top-[80%] left-[75%]"></div>
+<div class="absolute w-3 h-3 rounded-full bg-secondary shadow-[0_0_8px_rgba(64,229,108,0.8)] top-[40%] left-[80%]"></div>
+</div>
+<!-- Completion Overlay -->
+<div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10 pt-16">
+<div class="bg-surface-container p-8 rounded-xl border border-outline-variant shadow-2xl flex flex-col items-center pointer-events-auto max-w-md w-full">
+<span class="material-symbols-outlined text-secondary text-6xl mb-4" data-weight="fill" style="font-variation-settings: 'FILL' 1;">task_alt</span>
+<h1 class="font-headline-lg text-headline-lg text-primary mb-6">Drilling Complete</h1>
+<div class="grid grid-cols-2 gap-4 w-full mb-8">
+<div class="bg-surface-dim p-4 rounded-lg border border-surface-bright flex flex-col items-center justify-center">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase mb-1">Total Holes</span>
+<span class="font-data-lg text-data-lg text-secondary">218</span>
+</div>
+<div class="bg-surface-dim p-4 rounded-lg border border-surface-bright flex flex-col items-center justify-center">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase mb-1">Total Time</span>
+<span class="font-data-lg text-data-lg text-on-surface">14:35</span>
+</div>
+<div class="bg-surface-dim p-4 rounded-lg border border-surface-bright flex flex-col items-center justify-center col-span-2">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase mb-1">Bit Changes</span>
+<span class="font-data-lg text-data-lg text-on-surface">2</span>
+</div>
+</div>
+<button class="w-full bg-primary text-on-primary py-4 rounded-lg font-headline-md text-headline-md hover:bg-primary-container transition-colors active:scale-95 flex justify-center items-center gap-2">
+<span class="material-symbols-outlined">add_circle</span> Start New Board
+                    </button>
+</div>
+</div>
+</main>
+</div>
+<!-- BottomNavBar (Mobile) -->
+<nav class="md:hidden fixed bottom-0 w-full z-50 flex justify-around items-center h-12 px-margin-edge bg-surface-container-lowest border-t-2 border-outline flat no shadows text-secondary">
+<div class="flex flex-col items-center justify-center text-on-surface">
+<span class="font-data-md text-data-md">X: 0.000</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface">
+<span class="font-data-md text-data-md">Y: 0.000</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface">
+<span class="font-data-md text-data-md">Z: 0.000</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface">
+<span class="font-data-md text-data-md">Bit: 0.8mm</span>
+</div>
+</nav>
+</body></html>

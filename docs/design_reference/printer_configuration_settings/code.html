@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>BLAU-DRILL | Printer Configuration</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container": "#201f1f",
+                        "on-tertiary-container": "#185b1d",
+                        "on-tertiary-fixed": "#002203",
+                        "on-tertiary": "#003909",
+                        "surface-container-highest": "#353534",
+                        "surface-bright": "#393939",
+                        "on-secondary-fixed": "#002108",
+                        "surface-container-high": "#2a2a2a",
+                        "primary-fixed-dim": "#ffba38",
+                        "surface-container-low": "#1c1b1b",
+                        "outline-variant": "#514532",
+                        "background": "#131313",
+                        "on-surface-variant": "#d6c4ac",
+                        "on-background": "#e5e2e1",
+                        "inverse-surface": "#e5e2e1",
+                        "on-surface": "#e5e2e1",
+                        "error-container": "#93000a",
+                        "surface": "#131313",
+                        "on-primary-fixed": "#281900",
+                        "outline": "#9e8e78",
+                        "on-primary-fixed-variant": "#604100",
+                        "on-secondary-fixed-variant": "#00531e",
+                        "on-tertiary-fixed-variant": "#0c5216",
+                        "tertiary": "#a7ef9f",
+                        "error": "#ffb4ab",
+                        "secondary-fixed": "#69ff87",
+                        "secondary-fixed-dim": "#3ce36a",
+                        "surface-tint": "#ffba38",
+                        "tertiary-fixed": "#acf4a4",
+                        "primary": "#ffd79b",
+                        "inverse-primary": "#7e5700",
+                        "surface-container-lowest": "#0e0e0e",
+                        "tertiary-fixed-dim": "#91d78a",
+                        "on-secondary-container": "#004d1b",
+                        "on-secondary": "#003912",
+                        "on-error": "#690005",
+                        "on-primary-container": "#6b4900",
+                        "on-primary": "#432c00",
+                        "on-error-container": "#ffdad6",
+                        "tertiary-container": "#8cd286",
+                        "surface-variant": "#353534",
+                        "secondary-container": "#02c953",
+                        "primary-fixed": "#ffdeac",
+                        "inverse-on-surface": "#313030",
+                        "primary-container": "#ffb300",
+                        "surface-dim": "#131313",
+                        "secondary": "#40e56c"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "margin-edge": "24px",
+                        "canvas-padding": "32px",
+                        "control-gap": "12px",
+                        "gutter": "16px",
+                        "unit": "4px"
+                    },
+                    "fontFamily": {
+                        "body-lg": ["Inter"],
+                        "data-md": ["JetBrains Mono"],
+                        "data-lg": ["JetBrains Mono"],
+                        "label-caps": ["JetBrains Mono"],
+                        "headline-md": ["Inter"],
+                        "headline-lg": ["Inter"]
+                    },
+                    "fontSize": {
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "data-md": ["14px", { "lineHeight": "20px", "fontWeight": "500" }],
+                        "data-lg": ["20px", { "lineHeight": "28px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "label-caps": ["12px", { "lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { background-color: #131313; color: #e5e2e1; }
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .filled-icon { font-variation-settings: 'FILL' 1; }
+        
+        /* Custom Scrollbar for inner content */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1c1b1b; }
+        ::-webkit-scrollbar-thumb { background: #353534; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #514532; }
+
+        /* Stepper animation */
+        @keyframes pulse-amber {
+            0%, 100% { border-color: rgba(255, 215, 155, 0.4); box-shadow: 0 0 0 0 rgba(255, 215, 155, 0.4); }
+            50% { border-color: rgba(255, 215, 155, 1); box-shadow: 0 0 0 4px rgba(255, 215, 155, 0.1); }
+        }
+        .animate-pulse-border { animation: pulse-amber 2s infinite; }
+        
+        /* Tactical input styling */
+        .tactical-input {
+            background-color: #0e0e0e;
+            border: 1px solid #353534;
+            color: #e5e2e1;
+            transition: all 0.2s ease;
+        }
+        .tactical-input:focus {
+            border-color: #ffd79b;
+            outline: none;
+            box-shadow: inset 0 0 0 1px #ffd79b;
+        }
+    </style>
+</head>
+<body class="font-body-lg text-body-lg overflow-hidden h-screen flex flex-col">
+<!-- TopAppBar -->
+<header class="fixed top-0 left-0 w-full z-50 flex items-center justify-between px-margin-edge h-16 bg-surface-container-high dark:bg-surface-container-high border-b border-outline-variant">
+<div class="flex items-center gap-4">
+<span class="font-headline-md text-headline-md font-bold text-primary uppercase tracking-tighter">blau-drill</span>
+<div class="h-6 w-px bg-outline-variant mx-2"></div>
+<span class="font-data-md text-data-md text-on-surface-variant flex items-center gap-2">
+<span class="material-symbols-outlined text-sm">settings</span>
+                SYSTEM CONFIGURATION
+            </span>
+</div>
+<!-- Global Stepper - Mode Indicator -->
+<div class="hidden md:flex items-center gap-2">
+<div class="flex items-center gap-1 opacity-50">
+<div class="w-8 h-2 bg-secondary rounded-full"></div>
+<div class="w-8 h-2 bg-secondary rounded-full"></div>
+<div class="w-8 h-2 bg-secondary rounded-full"></div>
+</div>
+<div class="px-3 py-1 border border-outline-variant rounded bg-surface-container text-on-surface-variant font-label-caps text-label-caps flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+                MAINTENANCE MODE
+            </div>
+</div>
+<div class="flex items-center gap-4">
+<button class="w-10 h-10 flex items-center justify-center rounded text-on-surface-variant hover:bg-surface-bright transition-colors">
+<span class="material-symbols-outlined filled-icon">settings</span>
+</button>
+</div>
+</header>
+<!-- Main Layout Container -->
+<div class="flex flex-1 mt-16 h-[calc(100vh-4rem)]">
+<!-- Side Navigation (Settings Categories) -->
+<nav class="fixed left-0 top-16 bottom-0 w-80 flex flex-col z-40 bg-surface-container dark:bg-surface-container border-r border-outline-variant">
+<div class="p-margin-edge border-b border-outline-variant">
+<h2 class="font-headline-md text-headline-md text-primary">Printer Configuration</h2>
+<p class="font-data-md text-data-md text-on-surface-variant mt-1">Station 04 Parameters</p>
+</div>
+<div class="flex-1 overflow-y-auto py-4">
+<ul class="flex flex-col gap-1 px-4">
+<!-- Active State -->
+<li>
+<button class="w-full flex items-center gap-3 px-4 py-3 rounded text-left bg-primary-container text-on-primary-container border-l-4 border-primary transition-all">
+<span class="material-symbols-outlined">usb</span>
+<span class="font-label-caps text-label-caps flex-1">Connection</span>
+</button>
+</li>
+<!-- Inactive States -->
+<li>
+<button class="w-full flex items-center gap-3 px-4 py-3 rounded text-left text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface transition-all border-l-4 border-transparent">
+<span class="material-symbols-outlined">open_with</span>
+<span class="font-label-caps text-label-caps flex-1">Motion Limits</span>
+</button>
+</li>
+<li>
+<button class="w-full flex items-center gap-3 px-4 py-3 rounded text-left text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface transition-all border-l-4 border-transparent">
+<span class="material-symbols-outlined">manufacturing</span>
+<span class="font-label-caps text-label-caps flex-1">Spindle Control</span>
+</button>
+</li>
+<li>
+<button class="w-full flex items-center gap-3 px-4 py-3 rounded text-left text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface transition-all border-l-4 border-transparent">
+<span class="material-symbols-outlined">restore_page</span>
+<span class="font-label-caps text-label-caps flex-1">Defaults</span>
+</button>
+</li>
+</ul>
+</div>
+</nav>
+<!-- Content Canvas -->
+<main class="ml-80 flex-1 bg-background overflow-y-auto p-canvas-padding relative">
+<!-- Connection Settings Group -->
+<div class="max-w-4xl mx-auto space-y-gutter pb-32">
+<div class="mb-8 border-b border-outline-variant pb-4">
+<h1 class="font-headline-lg text-headline-lg text-on-surface">Connection Setup</h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant mt-2">Configure serial communication parameters for the CNC controller.</p>
+</div>
+<!-- Serial Port Card -->
+<div class="bg-surface-container-high border border-outline-variant rounded p-6 shadow-sm">
+<h3 class="font-data-lg text-data-lg text-primary mb-4 flex items-center gap-2">
+<span class="material-symbols-outlined">settings_input_component</span>
+                        SERIAL PORT
+                    </h3>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-margin-edge">
+<div class="flex flex-col gap-2">
+<label class="font-label-caps text-label-caps text-on-surface-variant">PORT IDENTIFIER</label>
+<div class="relative">
+<select class="w-full appearance-none tactical-input rounded px-4 py-3 font-data-md text-data-md cursor-pointer">
+<option value="/dev/ttyUSB0">/dev/ttyUSB0 (Primary CNC)</option>
+<option value="/dev/ttyUSB1">/dev/ttyUSB1</option>
+<option value="/dev/ttyACM0">/dev/ttyACM0</option>
+<option value="COM3">COM3 (Windows)</option>
+</select>
+<span class="material-symbols-outlined absolute right-3 top-3 text-on-surface-variant pointer-events-none">expand_more</span>
+</div>
+</div>
+<div class="flex flex-col gap-2">
+<label class="font-label-caps text-label-caps text-on-surface-variant">BAUD RATE</label>
+<div class="relative">
+<select class="w-full appearance-none tactical-input rounded px-4 py-3 font-data-md text-data-md cursor-pointer border-primary animate-pulse-border">
+<option selected="" value="115200">115200</option>
+<option value="250000">250000</option>
+<option value="57600">57600</option>
+<option value="9600">9600</option>
+</select>
+<span class="material-symbols-outlined absolute right-3 top-3 text-on-surface-variant pointer-events-none">expand_more</span>
+</div>
+</div>
+</div>
+<div class="mt-6 flex items-center gap-4 p-4 bg-surface-container-lowest border border-outline-variant rounded">
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer" type="checkbox" value=""/>
+<div class="w-11 h-6 bg-surface-variant rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+</label>
+<div>
+<span class="font-data-md text-data-md text-on-surface block">AUTO-CONNECT ON STARTUP</span>
+<span class="font-label-caps text-label-caps text-on-surface-variant">Establish serial connection automatically when system boots.</span>
+</div>
+</div>
+</div>
+<!-- Motion Limits Preview (Static view for context, though tab is inactive) -->
+<div class="bg-surface-container-high border border-outline-variant rounded p-6 shadow-sm opacity-60 pointer-events-none grayscale">
+<h3 class="font-data-lg text-data-lg text-on-surface mb-4 flex items-center gap-2">
+<span class="material-symbols-outlined">open_with</span>
+                        MOTION LIMITS (Read-Only)
+                    </h3>
+<div class="grid grid-cols-3 gap-control-gap">
+<div class="bg-surface-container-lowest p-3 border border-outline-variant rounded flex flex-col items-center">
+<span class="font-label-caps text-label-caps text-on-surface-variant">X MAX</span>
+<span class="font-data-md text-data-md text-primary mt-1">300.00 mm</span>
+</div>
+<div class="bg-surface-container-lowest p-3 border border-outline-variant rounded flex flex-col items-center">
+<span class="font-label-caps text-label-caps text-on-surface-variant">Y MAX</span>
+<span class="font-data-md text-data-md text-primary mt-1">200.00 mm</span>
+</div>
+<div class="bg-surface-container-lowest p-3 border border-outline-variant rounded flex flex-col items-center">
+<span class="font-label-caps text-label-caps text-on-surface-variant">Z MAX</span>
+<span class="font-data-md text-data-md text-primary mt-1">50.00 mm</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Fixed Action Bar at Bottom of Canvas -->
+<div class="fixed bottom-0 left-80 right-0 p-margin-edge bg-surface-container-high border-t border-outline-variant flex justify-between items-center z-30">
+<button class="px-6 py-3 border border-outline-variant text-on-surface hover:bg-error-container hover:text-on-error-container hover:border-error-container rounded font-label-caps text-label-caps transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-sm">restart_alt</span>
+                    RESET TO DEFAULTS
+                </button>
+<div class="flex items-center gap-4">
+<span class="font-data-md text-data-md text-on-surface-variant">Unsaved changes detected</span>
+<button class="px-8 py-3 bg-primary text-on-primary hover:bg-primary-fixed hover:text-on-primary-fixed rounded font-label-caps text-label-caps font-bold transition-all flex items-center gap-2 shadow-[0_0_15px_rgba(255,215,155,0.2)]">
+<span class="material-symbols-outlined text-sm">save</span>
+                        APPLY CONFIGURATION
+                    </button>
+</div>
+</div>
+</main>
+</div>
+</body></html>
