@@ -36,6 +36,7 @@ defmodule BlauDrillWeb.SessionComponents do
   attr :jog_steps, :list, default: []
   attr :head, :map, required: true
   attr :captured_fiducials, :list, default: []
+  attr :current_target, :integer, default: 0
   attr :fiducial_target, :integer, default: 4
   attr :progress, :any, default: nil
   attr :bit_change, :any, default: nil
@@ -72,6 +73,7 @@ defmodule BlauDrillWeb.SessionComponents do
             printer_state={@printer_state}
             head={@head}
             captured_fiducials={@captured_fiducials}
+            current_target={@current_target}
             fiducial_target={@fiducial_target}
             progress={@progress}
             bit_change={@bit_change}
@@ -904,13 +906,21 @@ defmodule BlauDrillWeb.SessionComponents do
   defp hole_status(state) when state in [:drilling, :done], do: "done"
   defp hole_status(_), do: "pending"
 
+  # The un-captured candidates, each tagged by state: the operator's CURRENT
+  # target (blinks) vs the rest (faded "pending"). Captured ones are carried
+  # separately in `captured_fiducials`. Each carries its candidate index so the
+  # canvas can emit click-to-select / click-to-jump events against it.
   defp pending_fiducials(%{job: %Job{} = job} = assigns) do
-    captured = length(assigns.captured_fiducials)
+    captured_idx = MapSet.new(assigns.captured_fiducials, & &1.index)
+    current = assigns.current_target
 
     job.board
     |> BlauDrillWeb.SessionLive.feature_candidates()
-    |> Enum.drop(captured)
-    |> Enum.map(fn {x, y} -> %{x: x, y: y, state: "pending"} end)
+    |> Enum.with_index()
+    |> Enum.reject(fn {_pt, i} -> MapSet.member?(captured_idx, i) end)
+    |> Enum.map(fn {{x, y}, i} ->
+      %{x: x, y: y, index: i, state: if(i == current, do: "current", else: "pending")}
+    end)
   end
 
   defp outline_pairs(nil), do: nil

@@ -24,7 +24,19 @@
     bbox = null,
     head = null,
     stage = "align",
+    // headConfidence: "none" | "estimate" | "rough" | "aligned" — how much to
+    // trust the live head's projected board position (set #18).
+    headConfidence = "aligned",
+    // live is injected by LiveSvelte; lets the canvas push events to the
+    // LiveView (select a registration target, jump the head to a clicked point).
+    live = null,
   } = $props()
+
+  // Clicking a registration marker makes it the current target (operator-driven
+  // capture order). The LiveView decides what to do (select, and later jog).
+  function selectTarget(index) {
+    live?.pushEvent("set_current_target", { index })
+  }
 
   // A stable palette assigned to tools in id order (cyan-ish first).
   const PALETTE = ["#00ffff", "#ffb300", "#40e56c", "#c792ea", "#ff6e6e", "#82aaff"]
@@ -211,11 +223,21 @@
       />
     {/each}
 
-    <!-- fiducials -->
+    <!-- fiducials: three states.
+         captured  → solid green ring + check (done)
+         current   → bright amber, blinks, larger target ring (the one to align)
+         pending   → faded amber, static, smaller (the rest, click to select) -->
     {#each projectedFids as fid}
-      <g class="fid {fid.state}">
-        <circle cx={fid.px} cy={fid.py} r={1.6 * mark} fill="none" stroke-width={0.3 * mark} />
+      <g
+        class="fid {fid.state}"
+        role={fid.state === "pending" || fid.state === "current" ? "button" : undefined}
+        tabindex={fid.state === "pending" || fid.state === "current" ? "0" : undefined}
+        onclick={() => fid.index != null && selectTarget(fid.index)}
+        onkeydown={(e) =>
+          (e.key === "Enter" || e.key === " ") && fid.index != null && selectTarget(fid.index)}
+      >
         {#if fid.state === "captured"}
+          <circle cx={fid.px} cy={fid.py} r={1.6 * mark} fill="none" stroke-width={0.3 * mark} />
           <path
             d="M{fid.px - 0.7 * mark},{fid.py} l{0.45 * mark},{0.55 * mark} l{0.8 * mark},{-1.1 * mark}"
             fill="none"
@@ -224,8 +246,42 @@
             stroke-linecap="round"
             stroke-linejoin="round"
           />
+        {:else if fid.state === "current"}
+          <!-- outer target ring (blinks) + crosshair ticks + centre dot -->
+          <circle cx={fid.px} cy={fid.py} r={2.4 * mark} fill="none" stroke-width={0.4 * mark} />
+          <line
+            x1={fid.px - 3.2 * mark}
+            y1={fid.py}
+            x2={fid.px - 1.6 * mark}
+            y2={fid.py}
+            stroke-width={0.3 * mark}
+          />
+          <line
+            x1={fid.px + 1.6 * mark}
+            y1={fid.py}
+            x2={fid.px + 3.2 * mark}
+            y2={fid.py}
+            stroke-width={0.3 * mark}
+          />
+          <line
+            x1={fid.px}
+            y1={fid.py - 3.2 * mark}
+            x2={fid.px}
+            y2={fid.py - 1.6 * mark}
+            stroke-width={0.3 * mark}
+          />
+          <line
+            x1={fid.px}
+            y1={fid.py + 1.6 * mark}
+            x2={fid.px}
+            y2={fid.py + 3.2 * mark}
+            stroke-width={0.3 * mark}
+          />
+          <circle cx={fid.px} cy={fid.py} r={0.5 * mark} fill="#ffb300" />
         {:else}
-          <circle cx={fid.px} cy={fid.py} r={0.4 * mark} fill="#ffb300" />
+          <!-- pending: faded, static -->
+          <circle cx={fid.px} cy={fid.py} r={1.3 * mark} fill="none" stroke-width={0.25 * mark} />
+          <circle cx={fid.px} cy={fid.py} r={0.35 * mark} fill="#ffb300" />
         {/if}
       </g>
     {/each}
@@ -335,9 +391,26 @@
     filter: drop-shadow(0 0 8px rgba(255, 180, 171, 0.8));
     animation: pulse 1.2s ease-in-out infinite;
   }
+  /* current target: bright amber, blinks — the one to align right now */
+  .fid.current circle,
+  .fid.current line {
+    stroke: #ffb300;
+  }
+  .fid.current {
+    animation: pulse 1.2s ease-in-out infinite;
+    cursor: pointer;
+    filter: drop-shadow(0 0 4px rgba(255, 179, 0, 0.7));
+  }
+  /* pending: faded, static — click to make it the current target */
   .fid.pending circle {
     stroke: #ffb300;
-    animation: pulse 1.5s ease-in-out infinite;
+    opacity: 0.3;
+  }
+  .fid.pending {
+    cursor: pointer;
+  }
+  .fid.pending:hover circle {
+    opacity: 0.6;
   }
   .fid.captured circle {
     stroke: #40e56c;

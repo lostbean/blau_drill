@@ -128,6 +128,20 @@ defmodule BlauDrillWeb.SessionLiveTest do
     render_click(element(view, "[data-test='motors-toggle']"))
   end
 
+  # Pull the BoardCanvas props (live_svelte embeds them as a JSON `data-props`
+  # attribute, HTML-escaped) out of the rendered view.
+  defp canvas_props(view) do
+    [_, raw] = Regex.run(~r/data-props="([^"]*)"/, render(view))
+
+    raw
+    |> String.replace("&quot;", "\"")
+    |> String.replace("&#39;", "'")
+    |> String.replace("&amp;", "&")
+    |> String.replace("&lt;", "<")
+    |> String.replace("&gt;", ">")
+    |> Jason.decode!()
+  end
+
   # Capture all four candidates at the given machine targets (a list of {x,y}),
   # then fit. `targets` controls the residual: identity targets → clean fit;
   # an outlier → residual-gate rejection.
@@ -349,6 +363,35 @@ defmodule BlauDrillWeb.SessionLiveTest do
     upload_fixture(view)
     render_click(element(view, "[data-test='proceed-align']"))
     assert has_element?(view, "[data-test='emergency-stop']")
+  end
+
+  # ── current-target distinction ──────────────────────────────────────────────
+
+  test "exactly one registration candidate is the current target; clicking another switches it",
+       %{conn: conn} do
+    {conn, _name} = with_printer(conn)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    upload_fixture(view)
+    render_click(element(view, "[data-test='proceed-align']"))
+
+    fids = canvas_props(view)["fiducials"]
+    current = Enum.filter(fids, &(&1["state"] == "current"))
+    pending = Enum.filter(fids, &(&1["state"] == "pending"))
+
+    # One blinks (current), the rest fade (pending) — index 0 is current at start.
+    assert length(current) == 1
+    assert Enum.all?(pending, &(&1["state"] == "pending"))
+    assert hd(current)["index"] == 0
+    assert length(current) + length(pending) == length(fids)
+
+    # Clicking another candidate makes IT the current one (operator-driven order).
+    render_hook(view, "set_current_target", %{"index" => 2})
+
+    fids2 = canvas_props(view)["fiducials"]
+    current2 = Enum.filter(fids2, &(&1["state"] == "current"))
+    assert length(current2) == 1
+    assert hd(current2)["index"] == 2
   end
 
   test "abort + emergency stop are present while drilling, and aborting faults the job",

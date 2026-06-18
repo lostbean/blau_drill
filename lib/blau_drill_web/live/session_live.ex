@@ -83,6 +83,9 @@ defmodule BlauDrillWeb.SessionLive do
       |> assign(:jog_steps, @jog_steps)
       |> assign(:head, %{x: 0.0, y: 0.0, z: 0.0})
       |> assign(:captured_fiducials, [])
+      # Which registration candidate the operator is currently aligning to
+      # (index into feature_candidates/1). Only this one blinks; the rest fade.
+      |> assign(:current_target, 0)
       |> assign(:fiducial_target, @fiducial_target)
       |> assign(:progress, nil)
       |> assign(:bit_change, nil)
@@ -214,28 +217,49 @@ defmodule BlauDrillWeb.SessionLive do
     end
   end
 
-  # Stage 2: capture the current head position against the next board feature as
-  # a Correspondence, and feed it to the Job's pending alignment.
+  # Stage 2: the operator clicks a registration candidate to make it the CURRENT
+  # target (the one being aligned). Only the current one blinks; the others fade.
+  # Capture order is operator-driven, not forced.
+  def handle_event("set_current_target", %{"index" => index}, socket) do
+    idx = to_int(index)
+    candidates = feature_candidates(socket.assigns.job.board)
+
+    if idx >= 0 and idx < length(candidates) do
+      {:noreply, assign(socket, :current_target, idx)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Stage 2: capture the current head position against the CURRENT target board
+  # feature as a Correspondence, feed it to the Job's pending alignment, then
+  # auto-advance the current target to the next not-yet-captured candidate.
   def handle_event("capture_fiducial", _params, socket) do
     job = socket.assigns.job
+    idx = socket.assigns.current_target
+    candidates = feature_candidates(job.board)
 
     with true <- Job.can?(job, :capture),
-         {:ok, {mx, my, _mz}} <- Printer.where(socket.assigns.conn),
-         {:ok, board_point} <- next_feature(socket) do
-      corr = %Correspondence{board: board_point, machine: {mx, my}}
+         {x, y} when not is_nil(x) <- Enum.at(candidates, idx) || {nil, nil},
+         {:ok, {mx, my, _mz}} <- Printer.where(socket.assigns.conn) do
+      corr = %Correspondence{board: {x, y}, machine: {mx, my}}
       {:ok, job} = Job.transition(job, {:capture, corr})
 
       captured =
         socket.assigns.captured_fiducials ++
-          [%{x: elem(board_point, 0), y: elem(board_point, 1), state: "captured"}]
+          [%{index: idx, x: x, y: y, state: "captured"}]
 
       {:noreply,
        socket
        |> assign(:job, job)
-       |> assign(:captured_fiducials, captured)}
+       |> assign(:captured_fiducials, captured)
+       |> assign(:current_target, next_uncaptured(candidates, captured))}
     else
       false ->
         {:noreply, put_flash(socket, :error, "Capture is not available right now.")}
+
+      {nil, nil} ->
+        {:noreply, put_flash(socket, :error, "No registration target selected.")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not read head position: #{inspect(reason)}")}
@@ -279,7 +303,8 @@ defmodule BlauDrillWeb.SessionLive do
     {:noreply,
      socket
      |> advance(:recapture)
-     |> assign(:captured_fiducials, [])}
+     |> assign(:captured_fiducials, [])
+     |> assign(:current_target, 0)}
   end
 
   # aligned → dry_run, then stream the dry-run program (spindle off, hover).
@@ -366,6 +391,7 @@ defmodule BlauDrillWeb.SessionLive do
      |> assign(:job, nil)
      |> assign(:diagnostic, nil)
      |> assign(:captured_fiducials, [])
+     |> assign(:current_target, 0)
      |> assign(:progress, nil)
      |> assign(:summary, nil)
      |> assign(:bit_change, nil)
@@ -447,14 +473,26 @@ defmodule BlauDrillWeb.SessionLive do
   # The next board feature to register against, in capture order. The selectable
   # set is `fiducials ++ holes`; the fixture has no extracted fiducials, so we
   # walk distinctive holes (corners of the hole cloud) deterministically.
-  defp next_feature(socket) do
-    job = socket.assigns.job
-    idx = length(socket.assigns.captured_fiducials)
-    candidates = feature_candidates(job.board)
 
-    case Enum.at(candidates, idx) do
-      nil -> {:error, :no_more_features}
-      {x, y} -> {:ok, {x, y}}
+  # The next candidate index not yet captured (so capture auto-advances to fresh
+  # work). Falls back to the just-captured index when everything is captured.
+  defp next_uncaptured(candidates, captured) do
+    done = MapSet.new(captured, & &1.index)
+
+    0..(length(candidates) - 1)
+    |> Enum.find(&(not MapSet.member?(done, &1)))
+    |> case do
+      nil -> length(candidates) - 1
+      idx -> idx
+    end
+  end
+
+  defp to_int(i) when is_integer(i), do: i
+
+  defp to_int(i) when is_binary(i) do
+    case Integer.parse(i) do
+      {n, _} -> n
+      :error -> -1
     end
   end
 
