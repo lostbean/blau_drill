@@ -101,6 +101,10 @@ defmodule BlauDrill.Printer do
   def jog(nil, _axis, _mm), do: {:error, :disconnected}
   def jog(conn, axis, mm), do: safe(fn -> PrinterConnection.jog(conn, axis, mm) end)
 
+  @doc "Absolute rapid to a machine XY (click-to-jump; gated like jog)."
+  def move_to(nil, _x, _y), do: {:error, :disconnected}
+  def move_to(conn, x, y), do: safe(fn -> PrinterConnection.move_to(conn, x, y) end)
+
   @doc "Live position via M114: `{:ok, {x, y, z}}`."
   def where(nil), do: {:error, :disconnected}
   def where(conn), do: safe(fn -> PrinterConnection.where(conn) end)

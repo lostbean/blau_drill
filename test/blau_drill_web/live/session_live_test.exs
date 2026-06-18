@@ -394,6 +394,40 @@ defmodule BlauDrillWeb.SessionLiveTest do
     assert hd(current2)["index"] == 2
   end
 
+  # ── click-to-jump ───────────────────────────────────────────────────────────
+
+  test "jump_to is refused until motors are energized, then moves the head (gated)",
+       %{conn: conn} do
+    {conn, name} = with_printer(conn)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    upload_fixture(view)
+    render_click(element(view, "[data-test='proceed-align']"))
+
+    # Capture one point first so a board↔machine mapping exists.
+    render_click(element(view, "[data-test='motors-toggle']"))
+    candidates = BlauDrillWeb.SessionLive.feature_candidates(board_for(view))
+    capture_at(view, name, Enum.at(candidates, 0))
+
+    # With motors ON (we're :jogging) a jump moves the head: state stays :jogging
+    # (not :idle/refused) and the sim head ends up near the requested board point.
+    {tx, ty} = Enum.at(candidates, 1)
+    render_hook(view, "jump_to", %{"x" => tx, "y" => ty})
+    assert PrinterConnection.state(name) == :jogging
+    {:ok, {hx, hy, _}} = PrinterConnection.where(name)
+    assert_in_delta hx, tx, 0.5
+    assert_in_delta hy, ty, 0.5
+
+    # Release motors → :idle → a jump is refused (the energize-before-move gate),
+    # and the head does not move.
+    render_click(element(view, "[data-test='motors-toggle']"))
+    assert PrinterConnection.state(name) == :idle
+    {:ok, before} = PrinterConnection.where(name)
+    html = render_hook(view, "jump_to", %{"x" => List.first(candidates) |> elem(0), "y" => 0.0})
+    assert html =~ "Enable motors"
+    assert {:ok, ^before} = PrinterConnection.where(name)
+  end
+
   # ── live head confidence ────────────────────────────────────────────────────
 
   test "the live head marker's confidence grows none -> estimate -> rough -> aligned",

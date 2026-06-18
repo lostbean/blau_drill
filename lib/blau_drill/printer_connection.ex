@@ -113,6 +113,15 @@ defmodule BlauDrill.PrinterConnection do
   @spec jog(:gen_statem.server_ref(), axis(), number()) :: :ok | {:error, :idle}
   def jog(conn, axis, mm), do: :gen_statem.call(conn, {:jog, axis, mm})
 
+  @doc """
+  Rapid (`G0`) the head to an absolute machine `{x, y}`. Like `jog/3`, this is
+  motion and is gated: it only runs in `:jogging` (motors energized); in `:idle`
+  it returns `{:error, :idle}` and sends nothing. Used by click-to-jump to drive
+  to a clicked board point's machine coordinate, then fine-tune with `jog/3`.
+  """
+  @spec move_to(:gen_statem.server_ref(), number(), number()) :: :ok | {:error, :idle}
+  def move_to(conn, x, y), do: :gen_statem.call(conn, {:move_to, x, y})
+
   @doc "Query live position via `M114`; parses `{:ok, {x, y, z}}`."
   @spec where(:gen_statem.server_ref()) :: {:ok, {float(), float(), float()}} | {:error, term()}
   def where(conn), do: :gen_statem.call(conn, :where)
@@ -218,6 +227,11 @@ defmodule BlauDrill.PrinterConnection do
     {:keep_state_and_data, [{:reply, from, {:error, :idle}}]}
   end
 
+  # Click-to-jump is motion too — refused from idle (energize first).
+  def idle({:call, from}, {:move_to, _x, _y}, _data) do
+    {:keep_state_and_data, [{:reply, from, {:error, :idle}}]}
+  end
+
   def idle({:call, from}, :where, data) do
     do_where(from, data, :keep_state)
   end
@@ -259,6 +273,12 @@ defmodule BlauDrill.PrinterConnection do
     data = write_line(data, "G91")
     data = write_line(data, "G0 #{a}#{format_mm(mm)}")
     data = write_line(data, "G90")
+    {:keep_state, data, [{:reply, from, :ok}]}
+  end
+
+  def jogging({:call, from}, {:move_to, x, y}, data) do
+    # Absolute rapid to a machine XY (we are already in G90/absolute mode).
+    data = write_line(data, "G0 X#{format_mm(x)} Y#{format_mm(y)}")
     {:keep_state, data, [{:reply, from, :ok}]}
   end
 

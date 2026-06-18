@@ -85,6 +85,28 @@ defmodule BlauDrill.PrinterConnectionTest do
       assert move, "expected a relative X move, got: #{inspect(writes)}"
       assert Enum.any?(writes, &String.contains?(&1, "G91"))
     end
+
+    # Click-to-jump is motion too, so it rides the same gate.
+    test "move_to in :idle returns {:error, :idle} and writes NOTHING" do
+      %{conn: conn, fake: fake} = start_conn()
+      assert PrinterConnection.state(conn) == :idle
+
+      assert {:error, :idle} = PrinterConnection.move_to(conn, 10.0, 20.0)
+      assert Fake.writes(fake) == []
+    end
+
+    test "move_to in :jogging sends an absolute G0 X Y and returns :ok" do
+      %{conn: conn, fake: fake} = start_conn()
+      :ok = PrinterConnection.energize(conn)
+
+      assert :ok = PrinterConnection.move_to(conn, 12.5, -3.0)
+
+      writes = Fake.writes(fake)
+      move = Enum.find(writes, &String.match?(&1, ~r/G0+\s+X12\.5.*Y-3/))
+      assert move, "expected an absolute G0 X12.5 Y-3 move, got: #{inspect(writes)}"
+      # Absolute move — must NOT switch to relative mode like jog does.
+      refute Enum.any?(writes, &String.contains?(&1, "G91"))
+    end
   end
 
   describe "where/1 (M114)" do

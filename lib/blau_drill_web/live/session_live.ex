@@ -217,6 +217,39 @@ defmodule BlauDrillWeb.SessionLive do
     end
   end
 
+  # Stage 2: click-to-jump. The operator clicks a board point (or a next marker)
+  # on the canvas; we map it board → machine with the best transform we have so
+  # far and rapid the head there, so they don't have to jog the whole way. This
+  # is REAL motion: `Printer.move_to` is gated (refused in :idle), so the
+  # energize-before-jog rule holds even though the click came from the canvas.
+  def handle_event("jump_to", %{"x" => bx, "y" => by}, socket) do
+    with {:ok, fx} <- to_float(bx),
+         {:ok, fy} <- to_float(by),
+         {mx, my} <- board_to_machine(socket.assigns, {fx, fy}) do
+      case Printer.move_to(socket.assigns.conn, mx, my) do
+        :ok ->
+          {:noreply, refresh_head(socket)}
+
+        {:error, :idle} ->
+          {:noreply, put_flash(socket, :error, "Enable motors before moving the head.")}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Move failed: #{inspect(reason)}")}
+      end
+    else
+      :no_transform ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Capture at least one point before jumping (no board↔machine mapping yet)."
+         )}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   # Stage 2: the operator clicks a registration candidate to make it the CURRENT
   # target (the one being aligned). Only the current one blinks; the others fade.
   # Capture order is operator-driven, not forced.
@@ -493,6 +526,59 @@ defmodule BlauDrillWeb.SessionLive do
     case Integer.parse(i) do
       {n, _} -> n
       :error -> -1
+    end
+  end
+
+  defp to_float(f) when is_number(f), do: {:ok, f * 1.0}
+
+  defp to_float(s) when is_binary(s) do
+    case Float.parse(s) do
+      {f, _} -> {:ok, f}
+      :error -> :error
+    end
+  end
+
+  # Map a board point to machine space for click-to-jump, using the best
+  # transform available: the solved alignment (forward apply) if we have one,
+  # else a translation/similarity estimate from the captures so far. Returns
+  # `:no_transform` when there is nothing to map with (0 captures).
+  defp board_to_machine(%{job: %Job{alignment: %BlauDrill.Alignment{transform: t}}}, {bx, by}) do
+    BlauDrill.Transform2D.apply(t, {bx, by})
+  end
+
+  defp board_to_machine(
+         %{job: %Job{pending: %BlauDrill.PendingAlignment{captured: corrs}}},
+         board
+       ) do
+    estimate_machine_point(corrs, board)
+  end
+
+  defp board_to_machine(_assigns, _board), do: :no_transform
+
+  defp estimate_machine_point([], _board), do: :no_transform
+
+  # 1 capture → translation: machine ≈ board − (board₁ − machine₁).
+  defp estimate_machine_point([%Correspondence{board: {b1x, b1y}, machine: {m1x, m1y}}], {bx, by}) do
+    {bx - (b1x - m1x), by - (b1y - m1y)}
+  end
+
+  # 2+ captures → similarity from the first two pairs (the inverse of the
+  # board-space estimate in the canvas).
+  defp estimate_machine_point([c1, c2 | _], {bx, by}) do
+    %{board: {b1x, b1y}, machine: {m1x, m1y}} = c1
+    %{board: {b2x, b2y}, machine: {m2x, m2y}} = c2
+    {bdx, bdy} = {b2x - b1x, b2y - b1y}
+    {mdx, mdy} = {m2x - m1x, m2y - m1y}
+    blen2 = bdx * bdx + bdy * bdy
+
+    if blen2 < 1.0e-9 do
+      {bx - (b1x - m1x), by - (b1y - m1y)}
+    else
+      # s = md/bd applied to (board − b1) + m1.
+      sr = (mdx * bdx + mdy * bdy) / blen2
+      si = (mdy * bdx - mdx * bdy) / blen2
+      {dx, dy} = {bx - b1x, by - b1y}
+      {m1x + (sr * dx - si * dy), m1y + (si * dx + sr * dy)}
     end
   end
 

@@ -38,10 +38,34 @@
   // Local alias for readability in the template.
   const headConfidence = $derived(head_confidence)
 
-  // Clicking a registration marker makes it the current target (operator-driven
-  // capture order). The LiveView decides what to do (select, and later jog).
-  function selectTarget(index) {
+  // Clicking a registration marker selects it as the current target AND jumps
+  // the head to it (the LiveView gates the actual motion on motors being on).
+  function selectTarget(index, bx, by) {
     live?.pushEvent("set_current_target", { index })
+    jumpTo(bx, by)
+  }
+
+  // Ask the LiveView to rapid the head to a board point. Only meaningful during
+  // alignment; the server refuses if motors aren't energized or there's no
+  // board↔machine mapping yet.
+  function jumpTo(bx, by) {
+    if (stage !== "align") return
+    live?.pushEvent("jump_to", { x: bx, y: by })
+  }
+
+  // Convert an SVG-space click into BOARD coordinates (inverse of `project`),
+  // then jump there. Lets the operator click anywhere on the board to travel.
+  function onBoardClick(e) {
+    if (stage !== "align" || !live) return
+    const svg = e.currentTarget
+    const pt = svg.createSVGPoint()
+    pt.x = e.clientX
+    pt.y = e.clientY
+    const loc = pt.matrixTransform(svg.getScreenCTM().inverse())
+    const { b, h } = span
+    const bx = loc.x - PAD + b.minx
+    const by = b.miny + (h - loc.y) - PAD
+    jumpTo(bx, by)
   }
 
   // A stable palette assigned to tools in id order (cyan-ish first).
@@ -197,7 +221,9 @@
     preserveAspectRatio="xMidYMid meet"
     role="img"
     aria-label="PCB board view"
+    class:clickable={stage === "align" && live}
     onwheel={onWheel}
+    onclick={onBoardClick}
   >
     <!-- substrate: covers the full padded board span -->
     <rect x="0" y="0" width={span.w} height={span.h} fill="#0a2e14" />
@@ -238,9 +264,15 @@
         class="fid {fid.state}"
         role={fid.state === "pending" || fid.state === "current" ? "button" : undefined}
         tabindex={fid.state === "pending" || fid.state === "current" ? "0" : undefined}
-        onclick={() => fid.index != null && selectTarget(fid.index)}
+        onclick={(e) => {
+          // Marker click selects + jumps; don't also fire the board-level jump.
+          e.stopPropagation()
+          if (fid.index != null) selectTarget(fid.index, fid.x, fid.y)
+        }}
         onkeydown={(e) =>
-          (e.key === "Enter" || e.key === " ") && fid.index != null && selectTarget(fid.index)}
+          (e.key === "Enter" || e.key === " ") &&
+          fid.index != null &&
+          selectTarget(fid.index, fid.x, fid.y)}
       >
         {#if fid.state === "captured"}
           <circle cx={fid.px} cy={fid.py} r={1.6 * mark} fill="none" stroke-width={0.3 * mark} />
@@ -362,6 +394,9 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
+  }
+  svg.clickable {
+    cursor: crosshair;
   }
   svg {
     /* Lock the SVG to the container's EXACT pixel box (absolute inset) so its
