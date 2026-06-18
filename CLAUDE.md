@@ -65,3 +65,21 @@ This repo uses a Nix-native dev setup. The toolchain is **Erlang/OTP 28** with
   serial port) as hardcoded defaults — these are operator/hardware settings.
 - Don't introduce paths that stream G-code or enable motors without the
   corresponding safety gate and an abort/emergency-stop affordance.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live as markdown files under `.scratch/<feature>/` in this repo
+(no remote tracker). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`), recorded as a `Status:` line per issue file. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root. See
+`docs/agents/domain.md`.
