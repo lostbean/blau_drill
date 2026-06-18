@@ -345,7 +345,18 @@ defmodule BlauDrillWeb.SessionLive do
   # faulted → aligned (reconnect and resume from the solved alignment).
   def handle_event("reconnect", _params, socket) do
     _ = Printer.reconnect(socket.assigns.conn)
-    {:noreply, advance(socket, :reconnect)}
+
+    # faulted → aligned. A fault discards the interrupted drilling run: the FSM
+    # routes back to :aligned (not :drilling), so resuming requires a fresh
+    # dry-run before the real run — the operator re-validates registration
+    # before any bit touches copper again. Clear the stale drilling progress and
+    # any open bit-change modal so the :aligned UI doesn't show a half-finished
+    # "X / Y" from the aborted run.
+    {:noreply,
+     socket
+     |> advance(:reconnect)
+     |> assign(:progress, nil)
+     |> assign(:bit_change, nil)}
   end
 
   # Start a fresh board (Stage 5 → Stage 1).

@@ -194,6 +194,36 @@ defmodule BlauDrillWeb.SessionLiveTest do
     refute has_element?(view, "[data-test='proceed-align']")
   end
 
+  test "a malformed .drl (no M48 header) surfaces an error and does NOT advance or crash",
+       %{conn: conn} do
+    {conn, _name} = with_printer(conn)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    drl =
+      file_input(view, "#upload-form", :drl, [
+        %{name: "junk.drl", content: "this is not a drill file at all", type: "text/plain"}
+      ])
+
+    render_upload(drl, "junk.drl")
+    render_submit(element(view, "#upload-form"))
+
+    assert has_element?(view, "[data-test='upload-error']")
+    refute has_element?(view, "[data-test='diagnostic-bar']")
+    refute has_element?(view, "[data-test='proceed-align']")
+    # The LiveView is still alive and responsive (no crash).
+    assert render(view) =~ "blau-drill"
+  end
+
+  # NOTE: a 0-byte upload can't be exercised through `render_upload/2` — Phoenix's
+  # test UploadClient divides by the entry size to compute progress and raises
+  # ArithmeticError before our code runs. The empty-content path is asserted
+  # directly at the parse layer instead (whitespace-only stands in for "empty"
+  # without tripping the harness), which is where the real rejection happens.
+  test "an empty/whitespace .drl is rejected at the parse layer (no holes, no crash)" do
+    assert {:error, reason} = BlauDrill.BoardModel.parse_drl("   \n  \n")
+    assert reason in [:missing_m48_header, :no_holes]
+  end
+
   # ── energize-before-jog gate ────────────────────────────────────────────────
 
   test "jog controls are disabled until Enable Motors is clicked (energize gate)",
@@ -292,6 +322,32 @@ defmodule BlauDrillWeb.SessionLiveTest do
     assert PrinterConnection.state(name) == :faulted
     assert html =~ "HARDWARE DISCONNECTED"
     assert has_element?(view, "#fault-banner")
+  end
+
+  test "reconnect after a drilling fault returns to :aligned, clears stale progress, and requires a fresh dry-run",
+       %{conn: conn} do
+    {conn, name} = with_printer(conn)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    to_registering(view)
+    capture_and_fit(view, name, @candidates)
+    render_click(element(view, "[data-test='proceed-dryrun']"))
+    render_click(element(view, "[data-test='confirm-drill']"))
+
+    # Fault mid-run, then recover.
+    render_click(element(view, "[data-test='abort-drilling']"))
+    assert PrinterConnection.state(name) == :faulted
+
+    html = render_click(element(view, "[data-test='reconnect']"))
+
+    # The FSM routes faulted → aligned (NOT back into drilling): resuming the
+    # real run requires passing through dry-run again, so registration is
+    # re-validated before any bit touches copper. There is no confirm-drill
+    # control here, and the stale "X / Y" drilling progress is gone.
+    refute has_element?(view, "[data-test='confirm-drill']")
+    refute has_element?(view, "[data-test='abort-drilling']")
+    assert has_element?(view, "[data-test='proceed-dryrun']:not([disabled])")
+    refute html =~ "Bit Change"
   end
 
   # ── residual gate ───────────────────────────────────────────────────────────

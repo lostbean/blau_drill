@@ -104,6 +104,7 @@ defmodule BlauDrillWeb.SessionComponents do
       <button
         type="button"
         phx-click="reconnect"
+        data-test="reconnect"
         class="rounded border border-error px-3 py-1 font-data text-xs font-bold uppercase tracking-widest hover:bg-error hover:text-on-error"
       >
         Reconnect

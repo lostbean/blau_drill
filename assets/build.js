@@ -1,7 +1,11 @@
 const esbuild = require("esbuild")
 const sveltePlugin = require("esbuild-svelte")
-const importGlobPlugin = require("esbuild-plugin-import-glob").default
 const sveltePreprocess = require("svelte-preprocess")
+
+// NOTE: components are imported explicitly in js/app.js and js/server.js, so the
+// build no longer needs esbuild-plugin-import-glob. Globbing was the source of a
+// subtle SSR fragility (the registry shape had to be reconciled with
+// LiveSvelte's normalizeComponents); explicit imports sidestep it entirely.
 
 const args = process.argv.slice(2)
 const watch = args.includes("--watch")
@@ -34,7 +38,6 @@ let optsClient = {
         "process.env.NODE_ENV": deploy ? '"production"' : '"development"',
     },
     plugins: [
-        importGlobPlugin(),
         sveltePlugin({
             preprocess: sveltePreprocess(),
             compilerOptions: {dev: !deploy, css: "injected", generate: "client"},
@@ -55,7 +58,6 @@ let optsServer = {
     sourcemap: watch ? "inline" : false,
     tsconfig: "./tsconfig.json",
     plugins: [
-        importGlobPlugin(),
         sveltePlugin({
             preprocess: sveltePreprocess(),
             compilerOptions: {dev: !deploy, css: "injected", generate: "server"},

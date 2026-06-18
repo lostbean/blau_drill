@@ -18,16 +18,22 @@ config :blau_drill, BlauDrillWeb.Endpoint,
   pubsub_server: BlauDrill.PubSub,
   live_view: [signing_salt: "Yq8nB2pL"]
 
-# Configure LiveSvelte rendering. Components hydrate on the client via the
-# SvelteHook (assets/js/app.js). Server-side rendering is OFF by default: the
-# SSR pipeline (assets/build.js -> priv/svelte/server.js, rendered through a
-# NodeJS pool) is wired up in application.ex and config, but the
-# esbuild-plugin-import-glob component registration needs to be reconciled with
-# LiveSvelte 0.15's `normalizeComponents` before SSR pre-render produces markup.
-# Flip to `ssr: true` (and rebuild assets) once that is resolved; the NodeJS
-# supervisor will start automatically when SSR is enabled and the bundle exists.
+# Configure LiveSvelte rendering. Components are server-side rendered (SSR) for
+# the initial dead-render and then hydrated on the client via the SvelteHook
+# (assets/js/app.js). The SSR pipeline is: assets/build.js compiles
+# assets/js/server.js -> priv/svelte/server.js (svelte `generate: "server"`),
+# which the NodeJS pool (started conditionally in application.ex) invokes via
+# {"server", "render"}; component.ex injects the returned head/html.
+#
+# SSR was previously OFF: under Svelte 5 (≥5.x) `render()` from `svelte/server`
+# returns a RenderOutput whose `head`/`html`/`body` are NON-ENUMERABLE getters,
+# so LiveSvelte 0.15's NodeJS bridge JSON-serialised it to `{}` and no markup
+# reached Elixir. assets/js/server.js now wraps LiveSvelte's getRender and
+# flattens that output into a plain `{head, html}` object before it crosses the
+# bridge. See docs/adr/0008-svelte-ssr.md. The NodeJS supervisor starts
+# automatically when SSR is enabled and priv/svelte/server.js exists.
 config :live_svelte,
-  ssr: false
+  ssr: true
 
 # Configure esbuild (the version is required). NOTE: JS bundling is actually
 # driven by assets/build.js (esbuild-svelte) so it can compile Svelte for both

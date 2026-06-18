@@ -169,8 +169,15 @@ defmodule BlauDrill.BoardModelTest do
   end
 
   describe "parse/1 — fiducials" do
-    test "fiducials default to an empty list (documented TODO)" do
-      assert {:ok, %BoardModel{fiducials: []}} = BoardModel.parse(%{drl: @drl})
+    # By design, not a gap: KiCad SVG plots carry no footprint identity (a
+    # fiducial cross is indistinguishable from a trace/via at the SVG layer), so
+    # we never fabricate fiducials. Registration uses board-feature holes
+    # instead (the architecture's "selectable points = fiducials ++ holes").
+    test "fiducials are an empty list — registration uses holes, not SVG marks" do
+      assert {:ok, %BoardModel{fiducials: [], holes: holes}} = BoardModel.parse(%{drl: @drl})
+      # The holes ARE the registration set, so they must be present and precise.
+      assert length(holes) == 130
+      assert Enum.all?(holes, &match?(%{x: _, y: _, tool: _}, &1))
     end
   end
 

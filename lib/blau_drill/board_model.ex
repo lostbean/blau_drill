@@ -71,10 +71,16 @@ defmodule BlauDrill.BoardModel do
   fixture (no curve/relative-command support); without an `:edge_cuts` input
   `outline` is `nil`.
 
-  Fiducials are **not yet extracted** — `fiducials` is always `[]`. The provided
-  SVGs do not reliably distinguish registration marks, so this is a documented
-  TODO; the selectable registration set downstream is `fiducials ++ holes`, so
-  holes remain usable in the meantime.
+  `fiducials` is always `[]` **by design**, not as a gap. KiCad SVG plots carry
+  no footprint identity — they are anonymous geometry (paths and circles), so a
+  fiducial cross is indistinguishable from a trace or a via at this layer.
+  Registration therefore uses **board-feature holes** as the selectable set
+  (architecture: "selectable points = `fiducials ++ holes`"): the UI offers the
+  well-spread bbox-corner-nearest holes as registration candidates, which are
+  already parsed precisely and are themselves drill targets. If a named
+  registration source is ever added (e.g. a KiCad `.pos` position file), it
+  would populate `fiducials` and compose ahead of holes — the downstream
+  `fiducials ++ holes` ordering already supports that without reshaping anything.
   """
 
   @typedoc "A tool identifier as it appears in the drill file, e.g. `\"T1\"`."

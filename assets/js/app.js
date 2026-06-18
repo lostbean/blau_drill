@@ -9,15 +9,22 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
 import {getHooks} from "live_svelte"
-// All Svelte components under assets/svelte are bundled in by esbuild via the
-// import-glob plugin (see build.js) and registered as LiveView hooks.
-import * as Components from "../svelte/**/*.svelte"
+// Svelte components are imported explicitly and registered as LiveView hooks.
+// The map keys are the names used at the `<.svelte name="..." />` call sites and
+// must match the registry in js/server.js (the SSR entry). An explicit map is
+// preferred over an import-glob: for a small component set it is just as terse,
+// keeps the client and SSR registries provably in sync, and removes the
+// import-glob plugin as a moving part from the build.
+import Hello from "../svelte/Hello.svelte"
+import BoardCanvas from "../svelte/BoardCanvas.svelte"
+
+const components = {Hello, BoardCanvas}
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: getHooks(Components),
+  hooks: getHooks(components),
 })
 
 // Show progress bar on live navigation and form submits
