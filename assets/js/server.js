@@ -4,15 +4,13 @@
 // off the JSON result (deps/live_svelte/lib/component.ex).
 //
 // Components are imported explicitly (rather than via an import-glob) so the SSR
-// bundle registers them in a stable, debuggable shape — `{Hello, BoardCanvas}`,
-// keyed by the same name used at the `<.svelte name="..." />` call sites. A
-// 2-component app does not need a glob, and an explicit map removes a moving
-// part from the SSR pipeline.
-import Hello from "../svelte/Hello.svelte"
+// bundle registers them in a stable, debuggable shape — `{BoardCanvas}`, keyed
+// by the same name used at the `<.svelte name="..." />` call sites. An explicit
+// map removes a moving part from the SSR pipeline.
 import BoardCanvas from "../svelte/BoardCanvas.svelte"
 import {getRender} from "live_svelte"
 
-const components = {Hello, BoardCanvas}
+const components = {BoardCanvas}
 
 const baseRender = getRender(components)
 

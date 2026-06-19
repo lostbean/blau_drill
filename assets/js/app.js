@@ -15,10 +15,9 @@ import {getHooks} from "live_svelte"
 // preferred over an import-glob: for a small component set it is just as terse,
 // keeps the client and SSR registries provably in sync, and removes the
 // import-glob plugin as a moving part from the build.
-import Hello from "../svelte/Hello.svelte"
 import BoardCanvas from "../svelte/BoardCanvas.svelte"
 
-const components = {Hello, BoardCanvas}
+const components = {BoardCanvas}
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
