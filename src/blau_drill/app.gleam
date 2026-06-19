@@ -142,7 +142,16 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
   // Apply the URL-hash stage, CAPPED to a safe restore target: never restore
   // into a connection/alignment-dependent stage (DryRun/Drill/Done), and never
   // into Align without a board. Anything else collapses to Load.
-  let m = Model(..m, screen: restore_screen(m))
+  let m = case restore_screen(m) {
+    // Restoring into Align must drive the job FSM Parsed → Registering (and take
+    // the config snapshot), exactly as the "Proceed to Align" button does —
+    // otherwise the job stays in Parsed and Capture silently no-ops.
+    Align -> {
+      let #(m2, _) = start_registering(m)
+      m2
+    }
+    screen -> Model(..m, screen: screen)
+  }
   // Auto-reconnect: if enabled and the real Web Serial backend is selected, try
   // to re-open a previously-authorized port WITHOUT a picker. A benign "no
   // granted port" leaves the app disconnected with no prompt.
