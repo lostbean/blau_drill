@@ -187,6 +187,83 @@ defmodule BlauDrillWeb.SessionLiveTest do
     assert html =~ "Printer Configuration" or html =~ "SYSTEM CONFIGURATION"
   end
 
+  # ── connection card: device selection / connect lifecycle ────────────────────
+  #
+  # These mount WITHOUT a `conn_name` so the card starts disconnected (the test
+  # env backend is `:none`), exercising the operator-facing device picker and the
+  # Connect/Disconnect flow. They are hardware-free: the Simulator is always
+  # offered, and the real-port path is driven to its failure branch with a bogus
+  # port (no hardware needed).
+
+  test "the connection card lists the Simulator as a selectable device", %{conn: conn} do
+    {:ok, view, html} = live(conn, ~p"/")
+
+    # Disconnected card: a device select with the Simulator, a refresh button and
+    # a Connect button (no Disconnect while disconnected).
+    assert has_element?(view, "[data-test='device-select']")
+    assert has_element?(view, "[data-test='refresh-devices']")
+    assert has_element?(view, "[data-test='connect-device']")
+    refute has_element?(view, "[data-test='disconnect-device']")
+    assert html =~ "Simulator"
+    assert html =~ "DISCONNECTED"
+  end
+
+  test "select_device updates the selected device", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # Selecting the Simulator keeps it as the selection (it's the option).
+    html = render_change(element(view, "#device-form"), %{"device" => "sim"})
+    assert html =~ "Simulator"
+    # The Simulator option is the selected one.
+    assert has_element?(view, "option[value='sim'][selected]")
+  end
+
+  test "refresh_devices re-enumerates and keeps the Simulator available", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    html = render_click(element(view, "[data-test='refresh-devices']"))
+    # Still hardware-free: the Simulator is always present after a refresh.
+    assert html =~ "Simulator"
+    assert has_element?(view, "[data-test='device-select']")
+  end
+
+  test "connecting to the Simulator device yields a connected state", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # Default selection is the Simulator (dev/test default device). Connect.
+    html = render_click(element(view, "[data-test='connect-device']"))
+
+    assert html =~ "CONNECTED"
+    # Now connected: Disconnect replaces Connect, select disables.
+    assert has_element?(view, "[data-test='disconnect-device']")
+    refute has_element?(view, "[data-test='connect-device']")
+
+    # Disconnecting returns to the disconnected card.
+    html = render_click(element(view, "[data-test='disconnect-device']"))
+    assert html =~ "DISCONNECTED"
+    assert has_element?(view, "[data-test='connect-device']")
+  end
+
+  test "connecting to a non-existent real port flashes an error and stays disconnected",
+       %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # Simulate a real serial port the operator could have picked, then connect.
+    # No hardware is attached, so opening it fails — the handler must flash and
+    # stay disconnected, never crash the LiveView.
+    port = "definitely-not-a-port"
+    send(view.pid, {:inject_device, %{id: port, label: port, kind: :real, port: port}})
+    render(view)
+
+    html = render_click(element(view, "[data-test='connect-device']"))
+
+    # Error surfaced, still disconnected, view alive.
+    assert html =~ "Could not connect"
+    assert html =~ "DISCONNECTED"
+    assert has_element?(view, "[data-test='connect-device']")
+    assert Process.alive?(view.pid)
+  end
+
   # ── upload / parse ──────────────────────────────────────────────────────────
 
   test "uploading a valid .drl parses and advances; diagnostic shows 130 holes / 5 tools",

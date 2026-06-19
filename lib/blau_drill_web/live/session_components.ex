@@ -29,6 +29,8 @@ defmodule BlauDrillWeb.SessionComponents do
   attr :conn_status, :atom, default: :disconnected
   attr :printer_state, :atom, default: :disconnected
   attr :backend, :atom, default: :none
+  attr :devices, :list, default: []
+  attr :selected_device, :string, default: nil
   attr :upload_error, :string, default: nil
   attr :diagnostic, :any, default: nil
   attr :uploads, :any, required: true
@@ -59,6 +61,8 @@ defmodule BlauDrillWeb.SessionComponents do
           conn_status={@conn_status}
           printer_state={@printer_state}
           backend={@backend}
+          devices={@devices}
+          selected_device={@selected_device}
         />
 
         <main class="relative flex-1 overflow-hidden bg-surface-dim p-6 pb-16">
@@ -174,6 +178,8 @@ defmodule BlauDrillWeb.SessionComponents do
   attr :conn_status, :atom, required: true
   attr :printer_state, :atom, required: true
   attr :backend, :atom, required: true
+  attr :devices, :list, default: []
+  attr :selected_device, :string, default: nil
 
   defp sidebar(assigns) do
     ~H"""
@@ -214,7 +220,13 @@ defmodule BlauDrillWeb.SessionComponents do
         </ul>
       </div>
 
-      <.connection_card conn_status={@conn_status} backend={@backend} printer_state={@printer_state} />
+      <.connection_card
+        conn_status={@conn_status}
+        backend={@backend}
+        printer_state={@printer_state}
+        devices={@devices}
+        selected_device={@selected_device}
+      />
 
       <div class="mt-auto flex flex-col gap-4">
         <%!-- Emergency stop: present in every motion stage. Calls Printer.halt/1 (M112). --%>
@@ -236,8 +248,12 @@ defmodule BlauDrillWeb.SessionComponents do
   attr :conn_status, :atom, required: true
   attr :backend, :atom, required: true
   attr :printer_state, :atom, required: true
+  attr :devices, :list, default: []
+  attr :selected_device, :string, default: nil
 
   defp connection_card(assigns) do
+    assigns = assign(assigns, :connected?, assigns.conn_status == :connected)
+
     ~H"""
     <div class="rounded-lg border border-outline-variant bg-surface-container-highest p-4">
       <div class="flex items-center justify-between">
@@ -257,21 +273,53 @@ defmodule BlauDrillWeb.SessionComponents do
         </span>
       </div>
 
-      <div class="mt-3 flex items-center gap-2">
+      <%!--
+        Device picker: the operator chooses Simulator or a detected serial port.
+        Selecting a device is NOT motion — it only changes which device a Connect
+        opens. The select + refresh lock while connected (you disconnect first to
+        switch devices); the picker reflects the active connection's device.
+      --%>
+      <form id="device-form" phx-change="select_device" class="mt-3 flex items-center gap-2">
         <select
-          disabled
-          class="flex-1 rounded border border-outline-variant bg-surface-container-lowest px-2 py-2 font-data text-xs text-on-surface"
+          name="device"
+          disabled={@connected?}
+          data-test="device-select"
+          class="flex-1 rounded border border-outline-variant bg-surface-container-lowest px-2 py-2 font-data text-xs text-on-surface disabled:opacity-60"
         >
-          <option>{port_label(@backend)}</option>
+          <option :for={device <- @devices} value={device.id} selected={device.id == @selected_device}>
+            {device.label}
+          </option>
         </select>
         <button
           type="button"
-          disabled
-          class="rounded border border-outline-variant bg-surface-container-high px-2 py-2 font-data text-xs text-on-surface-variant disabled:opacity-50"
+          phx-click="refresh_devices"
+          disabled={@connected?}
+          title="Refresh device list"
+          data-test="refresh-devices"
+          class="rounded border border-outline-variant bg-surface-container-high px-2 py-2 font-data text-xs text-on-surface-variant hover:brightness-110 disabled:opacity-50"
         >
           ⟳
         </button>
-      </div>
+      </form>
+
+      <button
+        :if={!@connected?}
+        type="button"
+        phx-click="connect_device"
+        data-test="connect-device"
+        class="mt-3 w-full rounded border border-primary bg-primary-container px-3 py-2 font-data text-xs font-bold uppercase tracking-wider text-on-primary-container hover:brightness-110"
+      >
+        Connect
+      </button>
+      <button
+        :if={@connected?}
+        type="button"
+        phx-click="disconnect_device"
+        data-test="disconnect-device"
+        class="mt-3 w-full rounded border border-outline-variant bg-surface-container-high px-3 py-2 font-data text-xs font-bold uppercase tracking-wider text-on-surface-variant hover:brightness-110"
+      >
+        Disconnect
+      </button>
 
       <p class="mt-2 font-data text-[0.625rem] uppercase tracking-wider text-on-surface-variant">
         Backend: {@backend}
@@ -1084,11 +1132,6 @@ defmodule BlauDrillWeb.SessionComponents do
   defp printer_label(:disconnected, _), do: "DISCONNECTED"
   defp printer_label(_, :connected), do: "CONNECTED"
   defp printer_label(_, _), do: "—"
-
-  defp port_label(:sim), do: "Simulator (no hardware)"
-  defp port_label(:fake), do: "Test fake"
-  defp port_label(:real), do: "/dev/ttyUSB0"
-  defp port_label(_), do: "No backend"
 
   defp quality_percent(%Job{residuals: %{max: max}, tol: tol}) when is_number(max) and tol > 0 do
     pct = round(Kernel.max(0.0, 1.0 - max / (2 * tol)) * 100)

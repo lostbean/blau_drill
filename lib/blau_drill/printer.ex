@@ -69,6 +69,31 @@ defmodule BlauDrill.Printer do
   @spec backend() :: :sim | :fake | :real | :none
   def backend, do: Keyword.get(config(), :backend, :none)
 
+  @doc """
+  The operator-selectable devices for the Stage 1 connection card (Simulator +
+  detected serial ports). Delegates to `BlauDrill.Printer.Devices`.
+  """
+  @spec list_devices() :: [BlauDrill.Printer.Devices.t()]
+  defdelegate list_devices(), to: BlauDrill.Printer.Devices, as: :list
+
+  @doc """
+  Tear down a per-session connection (the Disconnect button). Stops the linked
+  `PrinterConnection` `:gen_statem`; tolerant of an already-dead/`nil` conn so a
+  double-disconnect or a connection that died with its session never crashes.
+  """
+  @spec stop(conn()) :: :ok
+  def stop(nil), do: :ok
+
+  def stop(conn) do
+    safe(
+      fn ->
+        :gen_statem.stop(conn)
+        :ok
+      end,
+      :ok
+    )
+  end
+
   @doc "Whether a backend is wired (the Connect button does anything)."
   @spec connectable?() :: boolean()
   def connectable?, do: backend() != :none
@@ -169,11 +194,30 @@ defmodule BlauDrill.Printer do
   end
 
   defp start_real(cfg) do
-    PrinterConnection.start_link(
-      uart: BlauDrill.PrinterConnection.UART.Circuits,
-      port: Keyword.get(cfg, :port, "ttyUSB0"),
-      settle_ms: Keyword.get(cfg, :settle_ms, 250)
-    )
+    port = Keyword.get(cfg, :port, "ttyUSB0")
+
+    with {:ok, conn} <-
+           PrinterConnection.start_link(
+             uart: BlauDrill.PrinterConnection.UART.Circuits,
+             port: port,
+             settle_ms: Keyword.get(cfg, :settle_ms, 250)
+           ) do
+      # `PrinterConnection.init/1` keeps the supervisor up when the port can't be
+      # opened by starting in `:faulted` rather than failing `start_link`. From
+      # the UI's perspective that is a failed *connect attempt* — there is no
+      # usable wire — so for an operator-initiated connect we surface it as an
+      # error (and tear the dead-on-arrival connection down) instead of handing
+      # back a faulted handle that looks connected. A genuinely open port comes
+      # up `:idle`.
+      case state(conn) do
+        :faulted ->
+          _ = stop(conn)
+          {:error, {:port_unavailable, port}}
+
+        _ ->
+          {:ok, conn}
+      end
+    end
   end
 
   # ── helpers ─────────────────────────────────────────────────────────────────

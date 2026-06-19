@@ -37,6 +37,7 @@ defmodule BlauDrillWeb.SessionLive do
   require Logger
 
   alias BlauDrill.{Alignment, BoardModel, Config, Correspondence, GcodeProgram, Job, Printer}
+  alias BlauDrill.Printer.Devices
 
   @stages [
     {"load", "Load"},
@@ -57,7 +58,11 @@ defmodule BlauDrillWeb.SessionLive do
     # while this session runs cannot alter a stream already in flight.
     config = Config.current()
 
-    {conn, conn_status} = connect_printer(socket, params, config)
+    # The devices the operator can pick from in the Stage 1 connection card:
+    # the Simulator (always) + any serial ports detected right now. Refreshable.
+    devices = Printer.list_devices()
+
+    {conn, conn_status, selected_device} = connect_printer(socket, params, config, devices)
 
     # A per-session progress topic, unique to THIS LiveView process, so two
     # concurrent operator sessions streaming at once never see each other's
@@ -77,6 +82,8 @@ defmodule BlauDrillWeb.SessionLive do
       |> assign(:conn_status, conn_status)
       |> assign(:printer_state, Printer.state(conn))
       |> assign(:backend, Printer.backend())
+      |> assign(:devices, devices)
+      |> assign(:selected_device, selected_device)
       |> assign(:upload_error, nil)
       |> assign(:diagnostic, nil)
       |> assign(:jog_step, 1.0)
@@ -104,14 +111,29 @@ defmodule BlauDrillWeb.SessionLive do
   #
   # Tests inject a fake wire through the session map (so the suite needs no
   # hardware); dev/prod read the configured backend. Either way the connection
-  # is per-session and linked to this LiveView.
-  defp connect_printer(socket, _params, config) do
+  # is per-session and linked to this LiveView. Returns `{conn, status,
+  # selected_device_id}` so the connection card's device picker reflects what is
+  # actually connected.
+  #
+  # The session pre-selects the device that matches the configured backend AND
+  # the operator's chosen serial port from Settings (`Config.current().port`,
+  # snapshotted at mount): in dev that's the Simulator; if the operator applied a
+  # real port in Settings and the backend is `:real`, that port is pre-selected
+  # here. This is the only link from the Settings Connection panel to the session
+  # card — both read the same `Config`/enumeration, no hidden coupling.
+  defp connect_printer(socket, _params, config, devices) do
+    default_id = Devices.default_device(Printer.backend(), config.port).id
+
     if connected?(socket) do
       case get_connect_params(socket) do
         # Test harness: a pre-started connection is registered under this name.
-        # Use it directly (the test owns its lifecycle) — no hardware.
+        # Use it directly (the test owns its lifecycle) — no hardware. The device
+        # picker reflects this connection as the Simulator (the fake sim wire).
         %{"conn_name" => name} when is_binary(name) ->
-          resolve_named_conn(name)
+          case resolve_named_conn(name) do
+            {conn, :connected} -> {conn, :connected, Devices.sim_id()}
+            {nil, :disconnected} -> {nil, :disconnected, default_id}
+          end
 
         _ ->
           # Dev/prod: start a per-session connection for the configured backend,
@@ -121,15 +143,25 @@ defmodule BlauDrillWeb.SessionLive do
 
           if Printer.connectable_with?(connect_opts) do
             case Printer.connect(connect_opts) do
-              {:ok, conn} -> {conn, :connected}
-              {:error, _reason} -> {nil, :disconnected}
+              {:ok, conn} -> {conn, :connected, selected_for(default_id, devices)}
+              {:error, _reason} -> {nil, :disconnected, default_id}
             end
           else
-            {nil, :disconnected}
+            {nil, :disconnected, default_id}
           end
       end
     else
-      {nil, :disconnected}
+      {nil, :disconnected, default_id}
+    end
+  end
+
+  # Pick the device id to show as selected: the configured default if it is in
+  # the live device list, else fall back to the first device (the Simulator).
+  defp selected_for(default_id, devices) do
+    if Enum.any?(devices, &(&1.id == default_id)) do
+      default_id
+    else
+      Devices.sim_id()
     end
   end
 
@@ -149,6 +181,67 @@ defmodule BlauDrillWeb.SessionLive do
   @impl true
   def handle_event("validate_upload", _params, socket) do
     {:noreply, assign(socket, :upload_error, nil)}
+  end
+
+  # ── Device selection / connect lifecycle (Stage 1 connection card) ───────────
+  #
+  # Picking and connecting a device is NOT motion: opening a port (sim or real)
+  # never moves the machine, and Connect does NOT energize — every downstream
+  # verb (energize/jog/drill) still routes through PrinterConnection's gates.
+
+  # The operator picked a device from the dropdown. While connected the select is
+  # disabled in the UI, so this only fires when disconnected.
+  def handle_event("select_device", %{"device" => id}, socket) do
+    {:noreply, assign(socket, :selected_device, id)}
+  end
+
+  # Re-enumerate serial ports (plug in a printer, click ⟳, see it). Keeps the
+  # current selection if it still exists, else falls back to the Simulator.
+  def handle_event("refresh_devices", _params, socket) do
+    devices = Printer.list_devices()
+    selected = selected_for(socket.assigns.selected_device, devices)
+
+    {:noreply,
+     socket
+     |> assign(:devices, devices)
+     |> assign(:selected_device, selected)}
+  end
+
+  # Connect: open the selected device. Simulator → :sim backend; a real port →
+  # :real backend with that port. A failed real connection (no hardware / bad
+  # port) returns {:error, _} — we flash and stay disconnected; we never crash.
+  def handle_event("connect_device", _params, socket) do
+    device = Devices.find(socket.assigns.selected_device, socket.assigns.devices)
+
+    case Printer.connect(Devices.connect_opts(device)) do
+      {:ok, conn} ->
+        {:noreply,
+         socket
+         |> assign(:conn, conn)
+         |> assign(:conn_status, :connected)
+         |> assign(:printer_state, Printer.state(conn))
+         |> put_flash(:info, "Connected to #{device.label}.")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:conn, nil)
+         |> assign(:conn_status, :disconnected)
+         |> assign(:printer_state, :disconnected)
+         |> put_flash(:error, "Could not connect to #{device.label}: #{inspect(reason)}")}
+    end
+  end
+
+  # Disconnect: tear down the current per-session connection and return the card
+  # to the disconnected state (the device picker re-enables to switch devices).
+  def handle_event("disconnect_device", _params, socket) do
+    _ = Printer.stop(socket.assigns.conn)
+
+    {:noreply,
+     socket
+     |> assign(:conn, nil)
+     |> assign(:conn_status, :disconnected)
+     |> assign(:printer_state, :disconnected)}
   end
 
   def handle_event("load_board", _params, socket) do
@@ -451,6 +544,18 @@ defmodule BlauDrillWeb.SessionLive do
   @impl true
   def handle_info({:stream_progress, payload}, socket) do
     {:noreply, apply_progress(socket, payload)}
+  end
+
+  # Test seam: inject a device into the picker so the real-port *connect-failure*
+  # path can be exercised without hardware (the suite has no serial ports to
+  # enumerate). Prod never sends this; it is inert in the running app.
+  def handle_info({:inject_device, device}, socket) do
+    devices = socket.assigns.devices ++ [device]
+
+    {:noreply,
+     socket
+     |> assign(:devices, devices)
+     |> assign(:selected_device, device.id)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
