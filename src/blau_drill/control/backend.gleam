@@ -3,11 +3,9 @@
 //// machine writes through: a `Backend` is a record of effectful functions, so
 //// the controller never branches on which transport it is talking to.
 ////
-//// The contract mirrors the Elixir `BlauDrill.PrinterConnection.UART`
-//// behaviour: `open` connects, `write` sends ONE already-framed payload (the
+//// The contract: `open` connects, `write` sends ONE already-framed payload (the
 //// caller appends `"\n"`), and inbound lines are pushed to a callback the app
-//// installs once via `start_reading` — the same shape as Circuits' active mode
-//// (`{:circuits_uart, _, line}`), flattened to a `String`.
+//// installs once via `start_reading` — one decoded line at a time as a `String`.
 
 import gleam/javascript/promise.{type Promise}
 

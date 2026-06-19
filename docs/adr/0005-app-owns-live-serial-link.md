@@ -15,14 +15,16 @@ canvas — which a file-upload print host does not serve well.
 
 ## Decision
 
-The app **owns a live serial link** to Marlin directly (via `circuits_uart`) for
-the duration of a drilling session. `PrinterConnection` is a supervised
-GenServer and the system's **single stateful identity**; everything else is an
-immutable value. It hides the entire Marlin protocol behind four verbs —
-`jog/2`, `where/1` (M114), `stream/2` (ok-handshake inside), `halt/1`
-(M112-class abort) — and exposes a mode of `:idle | :jogging | :streaming |
-:faulted`. This is explicitly **not** an OctoPrint replacement: it claims the
-port only for the session.
+The app **owns a live serial link** to Marlin directly, in the browser, over the
+**Web Serial API** (`navigator.serial`), for the duration of a drilling session.
+The control layer (`src/blau_drill/control/`) is the system's **single stateful
+identity**; everything else is an immutable value. It hides the entire Marlin
+protocol behind a small set of verbs — `Energize`/`Release`, `Jog`, `MoveTo`,
+`Where` (M114), `Stream` (ok-handshake inside), `Halt` (M112-class abort),
+`Reconnect` — and exposes a mode of `Disconnected | Idle | Jogging | Streaming |
+Faulted`. A `Backend` seam lets the same logic run against the real Web Serial
+port or an in-browser simulator. This is explicitly **not** an OctoPrint
+replacement: it claims the port only for the session.
 
 ## Consequences
 
@@ -30,12 +32,15 @@ port only for the session.
   and low-latency; live head position drives the canvas overlay.
 - All reliability concerns (line numbering, checksums, resend) are encapsulated
   in one deep module — callers and the `Job` FSM stay readable and never
-  re-implement the handshake. Exposing a raw `send_gcode(line)` to LiveView was
-  rejected for exactly this reason.
-- A serial disconnect mid-stream transitions `PrinterConnection` to `:faulted`,
-  halts the stream, and surfaces in the UI; the supervisor restarts cleanly to
-  `:idle`. The failure is local and supervised, not a silent stall.
-- **Trade-off:** the app must hold the port exclusively, so it cannot share the
+  re-implement the handshake. Exposing a raw `write(line)` to the UI was rejected
+  for exactly this reason.
+- A serial disconnect mid-stream transitions the control machine to `Faulted`,
+  halts the stream, and surfaces in the UI; `Reconnect` recovers cleanly to
+  `Idle`. The failure is explicit and recoverable, not a silent stall.
+- **Trade-off 1:** the app must hold the port exclusively, so it cannot share the
   printer with another host during a session. Acceptable — it is a single-bench,
   single-operator instrument. **Reconsider if** the printer must serve other jobs
   concurrently, which contradicts the single-session premise.
+- **Trade-off 2:** Web Serial is **Chromium-only** and needs a secure context
+  (HTTPS / localhost / file://) plus a user-gesture connect. Accepted: the bench
+  operator runs a Chromium browser, which removes the install entirely.

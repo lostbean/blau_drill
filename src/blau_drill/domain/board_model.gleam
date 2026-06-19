@@ -1,6 +1,5 @@
 //// The immutable parse of the KiCad outputs — `holes`, `outline`, `fiducials`,
-//// `tools`, and a bounding box — entirely in **board coordinates**. Ported 1:1
-//// from `BlauDrill.BoardModel`.
+//// `tools`, and a bounding box — entirely in **board coordinates**.
 ////
 //// `parse/1` takes the raw KiCad exports (`drl` required, `edge_cuts`
 //// optional). It deliberately holds **no machine coordinates**: the back-side
@@ -74,7 +73,7 @@ pub type Inputs {
   Inputs(drl: option.Option(String), edge_cuts: option.Option(String))
 }
 
-/// A parse failure. Mirrors the Elixir error atoms / tagged tuples.
+/// A parse failure.
 pub type ParseError {
   MissingDrl
   MissingM48Header
@@ -350,12 +349,11 @@ fn parse_outline(svg: option.Option(String)) -> option.Option(Outline) {
   }
 }
 
-// Extract the `d="..."` attribute of the first `<path ...>`. The Elixir uses
-// `~r/<path[^>]*\bd="([^"]*)"/s`, but KiCad inserts newlines inside the
-// `<path style="...">` tag and inside the d-attribute, so `[^>]*` with the `s`
-// flag is needed. Gleam's regexp (JS RegExp) `.` excludes newlines unless the
-// dotall flag is set; here we use explicit character classes so newlines are
-// matched, mirroring the Elixir `/s` behaviour.
+// Extract the `d="..."` attribute of the first `<path ...>`. KiCad inserts
+// newlines inside the `<path style="...">` tag and inside the d-attribute, so
+// the pattern must span newlines. Gleam's regexp (JS RegExp) `.` excludes
+// newlines unless the dotall flag is set; here we use explicit character
+// classes (negated, not `.`) so newlines are matched.
 fn path_d(svg: String) -> Result(String, Nil) {
   // `[^>]` already matches newlines (it is a negated class, not `.`), so this
   // works across the multi-line opening tag.

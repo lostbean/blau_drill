@@ -18,12 +18,6 @@ Web Serial API**. See
 for the product brief, `docs/design_reference/` for per-stage UI mockups, and
 [`CONTEXT.md`](CONTEXT.md) for the domain glossary + invariants.
 
-> **History:** blau-drill was migrated from an Elixir/Phoenix-LiveView server app
-> to this pure-browser Gleam/Lustre app (see
-> `.scratch/gleam-pure-web-migration/PRD.md`). The domain logic and safety
-> invariants were ported 1:1; the prior Elixir implementation remains in git
-> history.
-
 ## Hard runtime requirements (Web Serial)
 
 - **Chromium only** — Chrome / Edge / Opera 89+. Firefox and Safari do not

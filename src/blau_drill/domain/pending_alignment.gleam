@@ -1,6 +1,5 @@
 //// The **in-progress** registration value: an append-only list of captured
-//// `Correspondence`s that has not (yet) been solved into an `Alignment`. Ported
-//// from `BlauDrill.PendingAlignment`.
+//// `Correspondence`s that has not (yet) been solved into an `Alignment`.
 ////
 //// `PendingAlignment` is a *structurally different type* from `Alignment`, not
 //// a flag on it. Crucially it has **no transform field** — so no downstream

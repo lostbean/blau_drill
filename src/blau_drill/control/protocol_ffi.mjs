@@ -10,8 +10,8 @@ export function stringToBytes(s) {
   return toList(Array.from(bytes));
 }
 
-// Fixed-decimal float formatting, matching Erlang's
-// `:erlang.float_to_binary(f, decimals: n)` for the values we produce (jog mm).
+// Fixed-decimal float formatting (the values we produce — jog mm — always have
+// `decimals` fractional digits).
 export function floatToDecimals(f, decimals) {
   return f.toFixed(decimals);
 }

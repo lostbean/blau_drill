@@ -3,7 +3,7 @@
 //// in one module means `app.gleam` stays an orchestrator and the views never
 //// learn about the domain types.
 ////
-//// Everything here is pure. It mirrors the Elixir `SessionLive` helpers:
+//// Everything here is pure. The helpers, in brief:
 ////   * `feature_candidates` — the 4 bbox-corner-nearest holes (registration
 ////     targets), deduped.
 ////   * `board_of` — the canvas-facing `Board` from a parsed `BoardModel`.
@@ -66,7 +66,7 @@ pub fn diagnostic_of(bm: BoardModel) -> model.Diagnostic {
 }
 
 /// The registration candidates: the hole nearest each bbox corner, deduped,
-/// preserving corner order. Mirrors `SessionLive.feature_candidates/1`.
+/// preserving corner order.
 pub fn feature_candidates(bm: BoardModel) -> List(Point) {
   let #(minx, miny, maxx, maxy) = bm.bbox
   let corners = [#(minx, miny), #(maxx, miny), #(maxx, maxy), #(minx, maxy)]
@@ -131,7 +131,7 @@ pub fn printer_state(s: printer.PrinterState) -> model.PrinterState {
 // ── parse error → operator copy ──────────────────────────────────────────────
 
 /// Operator-facing message for a parse failure. The absolute-page-coordinate
-/// trap gets the "drill origin not set" guidance, mirroring the Elixir copy.
+/// trap gets the "drill origin not set" guidance.
 pub fn parse_error_message(err: board_model.ParseError) -> String {
   case err {
     board_model.MissingDrl -> "No drill file selected."
@@ -153,7 +153,6 @@ pub fn parse_error_message(err: board_model.ParseError) -> String {
 ///   * 1 capture → translation;
 ///   * 2+ captures → similarity from the first two pairs;
 ///   * 0 captures → `Error(Nil)` (nothing to map with).
-/// Mirrors `SessionLive.board_to_machine/2` + `estimate_machine_point/2`.
 pub fn board_to_machine(
   transform: model.TransformOpt,
   captures: List(model.Capture),
@@ -253,10 +252,9 @@ pub fn board_to_machine_inverse(
 
 /// Coerce the settings strings into a `GcodeConfig` for a run, with the given
 /// mode. Invalid / blank numeric fields fall back to the `config.default()`
-/// value for that field, so a run always has a safe, complete config (mirrors
-/// the Elixir gcode_opts derivation). Machine-specific fields (port/baud/limits/
-/// spindle G-code/pwm) live in the UI Config and are not part of the generator
-/// tunables this returns.
+/// value for that field, so a run always has a safe, complete config.
+/// Machine-specific fields (port/baud/limits/spindle G-code/pwm) live in the UI
+/// Config and are not part of the generator tunables this returns.
 pub fn gcode_config(c: model.Config, mode: config.Mode) -> GcodeConfig {
   let d = config.default()
   config.GcodeConfig(

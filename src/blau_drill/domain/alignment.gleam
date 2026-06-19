@@ -1,5 +1,5 @@
 //// A **solved** board -> machine affine `Transform2D` together with its fit
-//// `residuals`. Ported 1:1 from `BlauDrill.Alignment`.
+//// `residuals`.
 ////
 //// An `Alignment` is the least-squares affine fit of 3+ human-captured
 //// `Correspondence`s. The only constructor is `fit/1`. Fewer than 3 points is a

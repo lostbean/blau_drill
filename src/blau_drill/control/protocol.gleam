@@ -1,9 +1,8 @@
-//// Pure Marlin wire-protocol helpers, ported 1:1 from the Elixir
-//// `BlauDrill.PrinterConnection` (`framed/2`, `checksum/1`, `format_mm/1`,
-//// `parse_m114/1`) by way of the Phase-0 spike. These are pure functions with
-//// no IO so they are exercised directly by `protocol_test.gleam`.
+//// Pure Marlin wire-protocol helpers: framing, checksum, mm formatting, and
+//// M114 reply parsing. These are pure functions with no IO so they are exercised
+//// directly by `protocol_test.gleam`.
 ////
-//// The framing rules mirror the reference exactly:
+//// The framing rules:
 ////   * `M112` and `M114` are out-of-band — sent raw, no line number / checksum.
 ////   * every other line is framed `N<n> <line>*<checksum>` where the checksum
 ////     is the XOR of every byte of the string `N<n> <line>`.
@@ -22,8 +21,7 @@ pub type Position {
 }
 
 /// Marlin XOR checksum over the `N<n> <line>` body string. This is the
-/// bitwise-XOR fold of every UTF-8 byte, matching the Elixir
-/// `:binary.bin_to_list/1 |> Enum.reduce(0, &Bitwise.bxor/2)`.
+/// bitwise-XOR fold of every UTF-8 byte.
 pub fn checksum(body: String) -> Int {
   body
   |> string_to_bytes
@@ -51,10 +49,9 @@ pub fn frame(raw: String, line_no: Int) -> #(String, Int) {
   }
 }
 
-/// Format millimetres the way the Elixir code does: floats to 3 decimals,
-/// integers plain. Gleam has no untyped number, so the caller passes a Float;
-/// a whole-number float is rendered without a decimal part to match the
-/// integer branch of `format_mm/1`.
+/// Format millimetres: fractional values to 3 decimals, whole numbers plain.
+/// The caller passes a Float; a whole-number float is rendered without a decimal
+/// part (e.g. `10.0` → `"10"`), and a fractional one to 3 decimals.
 pub fn format_mm(mm: Float) -> String {
   case is_whole(mm) {
     True -> int.to_string(float.round(mm))
@@ -63,7 +60,7 @@ pub fn format_mm(mm: Float) -> String {
 }
 
 /// Parse `X:.. Y:.. Z:..` floats out of an M114 reply line. Returns `Error(Nil)`
-/// for a non-position line (e.g. a bare `ok`), mirroring `:no_match`.
+/// for a non-position line (e.g. a bare `ok`).
 pub fn parse_m114(line: String) -> Result(Position, Nil) {
   use x <- result.try(parse_axis(line, "X"))
   use y <- result.try(parse_axis(line, "Y"))
@@ -87,8 +84,8 @@ fn parse_axis(line: String, axis: String) -> Result(Float, Nil) {
   }
 }
 
-/// Parse a float that may be written as an integer (`"10"`), like Elixir's
-/// `Float.parse/1` does not but the M114 regex permits.
+/// Parse a float that may be written as a bare integer (`"10"`), which the
+/// M114 regex permits even though a plain float parse would reject it.
 fn parse_float_loose(s: String) -> Result(Float, Nil) {
   case float.parse(s) {
     Ok(f) -> Ok(f)

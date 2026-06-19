@@ -1,12 +1,11 @@
 // Pure number-formatting helpers backing `gcode_program.gleam`. No DOM / IO —
 // kept tiny and side-effect-free so the generator stays unit-testable.
 //
-// These replicate the Elixir formatting in `BlauDrill.GcodeProgram` exactly:
+// The formatting rules the G-code generator relies on:
 //
-//   fmt5(v) = :erlang.float_to_binary(Float.round(v*1.0, 5) + 0.0, decimals: 5)
-//   fmt3(v) = :erlang.float_to_binary(Float.round(v*1.0, 3) + 0.0, decimals: 3)
-//   fmt_diameter(d) = :erlang.float_to_binary(d, decimals: 4)
-//                     |> strip trailing "0"s |> strip trailing "."
+//   fmt5(v)         = v rounded to 5 decimals, always 5 fractional digits
+//   fmt3(v)         = v rounded to 3 decimals, always 3 fractional digits
+//   fmt_diameter(d) = d to 4 decimals, then strip trailing "0"s and a trailing "."
 //
 // The `Math.round(v*10^n)/10^n + 0` step is load-bearing: it rounds to the
 // display precision FIRST, then the `+ 0` collapses a literal negative zero

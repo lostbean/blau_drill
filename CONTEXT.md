@@ -25,13 +25,10 @@ hand-rolled chain of re-export, a mirror flag, a fiducial `G92`, pcb2gcode, and 
 Python post-processor with one guided flow where the wrong order is
 unrepresentable.
 
-> **Migration note (2026-06-19):** blau-drill was migrated from an Elixir/
-> Phoenix-LiveView server app to this pure-browser Gleam/Lustre app. The domain
-> glossary and invariants below are unchanged — they are language-independent and
-> are preserved 1:1 in the Gleam port. Where an entry historically named an
-> Elixir construct (GenServer, `circuits_uart`, LiveView assigns), the Gleam
-> equivalent is noted inline. Module/function names map directly: `Foo.bar/1`
-> (Elixir) → `foo.bar` in `src/blau_drill/{domain,control,ui}/`.
+> **Source layout:** the domain glossary and invariants below are
+> language-independent. They map directly onto the code: a concept `Foo` lives as
+> `foo.gleam` in `src/blau_drill/{domain,control,ui}/`, and a `Foo.bar`
+> operation as the `bar` function in that module.
 
 ## Glossary
 
@@ -134,8 +131,7 @@ API**, or `transport.simulator()` for hardware-free dev). It hides the entire
 Marlin protocol — line numbering, checksums, the `ok`/`resend` handshake, `M114`
 polling, flow control — behind verbs `Energize`/`Release`/`Jog`/`MoveTo`/
 `Where`/`Stream`/`Halt`/`Reconnect`. Its mode is one of `Disconnected | Idle |
-Jogging | Streaming | Faulted`. (Historically an Elixir `:gen_statem` over
-`circuits_uart`; the four-state design and invariants are preserved.)
+Jogging | Streaming | Faulted`.
 _Avoid:_ "serial driver" / "the port" as the noun, and do **not** model it as
 OctoPrint or a general print host — it owns the port only for the session.
 

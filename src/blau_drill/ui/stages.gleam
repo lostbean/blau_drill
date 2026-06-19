@@ -1,6 +1,5 @@
 //// The five stage views + the settings screen. Each is a pure function of the
-//// model. Ported from `session_components.ex` (stage_load / stage_align /
-//// stage_dryrun / stage_drill / stage_done) and `settings_components.ex`.
+//// model (load / align / dry-run / drill / done, plus settings).
 ////
 //// The right-hand control asides preserve the safety-gate model exactly:
 ////   * jog / spindle controls are DISABLED unless the printer is `Jogging`

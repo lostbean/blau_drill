@@ -1,5 +1,5 @@
 //// An immutable 2x3 affine transform mapping **board coordinates -> machine
-//// coordinates**. Ported 1:1 from `BlauDrill.Transform2D` (Elixir).
+//// coordinates**.
 ////
 //// The transform is the 2x3 affine matrix
 ////
@@ -35,9 +35,8 @@ pub type InvertError {
   Singular
 }
 
-// Relative tolerance for the singular-determinant check. See the Elixir
-// moduledoc: `|det|` is compared against this fraction of the squared entry
-// scale.
+// Relative tolerance for the singular-determinant check: `|det|` is compared
+// against this fraction of the squared entry scale.
 const epsilon = 1.0e-9
 
 /// The identity transform: `apply(identity(), p) == p` for every point `p`.

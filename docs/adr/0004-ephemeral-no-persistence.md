@@ -6,20 +6,21 @@
 ## Context
 
 blau-drill drives one board through one drilling session — load → register →
-align → dry-run → drill — and a session lasts minutes. The tempting default for a
-Phoenix app is to add Ecto and persist boards, alignments, and job history. But
+align → dry-run → drill — and a session lasts minutes. A tempting default would
+be a server with a database to persist boards, alignments, and job history. But
 nothing in the workflow needs to outlive the session: there is one operator, one
 board at a time, and the physical board itself is the durable artifact.
 
 ## Decision
 
-State is **ephemeral**: one board per session, held as immutable values in
-LiveView assigns (the parsed `BoardModel`, the captured correspondences, the
-fitted `Alignment`, the emitted `GcodeProgram`). **No database, no Ecto, no
-persistence layer.** Session config (serial port, baud, bed size, tool
-diameters, feeds/depths) resolves **once** at session start into an immutable
-config value and is never re-read mid-run. The only thing with genuine identity
-is the `PrinterConnection` (see ADR-0005).
+Run state is **ephemeral**: one board per session, held as immutable values in
+the in-browser app model (the parsed `BoardModel`, the captured correspondences,
+the fitted `Alignment`, the emitted `GcodeProgram`). **No server, no database, no
+persistence layer for run state.** The only state that survives a reload is the
+operator **config** (serial port, baud, bed size, tool diameters, feeds/depths),
+saved to the browser's `localStorage`; it resolves into an immutable snapshot at
+the start of a run and is never re-read mid-run. The only thing with genuine
+identity during a session is the serial control machine (see ADR-0005).
 
 ## Consequences
 

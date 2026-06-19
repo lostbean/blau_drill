@@ -1,5 +1,4 @@
-//// BoardCanvas — the top-down PCB view, ported from `assets/svelte/BoardCanvas.svelte`
-//// to a Lustre SVG view.
+//// The top-down PCB view, rendered as a Lustre SVG view.
 ////
 //// It renders the FR4 substrate, the drill holes (coloured by tool, or by
 //// drilled/pending status during a run), the optional board outline, fiducial
@@ -8,7 +7,7 @@
 //// and a tool legend are included. It is a PURE VIEW: zoom lives in the model,
 //// and all motion/gating is decided upstream.
 ////
-//// ## Projection (1:1 with the Svelte original)
+//// ## Projection
 ////
 //// The viewBox is sized to the board's OWN aspect ratio (plus PAD), so
 //// `preserveAspectRatio="xMidYMid meet"` letterboxes the whole board into the
@@ -49,8 +48,7 @@ const min_zoom = 1.0
 
 const max_zoom = 12.0
 
-// A stable palette assigned to tools in id order (cyan-ish first), matching the
-// Svelte PALETTE.
+// A stable palette assigned to tools in id order (cyan-ish first).
 const palette = [
   "#00ffff", "#ffb300", "#40e56c", "#c792ea", "#ff6e6e", "#82aaff",
 ]

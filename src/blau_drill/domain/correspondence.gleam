@@ -1,5 +1,5 @@
 //// A single captured **board <-> machine** pair — the raw material of
-//// alignment. Ported from `BlauDrill.Correspondence`.
+//// alignment.
 ////
 //// A `Correspondence` records that a particular board feature point (`board`,
 //// in board coordinates) is physically located at a particular machine point

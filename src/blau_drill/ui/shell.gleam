@@ -1,8 +1,7 @@
 //// The persistent operator shell: the header (brand + 5-node stepper + config
 //// link), the left sidebar (Control Panel header, stage nav, connection card,
-//// e-stop), and the bottom telemetry/data bar. Ported from the `app_header`,
-//// `sidebar`, `connection_card` and `bottom_bar` components in
-//// `session_components.ex`.
+//// e-stop), and the bottom telemetry/data bar. Composed from the header,
+//// sidebar, connection-card and bottom-bar components.
 
 import blau_drill/ui/model.{
   type Model, type PrinterState, type Screen, type StageId, Align, ConnectDevice,

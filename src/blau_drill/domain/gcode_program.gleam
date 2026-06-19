@@ -1,6 +1,5 @@
 //// The generated Marlin G-code for **one mode** (`DryRun | Drill`) — the
-//// safety-critical heart of blau-drill. Ported 1:1 from
-//// `BlauDrill.GcodeProgram`.
+//// safety-critical heart of blau-drill.
 ////
 //// `build/3` takes a `BoardModel`, a **solved** `Alignment`, and a config, and
 //// emits the full program as a list of lines. Dry-run and real are the *same*
@@ -100,8 +99,8 @@ fn tool_order(board: BoardModel) -> List(ToolId) {
   |> list.unique
 }
 
-// Group machine holes by tool, preserving per-tool file order. (Equivalent to
-// Elixir's `Enum.group_by`, but the per-tool list keeps original order.)
+// Group machine holes by tool, preserving per-tool file order: each tool's hole
+// list keeps the order the holes appeared in the input.
 fn group_by_tool(holes: List(MachineHole)) -> Dict(ToolId, List(MachineHole)) {
   holes
   |> list.fold(dict.new(), fn(acc, h) {

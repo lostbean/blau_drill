@@ -1,7 +1,6 @@
-//// Protocol (framing / checksum / mm-format / M114 parse) tests, copied from
-//// the Phase-0 spike. Ground-truth values were computed from the Elixir
-//// `BlauDrill.PrinterConnection` helpers, so these double as a 1:1 wire-format
-//// regression against the reference.
+//// Protocol (framing / checksum / mm-format / M114 parse) tests. The
+//// ground-truth values are the exact Marlin wire format the controller must
+//// produce, so these double as a wire-format regression.
 
 import blau_drill/control/protocol
 import gleeunit

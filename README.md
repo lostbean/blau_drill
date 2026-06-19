@@ -8,9 +8,7 @@ drilling behind explicit toggles.
 This is the **pure-browser rewrite**: a [Lustre](https://lustre.build) SPA
 compiled from **Gleam → JavaScript** that talks to the printer **directly over
 the Web Serial API**. There is **no backend server** and no install — the
-operator just opens a URL (or serves the static build) in Chrome/Edge. It was
-migrated from an Elixir/Phoenix-LiveView app (preserved in git history); the
-domain logic and safety invariants were ported 1:1.
+operator just opens a URL (or serves the static build) in Chrome/Edge.
 
 ## Architecture (three layers)
 
@@ -119,8 +117,8 @@ persisted to `localStorage` and restored on load:
 
 On a run, the generator tunables are coerced + validated into a
 `domain/config.GcodeConfig` and applied as an **immutable snapshot** (taken when
-alignment begins / on Apply), mirroring the Elixir's mount-time snapshot — so
-mid-run settings edits never change the program being streamed. Machine-specific
+alignment begins / on Apply) — so mid-run settings edits never change the
+program being streamed. Machine-specific
 fields (port, baud, motion limits, spindle G-code, PWM) are operator/hardware
 settings, never hardcoded product defaults.
 

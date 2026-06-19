@@ -1,7 +1,6 @@
-//// The serial control state machine — the browser-side replacement for the
-//// Elixir `BlauDrill.PrinterConnection` `:gen_statem`. It owns the Marlin wire
-//// protocol behind a handful of verbs and four active states, modelled with sum
-//// types so illegal states are unrepresentable.
+//// The serial control state machine. It owns the Marlin wire protocol behind a
+//// handful of verbs and four active states, modelled with sum types so illegal
+//// states are unrepresentable.
 ////
 //// ## Architecture: a PURE core with effects pushed to the edges
 ////
@@ -27,7 +26,7 @@
 //// tests run with no browser and no transport: feed synthetic inbound lines,
 //// assert the emitted writes and the resulting state.
 ////
-//// ## States and transitions (mirrors the Elixir reference exactly)
+//// ## States and transitions
 ////
 ////     Disconnected ─connect→ Idle ─energize(M17)→ Jogging ─release(M18)→ Idle
 ////     Idle/Jogging ─stream→ Streaming ─(all ok'd)→ Idle
@@ -82,7 +81,7 @@ pub type Pending {
 }
 
 /// Operator commands. These are the verbs the UI / integration layer drives the
-/// machine with — the moral equivalent of the Elixir public API.
+/// machine with.
 pub type Command {
   /// Mark the port connected: `Disconnected -> Idle`. (The transport open is an
   /// effect performed by the integration layer; this records the connected
@@ -111,7 +110,7 @@ pub type Command {
   Reconnect
 }
 
-/// Why a command was refused. Mirrors the Elixir `{:error, reason}` returns.
+/// Why a command was refused.
 pub type Refusal {
   /// Motion attempted while not energized (in `Idle`).
   NotEnergized
@@ -315,8 +314,8 @@ fn feed_stream(line_no: Int, job: StreamJob, line: String) -> Step {
       let progress = Progress(sent: next, total: job.total, line: confirmed)
       case next >= job.total {
         True ->
-          // All lines accepted: return to Idle (matches the Elixir reference,
-          // which goes idle after a stream, NOT back to the originating mode).
+          // All lines accepted: a completed stream returns to Idle, NOT back to
+          // the originating mode.
           Step(Idle(line_no: line_no, pending: PendingNone), [], [
             progress,
             StreamComplete,

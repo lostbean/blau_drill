@@ -1,5 +1,4 @@
-//// The session **state machine** — a pure value, never a process. Ported 1:1
-//// from `BlauDrill.Job`.
+//// The session **state machine** — a pure value, never a process.
 ////
 //// `Job` enforces the only legal order of a drilling session, so that illegal
 //// sequencing is *unrepresentable* rather than merely discouraged. Each event

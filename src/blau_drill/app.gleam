@@ -494,8 +494,8 @@ fn test_spindle(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 // Click-to-jump: move the head to the board point's machine coord using the best
-// transform available (solved → estimate → none). Mirrors the Elixir
-// board_to_machine. Disabled until at least one capture (or a fit) exists.
+// transform available (solved → estimate → none). Disabled until at least one
+// capture (or a fit) exists.
 fn jump_to(model: Model, point: #(Float, Float)) -> #(Model, Effect(Msg)) {
   case model.screen == Align && model.printer == Jogging {
     False -> noeff(model)
@@ -634,7 +634,7 @@ fn residuals_of(j: job.Job) -> #(Float, Float) {
 
 // Quality 0..100 from residual_max vs the tolerance: residual 0 → 100%, residual
 // == tol → ~50% threshold (GOOD above 80, fair, poor), residual >> tol → 0.
-// Mirrors the Elixir tolerance-relative quality mapping.
+// A tolerance-relative quality mapping.
 fn quality_pct(residual_max: Float, tol: Float) -> Int {
   let t = float.max(tol, 1.0e-6)
   // 100 at residual 0, falling to 0 at residual 2*tol.
@@ -728,8 +728,8 @@ fn confirm_registration(model: Model) -> #(Model, Effect(Msg)) {
           let program = gcode_program.build(j.board, al, cfg)
           let total = list.length(j.board.holes)
           // Bit-change pause: with >1 tool, surface the SECOND tool's diameter as
-          // the representative per-tool M0 pause modal (mirrors the Elixir, which
-          // shows one pause that holds completion until acknowledged).
+          // the representative per-tool M0 pause modal (one pause that holds
+          // completion until acknowledged).
           let #(bit_change, bit_label, changes) = case program.tool_order {
             [_first, second, ..] -> {
               let dia = tool_diameter(j.board, second)
@@ -910,9 +910,9 @@ fn current_program(model: Model, j: job.Job) -> List(String) {
   }
 }
 
-// Every hole emits exactly one `G0 X..` rapid (per GcodeProgram.fmt_xy_rapid);
+// Every hole emits exactly one `G0 X..` rapid (the per-hole XY rapid format);
 // the postamble home is `G00 X..` and the tool lift is `G0 Z..`, so neither is
-// miscounted. Matches SessionLive.count_holes/1.
+// miscounted.
 fn count_holes(lines: List(String)) -> Int {
   list.count(lines, fn(l) { string.starts_with(l, "G0 X") })
 }
@@ -937,7 +937,7 @@ fn stream_complete(model: Model) -> Model {
   }
 }
 
-// ── head confidence (progressive trust, mirrors the LiveView) ────────────────
+// ── head confidence (progressive trust) ──────────────────────────────────────
 
 fn refresh_head_conf(model: Model) -> Model {
   case model.head_confidence == ConfAligned {
@@ -1083,7 +1083,7 @@ fn fmt_mm(d: Float) -> String {
 
 fn apply_config(model: Model) -> #(Model, Effect(Msg)) {
   // Persist the operator config and re-snapshot the generator tunables for the
-  // next run. Mirrors the Elixir mount-time snapshot (taken when a run starts).
+  // next run. The snapshot is taken when a run starts.
   storage.save_config(model.config)
   noeff(
     Model(

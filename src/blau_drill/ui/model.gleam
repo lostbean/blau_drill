@@ -1,6 +1,6 @@
-//// The UI model + messages for the blau-drill operator shell, ported from the
-//// Phoenix LiveView (`session_live.ex` / `session_components.ex`) into a Lustre
-//// app. This is PHASE 3: every value here is MOCK data wired in by `app.gleam`.
+//// The UI model + messages for the blau-drill operator shell, rendered by a
+//// Lustre app. This is PHASE 3: every value here is MOCK data wired in by
+//// `app.gleam`.
 ////
 //// ## Phase 4 seams (where mocks get replaced by real domain/control)
 ////
@@ -24,7 +24,7 @@
 ////   * `captured` / `current_target` / `quality` — alignment capture state.
 ////     Phase 4 feeds these from `domain/pending_alignment` + the fit solver.
 ////
-//// The `Msg` type is the event vocabulary (same verbs as the LiveView:
+//// The `Msg` type is the event vocabulary (the operator-facing verbs:
 //// energize/jog/capture/jump_to/fit/run_dry_run/confirm/abort/...). `app.gleam`
 //// owns the `update` that maps these onto the mock state; Phase 4 reroutes the
 //// motion verbs through `control` effects.
@@ -68,7 +68,7 @@ pub type StageId {
 
 /// The printer connection mode. Motion (jog / move / spindle) is structurally
 /// gated behind `Jogging` (motors energized) — the energize-before-jog
-/// invariant, exactly like the reference `PrinterConnection`.
+/// invariant enforced by the control state machine.
 pub type PrinterState {
   Disconnected
   /// Connected, motors NOT energized. Jog/move/spindle refused here.
@@ -333,7 +333,7 @@ pub type Model {
     /// The solved alignment transform, once fitted.
     transform: TransformOpt,
     /// The config snapshot applied for the current run (immutable per run),
-    /// mirroring the Elixir mount-time snapshot.
+    /// taken when the run starts.
     applied_config: config.GcodeConfig,
     /// Count of bit changes seen so far in the active run (for the summary).
     bit_changes_seen: Int,
