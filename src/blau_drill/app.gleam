@@ -90,19 +90,21 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
   let cfg = storage.load_config(seed)
   let backend_kind = storage.load_backend()
   let backend = backend_for(backend_kind)
+  // Restore the reload-survivable session slice (board source + UI prefs).
+  let session = storage.load_session(1.0, 1.0)
   let m =
     Model(
       screen: Load,
       printer: Disconnected,
       board: NoBoard,
       diagnostic: NoDiagnostic,
-      file_selected: False,
-      outline_file: "",
+      file_selected: session.drl != "",
+      outline_file: session.outline_file,
       upload_error: "",
       head: Head(0.0, 0.0, 0.0),
       head_pos: NoHeadPos,
       head_confidence: ConfNone,
-      jog_step: 1.0,
+      jog_step: session.jog_step,
       captured: [],
       current_target: 0,
       fiducial_target: 4,
@@ -116,7 +118,7 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       telemetry_bit: "—",
       telemetry_eta: "—",
       telemetry_spindle: "OFF · 0 RPM",
-      zoom: 1.0,
+      zoom: session.zoom,
       category: Connection,
       config: cfg,
       config_dirty: False,
@@ -124,24 +126,57 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       backend_kind: backend_kind,
       board_model: NoBoardModel,
       job: NoJob,
-      pending_drl: "",
-      pending_edge_cuts: "",
+      pending_drl: session.drl,
+      pending_edge_cuts: session.edge_cuts,
       captures: [],
       transform: NoTransform,
       applied_config: bridge.gcode_config(cfg, config.DryRun),
       bit_changes_seen: 0,
     )
-  // Auto-reconnect: if the operator enabled it and chose the real Web Serial
-  // backend, try to re-open a previously-authorized port WITHOUT a picker (no
-  // user gesture needed). If none was ever granted this resolves to a benign
-  // "no granted port" and the app stays disconnected — no prompt, no error UI.
-  let eff = case cfg.auto_connect, backend_kind {
+  // Re-parse the restored board (deterministic; no hardware). If the stored DRL
+  // is empty or fails to parse, `parse_board` leaves the model board-less.
+  let #(m, _) = case session.drl {
+    "" -> #(m, effect.none())
+    _ -> parse_board(m)
+  }
+  // Apply the URL-hash stage, CAPPED to a safe restore target: never restore
+  // into a connection/alignment-dependent stage (DryRun/Drill/Done), and never
+  // into Align without a board. Anything else collapses to Load.
+  let m = Model(..m, screen: restore_screen(m))
+  // Auto-reconnect: if enabled and the real Web Serial backend is selected, try
+  // to re-open a previously-authorized port WITHOUT a picker. A benign "no
+  // granted port" leaves the app disconnected with no prompt.
+  let connect_eff = case cfg.auto_connect, backend_kind {
     True, RealBackend ->
       controller.connect_existing(m.controller, bridge.baud(cfg))
       |> effect.map(ControllerEvent)
     _, _ -> effect.none()
   }
-  #(m, eff)
+  // Persist the (capped) restored screen + session so storage/URL agree with the
+  // model from the first frame.
+  #(m, effect.batch([connect_eff, persist_effect(m)]))
+}
+
+/// Decide the screen to restore from the URL hash, capped to what is SAFE to
+/// resume after a reload (connection + alignment are always reset):
+///   * `Settings` — always fine.
+///   * `Align` — only if a board re-parsed (else there's nothing to align).
+///   * everything else, incl. DryRun/Drill/Done — collapse to `Load`, because
+///     they require a live connection and a valid alignment we just discarded.
+fn restore_screen(model: Model) -> model.Screen {
+  let has_board = case model.board {
+    HaveBoard(_) -> True
+    NoBoard -> False
+  }
+  case storage.screen_from_hash() {
+    Ok(Settings) -> Settings
+    Ok(Align) ->
+      case has_board {
+        True -> Align
+        False -> Load
+      }
+    _ -> Load
+  }
 }
 
 fn backend_for(kind: BackendKind) -> backend.Backend {
@@ -154,6 +189,36 @@ fn backend_for(kind: BackendKind) -> backend.Backend {
 // ── update ───────────────────────────────────────────────────────────────────
 
 fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
+  let #(next, eff) = update_inner(model, msg)
+  // Reflect the reload-survivable slice (board + UI prefs) to localStorage and
+  // the current screen to the URL hash after every update — cheap, idempotent,
+  // and keeps a single source of truth instead of threading saves through every
+  // handler. NO connection/alignment/run state is persisted (safety model).
+  #(next, effect.batch([eff, persist_effect(next)]))
+}
+
+fn persist_effect(model: Model) -> Effect(Msg) {
+  use _dispatch <- effect.from
+  let #(drl, edge, outline) = case model.board {
+    HaveBoard(_) -> #(
+      model.pending_drl,
+      model.pending_edge_cuts,
+      model.outline_file,
+    )
+    NoBoard -> #("", "", "")
+  }
+  storage.save_session(storage.Session(
+    drl: drl,
+    edge_cuts: edge,
+    outline_file: outline,
+    jog_step: model.jog_step,
+    zoom: model.zoom,
+  ))
+  storage.save_screen(model.screen)
+  Nil
+}
+
+fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
     // navigation
     GoToSettings -> noeff(Model(..model, screen: Settings))
@@ -848,16 +913,38 @@ fn recovered(model: Model) -> Model {
 }
 
 fn new_board(model: Model) -> #(Model, Effect(Msg)) {
-  // Fresh board (Stage 5 → Stage 1) keeping the connection + applied config.
-  let #(fresh, _) = init(Nil)
+  // Fresh board (Stage 5 → Stage 1): clear all board + run state but KEEP the
+  // live connection, backend, and config. Forget the persisted board so a
+  // subsequent reload also starts clean (the central persist on this update will
+  // then write the now-empty board slice anyway, but clearing here is explicit).
+  storage.clear_session_board()
   noeff(
     Model(
-      ..fresh,
-      controller: model.controller,
-      printer: model.printer,
-      backend_kind: model.backend_kind,
-      config: model.config,
-      applied_config: model.applied_config,
+      ..model,
+      screen: Load,
+      board: NoBoard,
+      board_model: NoBoardModel,
+      diagnostic: NoDiagnostic,
+      job: NoJob,
+      file_selected: False,
+      outline_file: "",
+      upload_error: "",
+      pending_drl: "",
+      pending_edge_cuts: "",
+      head_pos: NoHeadPos,
+      head_confidence: ConfNone,
+      captured: [],
+      captures: [],
+      current_target: 0,
+      transform: NoTransform,
+      quality: -1,
+      residual_max: 0.0,
+      residual_rms: 0.0,
+      alignment_rejected: False,
+      progress: NoProgress,
+      bit_change: NoBitChange,
+      summary: NoSummary,
+      bit_changes_seen: 0,
     ),
   )
 }
