@@ -26,6 +26,7 @@ defmodule BlauDrillWeb.SessionLiveTest do
   alias BlauDrill.PrinterConnection.UART.Sim
 
   @fixture Path.expand("../../support/fixtures/segby_v1.drl", __DIR__)
+  @edge_cuts_fixture Path.expand("../../support/fixtures/segby_v1-Edge_Cuts.svg", __DIR__)
 
   # An export with the Drill/Place File Origin never set: absolute page
   # coordinates far off the origin. BoardModel rejects this at the edge.
@@ -335,6 +336,43 @@ defmodule BlauDrillWeb.SessionLiveTest do
     # 130 holes carried through, each with a tool ref for sizing/colour.
     assert length(props["holes"]) == 130
     assert Enum.all?(props["holes"], &(Map.has_key?(&1, "tool") and Map.has_key?(&1, "x")))
+  end
+
+  test "an optional Edge.Cuts SVG upload draws the board outline on the canvas",
+       %{conn: conn} do
+    {conn, _name} = with_printer(conn)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # Without an Edge.Cuts upload, the outline is nil (holes-only).
+    upload_fixture(view)
+    assert canvas_props(view)["outline"] == nil
+
+    # Reload, upload BOTH the .drl and the Edge.Cuts SVG → outline is populated.
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    drl =
+      file_input(view, "#upload-form", :drl, [
+        %{name: "segby_v1.drl", content: File.read!(@fixture), type: "text/plain"}
+      ])
+
+    edge =
+      file_input(view, "#upload-form", :edge_cuts, [
+        %{
+          name: "segby_v1-Edge_Cuts.svg",
+          content: File.read!(@edge_cuts_fixture),
+          type: "image/svg+xml"
+        }
+      ])
+
+    render_upload(drl, "segby_v1.drl")
+    render_upload(edge, "segby_v1-Edge_Cuts.svg")
+    render_submit(element(view, "#upload-form"))
+
+    outline = canvas_props(view)["outline"]
+    assert is_list(outline)
+    assert length(outline) >= 3
+    # Each point is an [x, y] pair (the closed board polyline).
+    assert Enum.all?(outline, &match?([_x, _y], &1))
   end
 
   test "an absolute-page-coordinate export shows the trap error and does NOT advance",

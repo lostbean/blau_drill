@@ -471,12 +471,28 @@ defmodule BlauDrillWeb.SessionComponents do
             <span class="text-6xl text-on-surface-variant">⬆</span>
             <span class="font-sans text-2xl font-bold text-on-surface">Drop PCB files here</span>
             <span class="font-data text-sm text-on-surface-variant">
-              Supports Gerber (.gbr) and Excellon (.drl)
+              Supports Excellon drill files (.drl)
             </span>
             <.live_file_input upload={@uploads.drl} class="hidden" />
             <span class="rounded bg-surface-container-high px-4 py-2 font-sans text-sm font-semibold text-on-surface">
               Browse Files
             </span>
+          </label>
+
+          <%!-- Optional Edge.Cuts SVG: draws the board outline on the canvas.
+                Not required to drill (the holes come from the .drl). --%>
+          <label
+            phx-drop-target={@uploads.edge_cuts.ref}
+            class="mt-3 flex cursor-pointer items-center justify-center gap-2 rounded border border-dashed border-outline-variant bg-surface-container-lowest px-4 py-2 font-data text-xs text-on-surface-variant hover:border-primary"
+          >
+            <span class="material-symbols-outlined text-base">add</span>
+            <span :if={@uploads.edge_cuts.entries == []}>
+              Add board outline — Edge.Cuts (.svg, optional)
+            </span>
+            <span :for={entry <- @uploads.edge_cuts.entries} class="text-on-surface">
+              Outline: {entry.client_name}
+            </span>
+            <.live_file_input upload={@uploads.edge_cuts} class="hidden" />
           </label>
 
           <div

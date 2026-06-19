@@ -98,7 +98,15 @@ defmodule BlauDrillWeb.SessionLive do
       |> assign(:bit_change, nil)
       |> assign(:summary, nil)
       |> allow_upload(:drl,
-        accept: ~w(.drl .gbr),
+        accept: ~w(.drl),
+        max_entries: 1,
+        max_file_size: 8_000_000,
+        auto_upload: false
+      )
+      # Optional KiCad Edge.Cuts SVG — when supplied, the board outline is drawn
+      # on the canvas. The .drl alone is enough to drill; this is purely visual.
+      |> allow_upload(:edge_cuts,
+        accept: ~w(.svg),
         max_entries: 1,
         max_file_size: 8_000_000,
         auto_upload: false
@@ -605,10 +613,14 @@ defmodule BlauDrillWeb.SessionLive do
   end
 
   defp consume_board(socket) do
+    # The optional Edge.Cuts SVG (if the operator uploaded one) gives the board
+    # outline; the .drl gives the holes. Parse them together via BoardModel.parse.
+    edge_cuts = consume_optional_svg(socket, :edge_cuts)
+
     results =
       consume_uploaded_entries(socket, :drl, fn %{path: path}, _entry ->
         case File.read(path) do
-          {:ok, contents} -> {:ok, BoardModel.parse_drl(contents)}
+          {:ok, contents} -> {:ok, BoardModel.parse(%{drl: contents, edge_cuts: edge_cuts})}
           {:error, reason} -> {:ok, {:error, {:read_failed, reason}}}
         end
       end)
@@ -618,6 +630,15 @@ defmodule BlauDrillWeb.SessionLive do
       [{:error, reason}] -> {:error, error_message(reason)}
       [] -> :no_file
     end
+  end
+
+  # Read an optional single-file SVG upload into a string, or nil if none.
+  defp consume_optional_svg(socket, name) do
+    socket
+    |> consume_uploaded_entries(name, fn %{path: path}, _entry ->
+      {:ok, File.read!(path)}
+    end)
+    |> List.first()
   end
 
   defp diagnostic(%BoardModel{} = board) do
