@@ -166,18 +166,31 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
   #(m, effect.batch([connect_eff, persist_effect(m)]))
 }
 
-/// Decide the screen to restore from the URL hash, capped to what is SAFE to
-/// resume after a reload (connection + alignment are always reset):
-///   * `Settings` — always fine.
-///   * `Align` — only if a board re-parsed (else there's nothing to align).
-///   * everything else, incl. DryRun/Drill/Done — collapse to `Load`, because
-///     they require a live connection and a valid alignment we just discarded.
+/// Decide the screen to restore from the URL hash (reads the hash, then caps).
 fn restore_screen(model: Model) -> model.Screen {
   let has_board = case model.board {
     HaveBoard(_) -> True
     NoBoard -> False
   }
-  case storage.screen_from_hash() {
+  restore_target(storage.screen_from_hash(), has_board)
+}
+
+/// PURE restore-cap decision (separated from the URL read so it is unit-testable):
+/// given the screen the URL hash requested and whether a board re-parsed, return
+/// the SAFE screen to resume after a reload — connection + alignment are always
+/// reset, so:
+///   * `Settings` — always fine.
+///   * `Align` — only if a board is present (else there's nothing to align).
+///   * everything else, incl. DryRun/Drill/Done — collapse to `Load`, because
+///     they require a live connection and a valid alignment we just discarded.
+/// Restoring into `Align` also requires advancing the job to Registering — see
+/// `init` (the bug this guards against: a restored Align with the job left in
+/// Parsed makes Capture silently no-op).
+pub fn restore_target(
+  requested: Result(model.Screen, Nil),
+  has_board: Bool,
+) -> model.Screen {
+  case requested {
     Ok(Settings) -> Settings
     Ok(Align) ->
       case has_board {
