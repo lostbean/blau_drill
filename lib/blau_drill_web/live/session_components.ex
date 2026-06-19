@@ -279,12 +279,12 @@ defmodule BlauDrillWeb.SessionComponents do
         opens. The select + refresh lock while connected (you disconnect first to
         switch devices); the picker reflects the active connection's device.
       --%>
-      <form id="device-form" phx-change="select_device" class="mt-3 flex items-center gap-2">
+      <form id="device-form" phx-change="select_device" class="mt-3 flex w-full items-center gap-2">
         <select
           name="device"
           disabled={@connected?}
           data-test="device-select"
-          class="flex-1 rounded border border-outline-variant bg-surface-container-lowest px-2 py-2 font-data text-xs text-on-surface disabled:opacity-60"
+          class="min-w-0 flex-1 truncate rounded border border-outline-variant bg-surface-container-lowest px-2 py-2 font-data text-xs text-on-surface disabled:opacity-60"
         >
           <option :for={device <- @devices} value={device.id} selected={device.id == @selected_device}>
             {device.label}
@@ -296,7 +296,7 @@ defmodule BlauDrillWeb.SessionComponents do
           disabled={@connected?}
           title="Refresh device list"
           data-test="refresh-devices"
-          class="rounded border border-outline-variant bg-surface-container-high px-2 py-2 font-data text-xs text-on-surface-variant hover:brightness-110 disabled:opacity-50"
+          class="flex-none rounded border border-outline-variant bg-surface-container-high px-2 py-2 font-data text-xs text-on-surface-variant hover:brightness-110 disabled:opacity-50"
         >
           ⟳
         </button>
