@@ -113,6 +113,9 @@ defmodule BlauDrill.MixProject do
       ci: [
         "format --check-formatted",
         "compile --warnings-as-errors --force",
+        # Build the Svelte/JS assets: build.js fails on any esbuild or Svelte
+        # warning (a11y, unused, etc.), so the gate catches frontend warnings too.
+        "assets.build",
         "test"
       ]
     ]

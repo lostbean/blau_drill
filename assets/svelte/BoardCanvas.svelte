@@ -38,6 +38,10 @@
   // Local alias for readability in the template.
   const headConfidence = $derived(head_confidence)
 
+  // The board accepts click-to-jump only during alignment, and only when wired
+  // to the LiveView (the `live` prop is injected). Drives the cursor + a11y role.
+  const interactive = $derived(stage === "align" && !!live)
+
   // Clicking a registration marker selects it as the current target AND jumps
   // the head to it (the LiveView gates the actual motion on motors being on).
   function selectTarget(index, bx, by) {
@@ -216,12 +220,19 @@
 </script>
 
 <div class="board-canvas" data-stage={stage}>
+  <!-- During alignment the board is a spatial click target (click a point to
+       jump the head there) — `role="application"` marks it as a custom widget.
+       There is no discrete keyboard equivalent of "click at this XY"; keyboard
+       users align via the jog controls + Capture, so we intentionally don't add
+       a key handler to the whole board. -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <svg
     viewBox={viewBoxStr}
     preserveAspectRatio="xMidYMid meet"
-    role="img"
+    role={interactive ? "application" : "img"}
     aria-label="PCB board view"
-    class:clickable={stage === "align" && live}
+    class:clickable={interactive}
     onwheel={onWheel}
     onclick={onBoardClick}
   >
@@ -260,6 +271,11 @@
          current   → bright amber, blinks, larger target ring (the one to align)
          pending   → faded amber, static, smaller (the rest, click to select) -->
     {#each projectedFids as fid}
+      <!-- A clickable registration marker IS interactive: role=button + a
+           tabindex + both click and keydown handlers make it keyboard-operable.
+           Svelte still flags a <g> as "noninteractive" by element type, so we
+           ignore that specific rule for this genuinely-accessible case. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <g
         class="fid {fid.state}"
         role={fid.state === "pending" || fid.state === "current" ? "button" : undefined}

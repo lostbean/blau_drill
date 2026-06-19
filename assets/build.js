@@ -66,6 +66,7 @@ let optsServer = {
 }
 
 if (watch) {
+    // Dev watch: print warnings but keep the server running.
     esbuild
         .context(optsClient)
         .then(ctx => ctx.watch())
@@ -76,6 +77,17 @@ if (watch) {
         .then(ctx => ctx.watch())
         .catch(_error => process.exit(1))
 } else {
-    esbuild.build(optsClient)
-    esbuild.build(optsServer)
+    // One-shot build (mix assets.build / CI): treat any esbuild or Svelte
+    // warning as a failure, so `mix ci` catches a11y/compile warnings.
+    Promise.all([esbuild.build(optsClient), esbuild.build(optsServer)])
+        .then(results => {
+            const warnings = results.flatMap(r => r.warnings)
+            if (warnings.length > 0) {
+                console.error(
+                    `\nesbuild/Svelte produced ${warnings.length} warning(s) — failing the build.`,
+                )
+                process.exit(1)
+            }
+        })
+        .catch(() => process.exit(1))
 }
