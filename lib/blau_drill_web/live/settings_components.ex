@@ -112,15 +112,14 @@ defmodule BlauDrillWeb.SettingsComponents do
             data-test={"nav-#{id}"}
             aria-current={id == @category && "page"}
             class={[
-              "flex w-full items-center gap-3 rounded border-l-4 px-4 py-3 text-left transition-all",
+              "flex w-full items-center gap-2 rounded px-3 py-2 font-data text-sm font-bold uppercase tracking-wide transition-all",
               if(id == @category,
-                do: "border-primary bg-primary-container text-on-primary-container",
-                else:
-                  "border-transparent text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface"
+                do: "border-2 border-primary bg-primary-container text-on-primary-container",
+                else: "text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface"
               )
             ]}
           >
-            <span class="font-data text-xs font-bold uppercase tracking-widest">{label}</span>
+            <span>{label}</span>
           </button>
         </li>
       </ul>
@@ -501,7 +500,7 @@ defmodule BlauDrillWeb.SettingsComponents do
 
   defp action_bar(assigns) do
     ~H"""
-    <div class="flex flex-none items-center justify-between border-t border-outline-variant bg-surface-container-high p-6">
+    <div class="flex flex-none items-center justify-between border-t-2 border-outline bg-surface-container-lowest px-6 py-4">
       <button
         type="button"
         phx-click="reset"

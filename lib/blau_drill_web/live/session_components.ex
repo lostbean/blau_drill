@@ -216,19 +216,20 @@ defmodule BlauDrillWeb.SessionComponents do
 
   defp sidebar(assigns) do
     ~H"""
-    <aside class="flex w-[320px] flex-none flex-col gap-6 overflow-y-auto border-r border-outline-variant bg-surface-container p-6">
-      <div>
-        <h2 class="font-sans text-xl font-bold text-primary">Control Panel</h2>
-        <p class="mt-1 flex items-center gap-2 font-data text-xs font-bold uppercase tracking-widest text-secondary">
+    <aside class="flex w-80 flex-none flex-col overflow-y-auto border-r border-outline-variant bg-surface-container">
+      <div class="border-b border-outline-variant p-6">
+        <h2 class="font-sans text-2xl font-semibold text-primary">Control Panel</h2>
+        <p class="mt-1 flex items-center gap-2 font-data text-sm font-bold uppercase tracking-widest text-secondary">
           <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-secondary"></span>
           {control_status(@printer_state, @job)}
         </p>
       </div>
 
-      <div>
-        <p class="border-b border-outline-variant pb-1 font-data text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-          Stages
-        </p>
+      <div class="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
+        <div>
+          <p class="border-b border-outline-variant pb-1 font-data text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+            Stages
+          </p>
         <ul class="mt-2 flex flex-col gap-1">
           <.stage_nav_item id="load" label="Load" active={@stage} done={stage_done?("load", @stage)} />
           <.stage_nav_item
@@ -273,6 +274,7 @@ defmodule BlauDrillWeb.SessionComponents do
         >
           ⚠ Emergency Stop
         </button>
+      </div>
       </div>
     </aside>
     """
