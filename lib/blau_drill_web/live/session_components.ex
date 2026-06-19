@@ -154,16 +154,18 @@ defmodule BlauDrillWeb.SessionComponents do
         <% end %>
       </ol>
 
-      <div class="flex w-24 items-center justify-end gap-3">
+      <div class="flex items-center gap-4">
         <.link
           navigate="/settings"
           data-test="settings-link"
           title="Printer configuration"
-          class="flex items-center gap-1 font-data text-xs font-bold uppercase tracking-widest text-on-surface-variant hover:text-primary"
+          aria-label="Printer configuration"
+          class="group flex items-center gap-2 rounded-md border border-outline-variant bg-surface-container-high px-3 py-2 font-data text-xs font-bold uppercase tracking-widest text-on-surface transition hover:border-primary hover:bg-primary-container hover:text-on-primary-container"
         >
-          <span class="text-base leading-none">⚙</span> Config
+          <span class="text-lg leading-none transition group-hover:rotate-90">⚙</span>
+          <span class="hidden sm:inline">Config</span>
         </.link>
-        <span class="font-data text-xs uppercase tracking-widest text-on-surface-variant">
+        <span class="font-data text-[0.625rem] uppercase tracking-widest text-on-surface-variant/60">
           v0.1
         </span>
       </div>
