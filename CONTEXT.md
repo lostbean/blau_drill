@@ -14,13 +14,24 @@ explicitly rejects.
 
 ## Purpose
 
-blau-drill is a single-operator Phoenix/LiveView desktop instrument that drives
-a modified Two Trees Bluer (a 3D printer running Marlin) to drill PCBs. It loads
-a KiCad board, fits an affine **board → machine** transform from human-located
-fiducials, and streams Marlin-correct G-code over a live serial link — dry-run
-first, real drilling second. It replaces a hand-rolled chain of re-export, a
-mirror flag, a fiducial `G92`, pcb2gcode, and a Python post-processor with one
-guided flow where the wrong order is unrepresentable.
+blau-drill is a single-operator **pure-browser** instrument (Gleam compiled to
+JavaScript via the Lustre framework — no backend server, no install) that drives
+a modified Two Trees Bluer (a 3D printer running Marlin) to drill PCBs. It runs
+entirely in a Chromium browser and talks to the printer **directly over the Web
+Serial API**. It loads a KiCad board, fits an affine **board → machine**
+transform from human-located fiducials, and streams Marlin-correct G-code over
+the live serial link — dry-run first, real drilling second. It replaces a
+hand-rolled chain of re-export, a mirror flag, a fiducial `G92`, pcb2gcode, and a
+Python post-processor with one guided flow where the wrong order is
+unrepresentable.
+
+> **Migration note (2026-06-19):** blau-drill was migrated from an Elixir/
+> Phoenix-LiveView server app to this pure-browser Gleam/Lustre app. The domain
+> glossary and invariants below are unchanged — they are language-independent and
+> are preserved 1:1 in the Gleam port. Where an entry historically named an
+> Elixir construct (GenServer, `circuits_uart`, LiveView assigns), the Gleam
+> equivalent is noted inline. Module/function names map directly: `Foo.bar/1`
+> (Elixir) → `foo.bar` in `src/blau_drill/{domain,control,ui}/`.
 
 ## Glossary
 
@@ -113,12 +124,18 @@ the domain value is `residuals` (rms + max).
 
 ### PrinterConnection
 
-The system's **single stateful identity**: a supervised GenServer owning the
-serial port (via `circuits_uart`) for the duration of a drilling session. It
-hides the entire Marlin protocol — port lifecycle, line numbering, checksums,
-the `ok`/`resend` handshake, `M114` polling, flow control — behind four verbs:
-`jog/2`, `where/1` (M114), `stream/2`, `halt/1` (M112-class abort). Its mode is
-one of `:idle | :jogging | :streaming | :faulted`.
+The system's **single stateful identity**: the serial control state machine
+owning the link to Marlin for the duration of a drilling session. In the Gleam
+app this is `src/blau_drill/control/` — a **pure** transition core
+(`printer.gleam`: `command(state, Command)` / `feed(state, line)` →
+`Step(state, writes, events)`) wrapped by an effectful `controller.gleam` that
+drives a `Backend` seam (`transport.web_serial()` over the browser **Web Serial
+API**, or `transport.simulator()` for hardware-free dev). It hides the entire
+Marlin protocol — line numbering, checksums, the `ok`/`resend` handshake, `M114`
+polling, flow control — behind verbs `Energize`/`Release`/`Jog`/`MoveTo`/
+`Where`/`Stream`/`Halt`/`Reconnect`. Its mode is one of `Disconnected | Idle |
+Jogging | Streaming | Faulted`. (Historically an Elixir `:gen_statem` over
+`circuits_uart`; the four-state design and invariants are preserved.)
 _Avoid:_ "serial driver" / "the port" as the noun, and do **not** model it as
 OctoPrint or a general print host — it owns the port only for the session.
 
@@ -275,8 +292,9 @@ These are deliberately out of scope (architecture §00); they shape what the
 system is *not*.
 
 - **Not multi-user / multi-machine.** One bench, one printer, one operator.
-- **Not a persistent job database.** Each session is a fresh upload; state is
-  ephemeral, held in LiveView assigns. No Ecto, no DB. (See ADR-0004.)
+- **Not a persistent job database.** Each session is a fresh upload; run state is
+  ephemeral, held in the Lustre model. Only the operator **config** persists, in
+  the browser's `localStorage`. No server, no DB. (See ADR-0004.)
 - **Not a CAM suite.** No trace isolation, no laser-ablation pass — drilling
   only, for now.
 - **Not an OctoPrint replacement.** It owns the serial port only for the

@@ -1,3 +1,0 @@
-# blau-drill is a single-operator bench tool; nothing to crawl.
-User-agent: *
-Disallow: /

@@ -1,5 +1,5 @@
 {
-  description = "blau-drill — PCB drilling control app (Elixir)";
+  description = "blau-drill — pure-browser PCB drilling control app (Gleam → JavaScript via Lustre, Web Serial, no backend)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -22,47 +22,27 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # Pin the BEAM package set to OTP 28 so Erlang and Elixir are built
-        # against the same VM. `beam.packages.erlang_28` gives Erlang/OTP 28;
-        # `elixir_1_20` within it is Elixir 1.20 compiled for that OTP.
-        beam = pkgs.beam.packages.erlang_28;
-        erlang = beam.erlang; # Erlang/OTP 28
-        elixir = beam.elixir_1_20; # Elixir 1.20 on OTP 28
-
-        # treefmt config — one formatter per language. See formatters.md.
+        # treefmt config — one formatter per language. See docs/agents/formatters.md.
         treefmtEval = treefmt-nix.lib.evalModule pkgs {
           projectRootFile = "flake.nix";
-          programs.nixfmt.enable = true; # Nix     (nixfmt-rfc-style)
-          programs.mix-format.enable = true; # Elixir  (uses .formatter.exs)
+          programs.nixfmt.enable = true; # Nix    (nixfmt-rfc-style)
+          programs.gleam.enable = true; # Gleam  (uses `gleam format`)
         };
       in
       {
         devShells.default = pkgs.mkShell {
-          # Toolchains for the detected languages + shared dev tools.
           packages = [
-            erlang
-            elixir
-            beam.elixir-ls # Elixir language server (matches the OTP/Elixir set)
-            pkgs.lefthook
-            pkgs.nodejs # Node runtime for the live_svelte / esbuild asset pipeline
-
-            # Gleam toolchain for the pure-web rewrite under web/ (Lustre SPA
-            # that talks to the printer over the Web Serial API — no backend).
-            # Compiles to JavaScript; Node above is its runtime. Pinned to the
-            # same nixos-26.05 nixpkgs (Gleam 1.17.0) as the rest of the shell.
+            # Gleam toolchain. The app compiles to JavaScript (target = "javascript"
+            # in gleam.toml); Node is its runtime. Pinned via nixos-26.05 (Gleam 1.17).
             pkgs.gleam
-            # rebar3 is needed to compile lustre_dev_tools' Erlang-target deps
-            # (the `gleam run -m lustre/dev …` watch server). Without it Gleam
-            # can't build those toolchain deps.
-            pkgs.rebar3
-          ];
+            pkgs.nodejs
 
-          # Keep Hex/Rebar/Mix state local to the project instead of $HOME.
-          shellHook = ''
-            export MIX_HOME="$PWD/.mix"
-            export HEX_HOME="$PWD/.hex"
-            export PATH="$MIX_HOME/bin:$HEX_HOME/bin:$PATH"
-          '';
+            # rebar3 compiles lustre_dev_tools' Erlang-target deps (needed by the
+            # `gleam run -m lustre/dev …` watch server / static builder).
+            pkgs.rebar3
+
+            pkgs.lefthook # git hook runner (pre-commit `nix fmt`)
+          ];
         };
 
         # `nix fmt` runs treefmt across the repo.
