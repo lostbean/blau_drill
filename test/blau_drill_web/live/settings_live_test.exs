@@ -77,6 +77,11 @@ defmodule BlauDrillWeb.SettingsLiveTest do
       render_click(element(view, "[data-test='nav-spindle']"))
       assert has_element?(view, "[data-test='field-spindle_on']")
       assert has_element?(view, "[data-test='field-pwm_max']")
+      # The self-documenting summary shows the active commands + the valid range.
+      summary = view |> element("[data-test='spindle-summary']") |> render()
+      assert summary =~ "M3 S255"
+      assert summary =~ "M5"
+      assert summary =~ "0–255"
 
       render_click(element(view, "[data-test='nav-defaults']"))
       assert has_element?(view, "[data-test='field-zdrill']")

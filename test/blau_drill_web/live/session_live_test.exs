@@ -454,6 +454,31 @@ defmodule BlauDrillWeb.SessionLiveTest do
     assert has_element?(view, "[data-test='emergency-stop']")
   end
 
+  # ── test spindle (gated) ────────────────────────────────────────────────────
+
+  test "Test Spindle is disabled until motors are energized, then pulses the spindle",
+       %{conn: conn} do
+    {conn, name} = with_printer(conn)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    upload_fixture(view)
+    render_click(element(view, "[data-test='proceed-align']"))
+
+    # Motors off → the button is present but disabled, and a forged event is
+    # refused by the gate ("Enable motors") with no spindle command written.
+    assert has_element?(view, "[data-test='test-spindle'][disabled]")
+    html = render_click(view, "test_spindle", %{})
+    assert html =~ "Enable motors"
+
+    # Energize, then the test pulses the configured spindle (M3 S255 → M5).
+    render_click(element(view, "[data-test='motors-toggle']"))
+    assert has_element?(view, "[data-test='test-spindle']:not([disabled])")
+    render_click(element(view, "[data-test='test-spindle']"))
+
+    {:ok, _} = PrinterConnection.where(name)
+    assert PrinterConnection.state(name) == :jogging
+  end
+
   # ── restart alignment ───────────────────────────────────────────────────────
 
   test "Restart Alignment wipes captures and returns to a fresh registering",

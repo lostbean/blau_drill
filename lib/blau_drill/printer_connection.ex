@@ -122,6 +122,17 @@ defmodule BlauDrill.PrinterConnection do
   @spec move_to(:gen_statem.server_ref(), number(), number()) :: :ok | {:error, :idle}
   def move_to(conn, x, y), do: :gen_statem.call(conn, {:move_to, x, y})
 
+  @doc """
+  Briefly pulse the spindle: write `on_cmd`, dwell, then `off_cmd`. Lets the
+  operator confirm the spindle config actuates before a real run. Gated like
+  motion — only runs in `:jogging` (motors energized); `{:error, :idle}`
+  otherwise (sends nothing). `on_cmd`/`off_cmd` come from the operator's config
+  (e.g. `"M3 S255"` / `"M5"`), so this tests the *configured* commands.
+  """
+  @spec pulse_spindle(:gen_statem.server_ref(), String.t(), String.t()) :: :ok | {:error, :idle}
+  def pulse_spindle(conn, on_cmd, off_cmd),
+    do: :gen_statem.call(conn, {:pulse_spindle, on_cmd, off_cmd})
+
   @doc "Query live position via `M114`; parses `{:ok, {x, y, z}}`."
   @spec where(:gen_statem.server_ref()) :: {:ok, {float(), float(), float()}} | {:error, term()}
   def where(conn), do: :gen_statem.call(conn, :where)
@@ -232,6 +243,11 @@ defmodule BlauDrill.PrinterConnection do
     {:keep_state_and_data, [{:reply, from, {:error, :idle}}]}
   end
 
+  # Spindle pulse spins the bit — refused from idle (energize first), writes nothing.
+  def idle({:call, from}, {:pulse_spindle, _on, _off}, _data) do
+    {:keep_state_and_data, [{:reply, from, {:error, :idle}}]}
+  end
+
   def idle({:call, from}, :where, data) do
     do_where(from, data, :keep_state)
   end
@@ -279,6 +295,14 @@ defmodule BlauDrill.PrinterConnection do
   def jogging({:call, from}, {:move_to, x, y}, data) do
     # Absolute rapid to a machine XY (we are already in G90/absolute mode).
     data = write_line(data, "G0 X#{format_mm(x)} Y#{format_mm(y)}")
+    {:keep_state, data, [{:reply, from, :ok}]}
+  end
+
+  def jogging({:call, from}, {:pulse_spindle, on_cmd, off_cmd}, data) do
+    # Test the configured spindle: on, a short dwell so it's audible, then off.
+    data = write_line(data, on_cmd)
+    data = write_line(data, "G4 P800")
+    data = write_line(data, off_cmd)
     {:keep_state, data, [{:reply, from, :ok}]}
   end
 

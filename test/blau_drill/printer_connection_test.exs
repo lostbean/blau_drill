@@ -107,6 +107,32 @@ defmodule BlauDrill.PrinterConnectionTest do
       # Absolute move — must NOT switch to relative mode like jog does.
       refute Enum.any?(writes, &String.contains?(&1, "G91"))
     end
+
+    # The spindle test spins the bit, so it rides the same energize gate.
+    test "pulse_spindle in :idle returns {:error, :idle} and writes NOTHING" do
+      %{conn: conn, fake: fake} = start_conn()
+      assert PrinterConnection.state(conn) == :idle
+
+      assert {:error, :idle} = PrinterConnection.pulse_spindle(conn, "M3 S255", "M5")
+      assert Fake.writes(fake) == []
+    end
+
+    test "pulse_spindle in :jogging writes on, a dwell, then off" do
+      %{conn: conn, fake: fake} = start_conn()
+      :ok = PrinterConnection.energize(conn)
+
+      assert :ok = PrinterConnection.pulse_spindle(conn, "M3 S200", "M5")
+
+      writes = Fake.writes(fake)
+      # The configured commands are sent verbatim, on before off, with a dwell.
+      # Lines carry an `N<n> ... *<checksum>` wrapper, so match the command body.
+      on_i = Enum.find_index(writes, &(&1 =~ ~r/M3 S200/))
+      off_i = Enum.find_index(writes, &(&1 =~ ~r/\bM5\b/))
+      assert on_i, "expected the spindle-on command, got: #{inspect(writes)}"
+      assert off_i, "expected the spindle-off command, got: #{inspect(writes)}"
+      assert on_i < off_i, "spindle-on must precede spindle-off"
+      assert Enum.any?(writes, &String.contains?(&1, "G4")), "expected a dwell between on and off"
+    end
   end
 
   describe "where/1 (M114)" do

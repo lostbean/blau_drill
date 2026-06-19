@@ -310,6 +310,28 @@ defmodule BlauDrillWeb.SessionLive do
     end
   end
 
+  # Stage 2: test the configured spindle (pulse on→off) so the operator can
+  # confirm it actuates before the real run. REAL actuation: gated like jog —
+  # `Printer.test_spindle` is refused in :idle, so it needs motors energized.
+  def handle_event("test_spindle", _params, socket) do
+    cfg = socket.assigns.config
+
+    case Printer.test_spindle(socket.assigns.conn, cfg.spindle_on, cfg.spindle_off) do
+      :ok ->
+        {:noreply,
+         put_flash(socket, :info, "Spindle pulsed: #{cfg.spindle_on} → #{cfg.spindle_off}.")}
+
+      {:error, :idle} ->
+        {:noreply, put_flash(socket, :error, "Enable motors before testing the spindle.")}
+
+      {:error, :disconnected} ->
+        {:noreply, put_flash(socket, :error, "Connect to a printer first.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Spindle test failed: #{inspect(reason)}")}
+    end
+  end
+
   # Stage 2: click-to-jump. The operator clicks a board point (or a next marker)
   # on the canvas; we map it board → machine with the best transform we have so
   # far and rapid the head there, so they don't have to jog the whole way. This

@@ -608,6 +608,18 @@ defmodule BlauDrillWeb.SessionComponents do
             <.jog_btn axis="z" dir="+" label="+Z" enabled={@motors_online} />
             <.jog_btn axis="z" dir="-" label="-Z" enabled={@motors_online} />
           </div>
+
+          <%!-- Test the configured spindle (pulse on→off). Real actuation, so
+                it's gated on motors being energized, same as jog. --%>
+          <button
+            type="button"
+            phx-click="test_spindle"
+            disabled={not @motors_online}
+            data-test="test-spindle"
+            class="mt-3 w-full rounded border border-outline-variant px-3 py-2 font-data text-xs font-bold uppercase tracking-wide text-on-surface-variant hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            ⟳ Test Spindle
+          </button>
         </div>
 
         <%!-- Capture: legal only while :registering (Job.can?). --%>

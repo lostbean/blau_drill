@@ -230,11 +230,30 @@ defmodule BlauDrillWeb.SettingsComponents do
         />
         <.number_field
           name="spindle_speed"
-          label="Spindle Speed (PWM duty)"
+          label={"Spindle Speed (0–#{@form["pwm_max"]} duty)"}
           form={@form}
           errors={@errors}
           step="1"
         />
+      </div>
+
+      <%!-- Self-documenting summary so the operator can see, at a glance, exactly
+            what will be sent and the valid range. --%>
+      <div
+        data-test="spindle-summary"
+        class="mt-4 rounded border border-outline-variant bg-surface-container-lowest p-3 font-data text-xs text-on-surface-variant"
+      >
+        <div>
+          Start: <span class="text-primary">{@form["spindle_on"]}</span>
+          · Stop: <span class="text-primary">{@form["spindle_off"]}</span>
+        </div>
+        <div class="mt-1">
+          Duty range: <span class="text-primary">0–{@form["pwm_max"]}</span>
+          · Current: <span class="text-primary">{@form["spindle_speed"]}</span>
+        </div>
+        <p class="mt-2 text-on-surface-variant/70">
+          Test the spindle from the Align stage (motors must be energized).
+        </p>
       </div>
     </.card>
     """

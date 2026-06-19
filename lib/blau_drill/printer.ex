@@ -130,6 +130,12 @@ defmodule BlauDrill.Printer do
   def move_to(nil, _x, _y), do: {:error, :disconnected}
   def move_to(conn, x, y), do: safe(fn -> PrinterConnection.move_to(conn, x, y) end)
 
+  @doc "Pulse the configured spindle on→off to test it (gated like jog)."
+  def test_spindle(nil, _on, _off), do: {:error, :disconnected}
+
+  def test_spindle(conn, on, off),
+    do: safe(fn -> PrinterConnection.pulse_spindle(conn, on, off) end)
+
   @doc "Live position via M114: `{:ok, {x, y, z}}`."
   def where(nil), do: {:error, :disconnected}
   def where(conn), do: safe(fn -> PrinterConnection.where(conn) end)
