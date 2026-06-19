@@ -44,9 +44,13 @@ pub fn header(model: Model) -> Element(model.Msg) {
 
 pub fn brand() -> Element(model.Msg) {
   h.div([a.class("brand")], [
-    h.span([a.class("brand-mark"), a.attribute("aria-hidden", "true")], [
-      h.text("🦾"),
-    ]),
+    h.span(
+      [
+        a.class("brand-mark material-symbols-outlined"),
+        a.attribute("aria-hidden", "true"),
+      ],
+      [h.text("precision_manufacturing")],
+    ),
     h.span([a.class("brand-word")], [h.text("blau-drill")]),
   ])
 }

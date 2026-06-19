@@ -7,6 +7,24 @@
    for all technical data/coordinates. Loaded from Google Fonts (the reference
    mockups use the same families). */
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&display=swap");
+
+/* Material Symbols icon font (the design reference's iconography). The glyph is
+   the ligature text content of an element with this class. */
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+}
 
 :root {
   /* fonts */
@@ -431,14 +449,30 @@ body {
   flex: 1;
   border-radius: var(--radius);
   border: 1px solid var(--outline-variant);
-  background: var(--surface-container-lowest);
+  /* background-color (not the `background` shorthand) so the shared `select`
+     rule's chevron background-image is not reset. */
+  background-color: var(--surface-container-lowest);
   padding: 0.5rem;
+  padding-right: 2rem;
   font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--on-surface);
 }
 .conn-select:disabled {
   opacity: 0.6;
+}
+
+/* Custom dropdown chevron for ALL <select>s: strip the native arrow (which the
+   browser pins to the very edge) and draw our own, inset 0.85rem from the right
+   so it never touches the border. The right padding above leaves room for it. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%239e8e78' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.85rem center;
+  background-size: 0.75rem auto;
 }
 .conn-refresh {
   flex: none;
@@ -695,6 +729,7 @@ button {
   align-items: center;
   justify-content: center;
   gap: 1rem;
+  padding: 2.5rem 1.5rem;
   border-radius: var(--radius-lg);
   border: 2px dashed var(--outline-variant);
   background: var(--surface-container-lowest);
@@ -1606,11 +1641,31 @@ button {
   width: 100%;
   border-radius: var(--radius);
   border: 1px solid var(--outline-variant);
-  background: var(--surface-container-lowest);
+  /* background-color (not the `background` shorthand) so the shared `select`
+     rule's chevron background-image survives on the select. */
+  background-color: var(--surface-container-lowest);
   padding: 0.75rem 1rem;
   font-family: var(--font-data);
   font-size: 0.875rem;
   color: var(--on-surface);
+}
+.field select {
+  padding-right: 2.5rem;
+}
+/* The Z-height schematic on the Drilling Defaults page. */
+.z-diagram {
+  margin-bottom: 1.25rem;
+  padding: 0.75rem;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius);
+  background: var(--surface-container-lowest);
+}
+.z-diagram-svg {
+  display: block;
+  width: 100%;
+  max-width: 32rem;
+  margin: 0 auto;
+  height: auto;
 }
 .field input:focus,
 .field select:focus {
@@ -1629,11 +1684,11 @@ button {
 }
 .switch {
   position: relative;
-  display: inline-flex;
+  display: inline-block;
   height: 1.5rem;
   width: 2.75rem;
   flex: none;
-  align-items: center;
+  padding: 0;
   border-radius: 9999px;
   border: none;
   cursor: pointer;
@@ -1642,17 +1697,22 @@ button {
 .switch.on {
   background: var(--primary-container);
 }
+/* Knob: absolutely positioned with equal insets so the gap is symmetric in both
+   states. Track 2.75rem, knob 1.25rem, inset 0.125rem → on-offset =
+   2.75 - 1.25 - 0.125 - 0.125 = 1.25rem from the off position. */
 .switch .knob {
-  display: inline-block;
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
   height: 1.25rem;
   width: 1.25rem;
   border-radius: 9999px;
   background: #fff;
-  transform: translateX(0.125rem);
+  transform: translateX(0);
   transition: transform 0.15s;
 }
 .switch.on .knob {
-  transform: translateX(1.375rem);
+  transform: translateX(1.25rem);
 }
 .toggle-text .title {
   display: block;

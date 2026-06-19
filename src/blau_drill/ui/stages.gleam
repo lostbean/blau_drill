@@ -24,6 +24,7 @@ import gleam/list
 import lustre/attribute as a
 import lustre/element.{type Element}
 import lustre/element/html as h
+import lustre/element/svg
 import lustre/event
 
 // ── canvas data assembly (the Phase-4 seam for board/head/fiducials) ─────────
@@ -697,9 +698,13 @@ fn settings_top() -> Element(model.Msg) {
 // to avoid a cyclic-ish import (shell already depends only on model).
 fn shell_brand() -> Element(model.Msg) {
   h.div([a.class("brand")], [
-    h.span([a.class("brand-mark"), a.attribute("aria-hidden", "true")], [
-      h.text("🦾"),
-    ]),
+    h.span(
+      [
+        a.class("brand-mark material-symbols-outlined"),
+        a.attribute("aria-hidden", "true"),
+      ],
+      [h.text("precision_manufacturing")],
+    ),
     h.span([a.class("brand-word")], [h.text("blau-drill")]),
   ])
 }
@@ -843,6 +848,7 @@ fn defaults_panel(c: Config) -> List(Element(model.Msg)) {
       "Tuned Z heights and feeds the G-code generator uses (operator-tunable).",
     ),
     card("Z Reference Heights (mm)", [
+      z_height_diagram(),
       h.div([a.class("field-grid cols-3")], [
         number_field("zdrill", "zdrill (plunge)", c.zdrill),
         number_field("zsafe", "zsafe (travel)", c.zsafe),
@@ -856,6 +862,164 @@ fn defaults_panel(c: Config) -> List(Element(model.Msg)) {
       ]),
     ]),
   ]
+}
+
+// A schematic side-view of the drill, board, and the Z reference planes, so the
+// abstract `zdrill`/`zsafe`/`zchange`/hover numbers have a visual anchor. Not to
+// scale — it is an illustration of what each height means relative to the board
+// surface (Z = 0), with +Z up.
+fn z_height_diagram() -> Element(model.Msg) {
+  // viewBox 0..360 x, 0..220 y. The board surface sits at y=150 (Z=0); higher Z
+  // is smaller y. Plane y-positions are chosen to read clearly, not to scale.
+  let bit_x = 96.0
+  let surface_y = 152.0
+  let y_change = 24.0
+  let y_safe = 64.0
+  let y_hover = 124.0
+  let y_drill = 182.0
+
+  h.div([a.class("z-diagram")], [
+    svg.svg(
+      [
+        a.attribute("viewBox", "0 0 470 220"),
+        a.attribute("preserveAspectRatio", "xMidYMid meet"),
+        a.attribute("role", "img"),
+        a.attribute(
+          "aria-label",
+          "Side-view diagram of drill Z reference heights relative to the board "
+            <> "surface: zchange highest, then zsafe travel, the board surface "
+            <> "at zero, the dry-run hover just above it, and zdrill plunging "
+            <> "into the board.",
+        ),
+        a.class("z-diagram-svg"),
+      ],
+      list.flatten([
+        // ── board (copper-clad) + sacrificial layer ──
+        [
+          svg.rect([
+            a.attribute("x", "30"),
+            a.attribute("y", num(surface_y)),
+            a.attribute("width", "300"),
+            a.attribute("height", "22"),
+            a.attribute("fill", "#1b5e20"),
+            a.attribute("stroke", "#2a7a31"),
+            a.attribute("stroke-width", "1"),
+          ]),
+          // thin copper top layer
+          svg.rect([
+            a.attribute("x", "30"),
+            a.attribute("y", num(surface_y)),
+            a.attribute("width", "300"),
+            a.attribute("height", "3"),
+            a.attribute("fill", "#c87b35"),
+          ]),
+          // sacrificial backing board
+          svg.rect([
+            a.attribute("x", "30"),
+            a.attribute("y", num(surface_y +. 22.0)),
+            a.attribute("width", "300"),
+            a.attribute("height", "14"),
+            a.attribute("fill", "#3a2f1c"),
+            a.attribute("stroke", "#514532"),
+            a.attribute("stroke-width", "1"),
+          ]),
+        ],
+        // ── drill bit + spindle (a simple tool over the board) ──
+        [
+          // spindle body
+          svg.rect([
+            a.attribute("x", num(bit_x -. 12.0)),
+            a.attribute("y", "8"),
+            a.attribute("width", "24"),
+            a.attribute("height", "20"),
+            a.attribute("rx", "2"),
+            a.attribute("fill", "#353534"),
+            a.attribute("stroke", "#9e8e78"),
+            a.attribute("stroke-width", "1"),
+          ]),
+          // collet + shank
+          svg.rect([
+            a.attribute("x", num(bit_x -. 2.5)),
+            a.attribute("y", "28"),
+            a.attribute("width", "5"),
+            a.attribute("height", num(y_hover -. 28.0)),
+            a.attribute("fill", "#cdcdcd"),
+          ]),
+          // bit tip (triangle pointing down to the hover plane)
+          svg.path([
+            a.attribute(
+              "d",
+              "M"
+                <> num(bit_x -. 2.5)
+                <> " "
+                <> num(y_hover)
+                <> " L"
+                <> num(bit_x +. 2.5)
+                <> " "
+                <> num(y_hover)
+                <> " L"
+                <> num(bit_x)
+                <> " "
+                <> num(y_hover +. 8.0)
+                <> " Z",
+            ),
+            a.attribute("fill", "#ffd79b"),
+          ]),
+        ],
+        // ── reference planes (dashed lines + labels) ──
+        z_plane(y_change, "zchange", "bit-change lift", "#ffba38"),
+        z_plane(y_safe, "zsafe", "travel / XY moves", "#40e56c"),
+        z_plane(surface_y, "Z = 0", "board surface", "#9e8e78"),
+        z_plane(y_hover, "hover", "dry-run, spindle off", "#00bcd4"),
+        z_plane(y_drill, "zdrill", "plunge (real cut)", "#ff6e6e"),
+      ]),
+    ),
+  ])
+}
+
+// One labelled horizontal reference plane in the Z diagram.
+fn z_plane(
+  y: Float,
+  name: String,
+  desc: String,
+  color: String,
+) -> List(Element(model.Msg)) {
+  [
+    svg.line([
+      a.attribute("x1", "30"),
+      a.attribute("y1", num(y)),
+      a.attribute("x2", "330"),
+      a.attribute("y2", num(y)),
+      a.attribute("stroke", color),
+      a.attribute("stroke-width", "1"),
+      a.attribute("stroke-dasharray", "4 3"),
+      a.attribute("opacity", "0.85"),
+    ]),
+    svg.text(
+      [
+        a.attribute("x", "336"),
+        a.attribute("y", num(y -. 3.0)),
+        a.attribute("fill", color),
+        a.attribute("font-size", "9"),
+        a.attribute("font-family", "var(--font-data)"),
+      ],
+      name,
+    ),
+    svg.text(
+      [
+        a.attribute("x", "336"),
+        a.attribute("y", num(y +. 7.0)),
+        a.attribute("fill", "#9e8e78"),
+        a.attribute("font-size", "6.5"),
+        a.attribute("font-family", "var(--font-data)"),
+      ],
+      desc,
+    ),
+  ]
+}
+
+fn num(f: Float) -> String {
+  float.to_string(f)
 }
 
 fn panel_header(title: String, subtitle: String) -> Element(model.Msg) {
