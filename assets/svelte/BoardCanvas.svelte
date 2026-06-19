@@ -225,13 +225,13 @@
     onwheel={onWheel}
     onclick={onBoardClick}
   >
-    <!-- substrate: covers the full padded board span -->
-    <rect x="0" y="0" width={span.w} height={span.h} fill="#0a2e14" />
+    <!-- substrate: the FR4 board green, per the design system (#1B5E20). -->
+    <rect x="0" y="0" width={span.w} height={span.h} fill="#1b5e20" />
     <rect x="0" y="0" width={span.w} height={span.h} fill="url(#grid)" />
     <defs>
       <!-- 5mm grid in board units -->
       <pattern id="grid" width="5" height="5" patternUnits="userSpaceOnUse">
-        <path d="M5 0 L0 0 0 5" fill="none" stroke="#0e3a1b" stroke-width={0.15 * mark} />
+        <path d="M5 0 L0 0 0 5" fill="none" stroke="#2a7a31" stroke-width={0.15 * mark} />
       </pattern>
     </defs>
 

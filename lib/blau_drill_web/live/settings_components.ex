@@ -68,9 +68,7 @@ defmodule BlauDrillWeb.SettingsComponents do
     ~H"""
     <header class="flex h-16 flex-none items-center justify-between border-b border-outline-variant bg-surface-container-high px-6">
       <div class="flex items-center gap-4">
-        <span class="font-sans text-2xl font-bold uppercase tracking-tighter text-primary">
-          blau-drill
-        </span>
+        <BlauDrillWeb.SessionComponents.brand />
         <div class="h-6 w-px bg-outline-variant"></div>
         <span class="font-data text-sm text-on-surface-variant">SYSTEM CONFIGURATION</span>
       </div>
@@ -314,7 +312,7 @@ defmodule BlauDrillWeb.SettingsComponents do
 
   defp card(assigns) do
     ~H"""
-    <div class="rounded border border-outline-variant bg-surface-container-high p-6 shadow-sm">
+    <div class="rounded-lg border border-outline-variant bg-surface-container-high p-6">
       <h3 class="mb-4 font-data text-lg font-semibold uppercase tracking-widest text-primary">
         {@title}
       </h3>

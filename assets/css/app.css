@@ -79,6 +79,37 @@
   --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
   --radius-xl: 0.75rem;
+
+  /* A discrete 1 Hz blink for warning/status badges (DESIGN.md §Components),
+     distinct from Tailwind's smooth `animate-pulse` opacity ease. `steps(2)`
+     gives a hard on/off toggle once per second. */
+  --animate-blink: blink 1s steps(2, jump-none) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* Material Symbols (the reference design's iconography). The glyph is the
+   ligature text content; this class switches it to the icon font. */
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+}
+.material-symbols-outlined.fill {
+  font-variation-settings: "FILL" 1;
 }
 
 /* Add variants based on LiveView connection / event classes. */

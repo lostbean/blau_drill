@@ -103,7 +103,7 @@ defmodule BlauDrillWeb.SessionComponents do
       id="fault-banner"
       class="z-50 flex items-center justify-center gap-4 border-b-2 border-error bg-error-container px-6 py-2 font-data text-sm text-on-error-container"
     >
-      <span class="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-error"></span>
+      <span class="inline-block h-2.5 w-2.5 animate-blink rounded-full bg-error"></span>
       <span class="font-bold uppercase tracking-wide">
         HARDWARE DISCONNECTED. Check USB cable and power.
       </span>
@@ -121,30 +121,64 @@ defmodule BlauDrillWeb.SessionComponents do
 
   # ── Header + 5-node stepper ────────────────────────────────────────────────
 
+  @doc """
+  The shared brand lockup: the precision-manufacturing (robot-arm) logo glyph
+  beside the "blau-drill" wordmark. Used in both the session header and the
+  Settings top bar so branding is identical across screens.
+  """
+  attr :tagline, :boolean, default: false
+
+  def brand(assigns) do
+    ~H"""
+    <div class="flex items-center gap-2.5">
+      <.logo_mark class="flex-none text-3xl text-primary" />
+      <div>
+        <span class="font-sans text-2xl font-bold leading-none text-primary">blau-drill</span>
+        <p
+          :if={@tagline}
+          class="mt-0.5 font-data text-[0.625rem] uppercase tracking-widest text-on-surface-variant"
+        >
+          Precision PCB Drilling Control
+        </p>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  The `precision_manufacturing` (robot-arm) logo glyph — the exact Material
+  Symbol the reference mockups use, rendered from the Material Symbols Outlined
+  font (loaded in the root layout).
+  """
+  attr :class, :string, default: "text-2xl"
+
+  def logo_mark(assigns) do
+    ~H"""
+    <span class={["material-symbols-outlined fill leading-none", @class]} aria-hidden="true">
+      precision_manufacturing
+    </span>
+    """
+  end
+
   attr :stages, :list, required: true
   attr :stage, :string, required: true
 
   defp app_header(assigns) do
     ~H"""
-    <header class="flex h-[120px] flex-none items-center justify-between border-b border-outline-variant bg-surface px-6">
-      <div>
-        <h1 class="font-sans text-2xl font-bold text-primary">blau-drill</h1>
-        <p class="mt-1 font-data text-xs uppercase tracking-widest text-on-surface-variant">
-          Precision PCB Drilling Control
-        </p>
-      </div>
+    <header class="flex h-16 flex-none items-center justify-between border-b border-outline-variant bg-surface-container-high px-6">
+      <.brand />
 
       <ol class="hidden items-center gap-2 md:flex">
         <%= for {{id, label}, idx} <- Enum.with_index(@stages) do %>
           <li class="flex flex-col items-center">
             <div class={[
-              "flex h-9 w-9 items-center justify-center rounded-full font-data text-sm font-bold",
+              "flex h-7 w-7 items-center justify-center rounded-full font-data text-xs font-bold",
               stepper_node_class(id, @stage, @stages)
             ]}>
               {idx + 1}
             </div>
             <span class={[
-              "mt-1 font-data text-[0.625rem] font-bold uppercase tracking-widest",
+              "mt-0.5 font-data text-[0.5625rem] font-bold uppercase tracking-widest",
               if(id == @stage, do: "text-primary", else: "text-on-surface-variant")
             ]}>
               {label}
@@ -154,20 +188,17 @@ defmodule BlauDrillWeb.SessionComponents do
         <% end %>
       </ol>
 
-      <div class="flex items-center gap-4">
+      <div class="flex items-center">
         <.link
           navigate="/settings"
           data-test="settings-link"
           title="Printer configuration"
           aria-label="Printer configuration"
-          class="group flex items-center gap-2 rounded-md border border-outline-variant bg-surface-container-high px-3 py-2 font-data text-xs font-bold uppercase tracking-widest text-on-surface transition hover:border-primary hover:bg-primary-container hover:text-on-primary-container"
+          class="group flex items-center gap-2 rounded-md border border-outline-variant bg-surface-container-high px-3 py-1.5 font-data text-xs font-bold uppercase tracking-widest text-on-surface transition hover:border-primary hover:bg-primary-container hover:text-on-primary-container"
         >
           <span class="text-lg leading-none transition group-hover:rotate-90">⚙</span>
           <span class="hidden sm:inline">Config</span>
         </.link>
-        <span class="font-data text-[0.625rem] uppercase tracking-widest text-on-surface-variant/60">
-          v0.1
-        </span>
       </div>
     </header>
     """
@@ -536,7 +567,7 @@ defmodule BlauDrillWeb.SessionComponents do
               "rounded border px-2 py-0.5 font-data text-xs font-bold uppercase",
               if(@motors_online,
                 do: "border-primary/40 bg-primary-container/10 text-primary",
-                else: "animate-pulse border-error/30 bg-error/10 text-error"
+                else: "animate-blink border-error/30 bg-error/10 text-error"
               )
             ]}>
               {if @motors_online, do: "ONLINE", else: "OFFLINE"}
