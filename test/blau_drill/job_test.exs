@@ -174,6 +174,49 @@ defmodule BlauDrill.JobTest do
     end
   end
 
+  describe ":restart_alignment (start the whole alignment over)" do
+    test "from :registering wipes captures and stays in a fresh :registering" do
+      j = register_with(job(), @misfit_corrs)
+      assert BlauDrill.PendingAlignment.count(j.pending) == 4
+
+      assert {:ok, restarted} = Job.transition(j, :restart_alignment)
+      assert restarted.state == :registering
+      assert BlauDrill.PendingAlignment.count(restarted.pending) == 0
+      assert restarted.alignment == nil
+      assert restarted.residuals == nil
+    end
+
+    test "from :aligned returns to a clean :registering (no transform left)" do
+      j = register_with(job(), @misfit_corrs)
+      {:ok, aligned} = Job.transition(j, {:fit, 0.5})
+      assert aligned.state == :aligned
+      assert aligned.alignment
+
+      assert {:ok, restarted} = Job.transition(aligned, :restart_alignment)
+      assert restarted.state == :registering
+      assert BlauDrill.PendingAlignment.count(restarted.pending) == 0
+      assert restarted.alignment == nil
+    end
+
+    test "from :alignment_rejected returns to a clean :registering" do
+      j = register_with(job(), @misfit_corrs)
+      {:ok, rejected} = Job.transition(j, {:fit, 0.05})
+      assert rejected.state == :alignment_rejected
+
+      assert {:ok, restarted} = Job.transition(rejected, :restart_alignment)
+      assert restarted.state == :registering
+      assert BlauDrill.PendingAlignment.count(restarted.pending) == 0
+    end
+
+    test "is illegal once past alignment (dry_run / drilling / done)" do
+      j = register_with(job(), @misfit_corrs)
+      {:ok, aligned} = Job.transition(j, {:fit, 0.5})
+      {:ok, dry} = Job.transition(aligned, :run_dry_run)
+
+      assert {:error, :illegal_transition} = Job.transition(dry, :restart_alignment)
+    end
+  end
+
   describe "aligned -> dry_run" do
     test ":run_dry_run moves :aligned to :dry_run" do
       j = register_with(job(), @exact_corrs)
@@ -304,7 +347,7 @@ defmodule BlauDrill.JobTest do
 
       aligned = register_with(job(), @exact_corrs)
       {:ok, aligned} = Job.transition(aligned, {:fit, 0.1})
-      assert Job.legal_events(aligned) == [:run_dry_run]
+      assert Job.legal_events(aligned) == [:run_dry_run, :restart_alignment]
       # The no-shortcut invariant surfaces in the UI too: no confirm from aligned.
       refute :confirm_registration in Job.legal_events(aligned)
     end

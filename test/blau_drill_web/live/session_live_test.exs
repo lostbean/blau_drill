@@ -175,6 +175,18 @@ defmodule BlauDrillWeb.SessionLiveTest do
     assert html =~ "CONNECTED"
   end
 
+  test "the header links to the printer configuration screen", %{conn: conn} do
+    {conn, _name} = with_printer(conn)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert has_element?(view, "[data-test='settings-link']")
+    # Following it lands on /settings (Printer Configuration).
+    {:ok, _settings, html} =
+      view |> element("[data-test='settings-link']") |> render_click() |> follow_redirect(conn)
+
+    assert html =~ "Printer Configuration" or html =~ "SYSTEM CONFIGURATION"
+  end
+
   # ── upload / parse ──────────────────────────────────────────────────────────
 
   test "uploading a valid .drl parses and advances; diagnostic shows 130 holes / 5 tools",
@@ -363,6 +375,29 @@ defmodule BlauDrillWeb.SessionLiveTest do
     upload_fixture(view)
     render_click(element(view, "[data-test='proceed-align']"))
     assert has_element?(view, "[data-test='emergency-stop']")
+  end
+
+  # ── restart alignment ───────────────────────────────────────────────────────
+
+  test "Restart Alignment wipes captures and returns to a fresh registering",
+       %{conn: conn} do
+    {conn, name} = with_printer(conn)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    to_registering(view)
+    capture_and_fit(view, name, @candidates)
+    # Now :aligned (clean fit) with the dry-run gate open.
+    assert has_element?(view, "[data-test='proceed-dryrun']:not([disabled])")
+
+    # Restart is offered from :aligned and returns to capturing with 0 points.
+    assert has_element?(view, "[data-test='restart-alignment']")
+    render_click(element(view, "[data-test='restart-alignment']"))
+
+    assert has_element?(view, "[data-test='capture-fiducial']", "0/4")
+    refute has_element?(view, "[data-test='proceed-dryrun']:not([disabled])")
+    # The canvas captures are cleared (no captured fiducials in the props).
+    fids = canvas_props(view)["fiducials"]
+    assert Enum.all?(fids, &(&1["state"] != "captured"))
   end
 
   # ── current-target distinction ──────────────────────────────────────────────

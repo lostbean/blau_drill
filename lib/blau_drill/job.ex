@@ -101,6 +101,7 @@ defmodule BlauDrill.Job do
           | {:capture, Correspondence.t()}
           | {:fit, tol :: float()}
           | :recapture
+          | :restart_alignment
           | :run_dry_run
           | :redo_alignment
           | :confirm_registration
@@ -230,6 +231,22 @@ defmodule BlauDrill.Job do
     {:ok, %{job | state: :aligned}}
   end
 
+  # {registering | aligned | alignment_rejected} -> registering : start the whole
+  # alignment over. Unlike :recapture (which keeps the captures), this WIPES the
+  # pending alignment, the solved transform, and the residuals — a clean slate
+  # when registration has gone wrong. Legal only from the align states.
+  def transition(%__MODULE__{state: state} = job, :restart_alignment)
+      when state in [:registering, :aligned, :alignment_rejected] do
+    {:ok,
+     %{
+       job
+       | state: :registering,
+         pending: %PendingAlignment{captured: []},
+         alignment: nil,
+         residuals: nil
+     }}
+  end
+
   # dry_run -> drilling : confirm registration — the ONLY path to drilling
   def transition(%__MODULE__{state: :dry_run} = job, :confirm_registration) do
     {:ok, %{job | state: :drilling}}
@@ -271,9 +288,9 @@ defmodule BlauDrill.Job do
   """
   @spec legal_events(t()) :: [atom()]
   def legal_events(%__MODULE__{state: :parsed}), do: [:start_registering]
-  def legal_events(%__MODULE__{state: :registering}), do: [:capture, :fit]
-  def legal_events(%__MODULE__{state: :alignment_rejected}), do: [:recapture]
-  def legal_events(%__MODULE__{state: :aligned}), do: [:run_dry_run]
+  def legal_events(%__MODULE__{state: :registering}), do: [:capture, :fit, :restart_alignment]
+  def legal_events(%__MODULE__{state: :alignment_rejected}), do: [:recapture, :restart_alignment]
+  def legal_events(%__MODULE__{state: :aligned}), do: [:run_dry_run, :restart_alignment]
   def legal_events(%__MODULE__{state: :dry_run}), do: [:redo_alignment, :confirm_registration]
   def legal_events(%__MODULE__{state: :drilling}), do: [:complete, :serial_loss]
   def legal_events(%__MODULE__{state: :faulted}), do: [:reconnect]

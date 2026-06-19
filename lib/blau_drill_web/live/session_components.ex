@@ -150,7 +150,15 @@ defmodule BlauDrillWeb.SessionComponents do
         <% end %>
       </ol>
 
-      <div class="w-24 text-right">
+      <div class="flex w-24 items-center justify-end gap-3">
+        <.link
+          navigate="/settings"
+          data-test="settings-link"
+          title="Printer configuration"
+          class="flex items-center gap-1 font-data text-xs font-bold uppercase tracking-widest text-on-surface-variant hover:text-primary"
+        >
+          <span class="text-base leading-none">⚙</span> Config
+        </.link>
         <span class="font-data text-xs uppercase tracking-widest text-on-surface-variant">
           v0.1
         </span>
@@ -573,6 +581,18 @@ defmodule BlauDrillWeb.SessionComponents do
           class="w-full rounded bg-surface-container-high px-4 py-2 font-sans text-sm font-bold uppercase tracking-wide text-on-surface hover:bg-surface-container-highest disabled:cursor-not-allowed disabled:opacity-50"
         >
           Fit Alignment
+        </button>
+
+        <%!-- Bail out and start the whole registration over (available from any
+              align state: while capturing, after a fit, or when rejected). --%>
+        <button
+          :if={can?(@job, :restart_alignment)}
+          type="button"
+          phx-click="restart_alignment"
+          data-test="restart-alignment"
+          class="w-full rounded border border-outline-variant px-4 py-2 font-sans text-xs font-bold uppercase tracking-wide text-on-surface-variant hover:border-primary hover:text-primary"
+        >
+          ↺ Restart Alignment
         </button>
 
         <%!-- Quality / residual readout. --%>

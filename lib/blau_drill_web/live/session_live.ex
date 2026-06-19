@@ -340,6 +340,18 @@ defmodule BlauDrillWeb.SessionLive do
      |> assign(:current_target, 0)}
   end
 
+  # Start the whole alignment over (from registering / aligned / rejected): the
+  # Job wipes the pending alignment + solved transform; we clear the UI captures
+  # and reset the current target to the first candidate.
+  def handle_event("restart_alignment", _params, socket) do
+    {:noreply,
+     socket
+     |> advance(:restart_alignment)
+     |> assign(:captured_fiducials, [])
+     |> assign(:current_target, 0)
+     |> put_flash(:info, "Alignment restarted — capture the points again.")}
+  end
+
   # aligned → dry_run, then stream the dry-run program (spindle off, hover).
   def handle_event("run_dry_run", _params, socket) do
     socket = advance(socket, :run_dry_run)
