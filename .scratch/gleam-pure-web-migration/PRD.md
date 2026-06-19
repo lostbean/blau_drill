@@ -346,6 +346,32 @@ exercises the whole flow.
 - Deferred (non-blocking): canvas drag-pan (zoom works), Material Symbol brand
   glyph (emoji placeholder).
 
+## Phase 5 — COMPLETE (2026-06-19)
+
+Done on branch `migrate/gleam-pure-web` (main untouched). Two commits:
+1. `feat(web)` — the full Gleam app under `web/` (checkpoint).
+2. `refactor` — promote `web/app/*` to repo root; retire the Elixir tier.
+
+- `web/app/*` promoted to root via `git mv` (history preserved): `src/`, `test/`,
+  `gleam.toml`, `manifest.toml`, `assets/`, `README.md`. 155 tests pass from root.
+- Removed: Elixir/Phoenix tier (`lib/`, `config/`, Svelte `assets/`, `mix.exs`,
+  `mix.lock`, `.formatter.exs`, Elixir `test/`), the `web/` wrapper, and the
+  Phase-0 spike. All recoverable from git history (main + commit 1).
+- `flake.nix` rewritten: Gleam + Node + rebar3 only (no BEAM/Elixir); treefmt
+  `mix-format` → `gleam`. `.gitignore` → Gleam (`build/`, `dist/`, `*.beam`).
+- `CLAUDE.md`/`CONTEXT.md`/`README.md` rewritten for the Gleam/Web-Serial
+  reality; domain glossary + invariants preserved 1:1 (language-independent).
+- `nix fmt` + `nix flake check` pass; pre-commit hook green.
+
+### Left for follow-up (non-blocking)
+- **Real-hardware validation** (operator + physical printer + Chrome) — the only
+  thing the simulator can't prove. Do before relying on it for a real board.
+- `dist/index.html` absolute asset paths → make relative for bare `file://`.
+- ADRs `0008-svelte-ssr` (obsolete) and Elixir-specific ADRs (0005/0007) should
+  be superseded with Gleam equivalents (ADRs are append-only; separate task).
+- Canvas drag-pan; Material Symbol brand glyph (cosmetic).
+- Merge `migrate/gleam-pure-web` → `main` when ready.
+
 ## Open questions / risks
 
 - **Web Serial write backpressure & flow control** for streaming long G-code
