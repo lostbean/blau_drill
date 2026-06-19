@@ -6,9 +6,8 @@
 import blau_drill/ui/model.{
   type Model, type PrinterState, type Screen, type StageId, Align, ConnectDevice,
   DisconnectDevice, Disconnected, Done, Drill, DryRun, Faulted, GoToSettings,
-  Idle, Jogging, Load, NavStage, RealBackend, SelectBackend, Settings,
-  SimBackend, StageAlign, StageDone, StageDrill, StageDryRun, StageLoad,
-  Streaming,
+  Idle, Jogging, Load, RealBackend, SelectBackend, Settings, SimBackend,
+  StageAlign, StageDone, StageDrill, StageDryRun, StageLoad, Streaming,
 }
 import gleam/float
 import gleam/int
@@ -85,7 +84,6 @@ fn stepper_nodes(current: StageId) -> List(Element(model.Msg)) {
 // ── sidebar ───────────────────────────────────────────────────────────────────
 
 pub fn sidebar(model: Model) -> Element(model.Msg) {
-  let current = screen_stage(model.screen)
   h.aside([a.class("sidebar")], [
     h.div([a.class("sidebar-head")], [
       h.h2([a.class("sidebar-title")], [h.text("Control Panel")]),
@@ -95,47 +93,12 @@ pub fn sidebar(model: Model) -> Element(model.Msg) {
       ]),
     ]),
     h.div([a.class("sidebar-body")], [
-      h.div([], [
-        h.p([a.class("section-label")], [h.text("Stages")]),
-        h.ul([a.class("stage-nav")], [
-          stage_nav_item(StageLoad, current),
-          stage_nav_item(StageAlign, current),
-          stage_nav_item(StageDryRun, current),
-          stage_nav_item(StageDrill, current),
-          stage_nav_item(StageDone, current),
-        ]),
-      ]),
+      // The 5-stage sequence is shown in the top-bar stepper; the sidebar no
+      // longer duplicates it.
       connection_card(model),
       h.div([a.class("sidebar-foot")], [estop(model.screen)]),
     ]),
   ])
-}
-
-fn stage_nav_item(stage: StageId, current: StageId) -> Element(model.Msg) {
-  let cur_i = stage_index(current)
-  let this_i = stage_index(stage)
-  let #(cls, marker) = case int.compare(this_i, cur_i) {
-    Eq -> #("stage-nav-item current", "•")
-    Lt -> #("stage-nav-item done", "✓")
-    Gt -> #("stage-nav-item", "•")
-  }
-  // Stage nav is informational in the linear flow; clicking is allowed only to
-  // an already-completed or current stage (no skipping ahead).
-  let clickable = this_i <= cur_i
-  h.li(
-    [
-      a.class(cls),
-      ..case clickable {
-        True -> [
-          a.attribute("role", "button"),
-          a.tabindex(0),
-          event.on_click(NavStage(stage)),
-        ]
-        False -> []
-      }
-    ],
-    [h.span([], [h.text(marker)]), h.text(stage_label(stage))],
-  )
 }
 
 fn connection_card(model: Model) -> Element(model.Msg) {

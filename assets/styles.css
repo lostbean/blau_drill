@@ -738,6 +738,12 @@ button {
 .dropzone:hover {
   border-color: var(--primary);
 }
+/* The "Load sample board" affordance below the upload area. */
+.sample-row {
+  margin-top: 1.25rem;
+  display: flex;
+  justify-content: center;
+}
 .dropzone-icon {
   font-size: 3.5rem;
   color: var(--on-surface-variant);
