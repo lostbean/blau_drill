@@ -1,49 +1,18 @@
-# The directory Mix will write compiled artifacts to.
-/_build/
-
-# If you run "mix test --cover", coverage assets end up here.
-/cover/
-
-# The directory Mix downloads your dependencies sources to.
-/deps/
-
-# Where third-party dependencies like ExDoc output generated docs.
-/doc/
-
-# If the VM crashes, it generates a dump, let's ignore it too.
+# Gleam build artifacts.
+build/
+*.beam
+*.ez
 erl_crash.dump
 
-# Also ignore archive artifacts (built via "mix archive.build").
-*.ez
+# Gleam's static-build output (produced by `gleam run -m lustre/dev build`).
+# Regenerated from source; not checked in.
+dist/
 
-# Ignore package tarball (built via "mix hex.build").
-blau_drill-*.tar
-
-# Temporary files, for example, from tests.
+# Temporary files.
 /tmp/
 
 # Nix / direnv dev environment.
 .direnv/
-
-# Project-local Mix/Hex state (see flake.nix shellHook).
-/.mix/
-/.hex/
-
-# ElixirLS workspace.
-/.elixir_ls/
-
-# Phoenix / asset pipeline.
-# Compiled/digested static assets (built by tailwind + assets/build.js).
-# The directories themselves are kept via .gitkeep; only built files are ignored.
-/priv/static/assets/js/*
-!/priv/static/assets/js/.gitkeep
-/priv/static/assets/css/*
-!/priv/static/assets/css/.gitkeep
-/priv/svelte/*
-!/priv/svelte/.gitkeep
-/priv/static/cache_manifest.json
-# Node modules for the asset build (esbuild-svelte, svelte, ...).
-/assets/node_modules/
 
 # Local Claude Code settings (per-developer MCP approvals, etc.)
 .claude/settings.local.json

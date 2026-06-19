@@ -45,6 +45,16 @@
             beam.elixir-ls # Elixir language server (matches the OTP/Elixir set)
             pkgs.lefthook
             pkgs.nodejs # Node runtime for the live_svelte / esbuild asset pipeline
+
+            # Gleam toolchain for the pure-web rewrite under web/ (Lustre SPA
+            # that talks to the printer over the Web Serial API — no backend).
+            # Compiles to JavaScript; Node above is its runtime. Pinned to the
+            # same nixos-26.05 nixpkgs (Gleam 1.17.0) as the rest of the shell.
+            pkgs.gleam
+            # rebar3 is needed to compile lustre_dev_tools' Erlang-target deps
+            # (the `gleam run -m lustre/dev …` watch server). Without it Gleam
+            # can't build those toolchain deps.
+            pkgs.rebar3
           ];
 
           # Keep Hex/Rebar/Mix state local to the project instead of $HOME.
