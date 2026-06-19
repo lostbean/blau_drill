@@ -191,8 +191,15 @@ defmodule BlauDrillWeb.SessionLive do
 
   # The operator picked a device from the dropdown. While connected the select is
   # disabled in the UI, so this only fires when disconnected.
-  def handle_event("select_device", %{"device" => id}, socket) do
+  def handle_event("select_device", %{"device" => id}, socket) when id != "" do
     {:noreply, assign(socket, :selected_device, id)}
+  end
+
+  # The form's phx-change can also fire with no/empty device value (e.g. a
+  # phx-change replay, or the disabled select emitting a change). Ignore it —
+  # keep the current selection rather than crashing on an unmatched clause.
+  def handle_event("select_device", _params, socket) do
+    {:noreply, socket}
   end
 
   # Re-enumerate serial ports (plug in a printer, click ⟳, see it). Keeps the

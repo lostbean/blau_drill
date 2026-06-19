@@ -218,6 +218,17 @@ defmodule BlauDrillWeb.SessionLiveTest do
     assert has_element?(view, "option[value='sim'][selected]")
   end
 
+  test "select_device with an empty/missing device value does not crash", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # The form's phx-change can fire with no device (e.g. a replay, or the
+    # disabled select). It must be ignored, not raise a FunctionClauseError.
+    assert render_change(element(view, "#device-form"), %{"device" => ""}) =~ "blau-drill"
+    assert render_change(element(view, "#device-form"), %{}) =~ "blau-drill"
+    # The view is still alive after both.
+    assert has_element?(view, "[data-test='device-select']")
+  end
+
   test "refresh_devices re-enumerates and keeps the Simulator available", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 
