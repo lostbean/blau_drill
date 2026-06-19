@@ -35,7 +35,6 @@ pub fn load_config(seed: Config) -> Config {
 
 fn encode_config(c: Config) -> String {
   [
-    #("port", c.port),
     #("baud", c.baud),
     #("auto_connect", bool_str(c.auto_connect)),
     #("max_x", c.max_x),
@@ -72,7 +71,6 @@ fn decode_config(blob: String, seed: Config) -> Config {
     }
   }
   Config(
-    port: get("port", seed.port),
     baud: get("baud", seed.baud),
     auto_connect: get("auto_connect", bool_str(seed.auto_connect)) == "true",
     max_x: get("max_x", seed.max_x),

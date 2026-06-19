@@ -39,6 +39,29 @@ export async function requestAndOpen(baud) {
   }
 }
 
+// Open a PREVIOUSLY-AUTHORIZED port without a picker. `navigator.serial.getPorts()`
+// returns only ports the user has already granted (in this or a past session),
+// so this needs no user gesture. Used for auto-reconnect on load. Returns
+// Promise(Result(conn, String)); Error("no granted port") when none is available.
+export async function openExisting(baud) {
+  if (!hasSerial() || typeof navigator.serial.getPorts !== "function") {
+    return new Error("Web Serial unavailable");
+  }
+  try {
+    const ports = await navigator.serial.getPorts();
+    if (!ports || ports.length === 0) {
+      return new Error("no granted port");
+    }
+    const port = ports[0];
+    await port.open({ baudRate: baud, dataBits: 8, stopBits: 1, parity: "none" });
+    const encoder = new TextEncoder();
+    const conn = { port, encoder, reader: null, closed: false };
+    return new Ok(conn);
+  } catch (e) {
+    return new Error(String(e && e.message ? e.message : e));
+  }
+}
+
 export async function write(conn, line) {
   try {
     if (!conn.port || !conn.port.writable) {

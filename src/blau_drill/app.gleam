@@ -131,7 +131,17 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       applied_config: bridge.gcode_config(cfg, config.DryRun),
       bit_changes_seen: 0,
     )
-  #(m, effect.none())
+  // Auto-reconnect: if the operator enabled it and chose the real Web Serial
+  // backend, try to re-open a previously-authorized port WITHOUT a picker (no
+  // user gesture needed). If none was ever granted this resolves to a benign
+  // "no granted port" and the app stays disconnected — no prompt, no error UI.
+  let eff = case cfg.auto_connect, backend_kind {
+    True, RealBackend ->
+      controller.connect_existing(m.controller, bridge.baud(cfg))
+      |> effect.map(ControllerEvent)
+    _, _ -> effect.none()
+  }
+  #(m, eff)
 }
 
 fn backend_for(kind: BackendKind) -> backend.Backend {
@@ -1097,7 +1107,6 @@ fn apply_config(model: Model) -> #(Model, Effect(Msg)) {
 fn set_config_field(model: Model, field: String, value: String) -> Model {
   let c = model.config
   let c2 = case field {
-    "port" -> model.Config(..c, port: value)
     "baud" -> model.Config(..c, baud: value)
     "max_x" -> model.Config(..c, max_x: value)
     "max_y" -> model.Config(..c, max_y: value)

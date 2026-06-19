@@ -16,3 +16,7 @@ dist/
 
 # Local Claude Code settings (per-developer MCP approvals, etc.)
 .claude/settings.local.json
+
+#Added automatically by Lustre Dev Tools
+/.lustre
+/dist

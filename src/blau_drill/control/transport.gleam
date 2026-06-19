@@ -13,6 +13,9 @@ fn serial_has_serial() -> Bool
 @external(javascript, "./serial_ffi.mjs", "requestAndOpen")
 fn serial_open(baud: Int) -> Promise(Result(Conn, String))
 
+@external(javascript, "./serial_ffi.mjs", "openExisting")
+fn serial_open_existing(baud: Int) -> Promise(Result(Conn, String))
+
 @external(javascript, "./serial_ffi.mjs", "write")
 fn serial_write(conn: Conn, line: String) -> Promise(Result(Nil, String))
 
@@ -32,6 +35,7 @@ pub fn web_serial() -> Backend {
     name: "Web Serial",
     available: serial_has_serial,
     open: serial_open,
+    open_existing: serial_open_existing,
     write: serial_write,
     start_reading: serial_start_reading,
     close: serial_close,
@@ -42,6 +46,9 @@ pub fn web_serial() -> Backend {
 
 @external(javascript, "./sim_ffi.mjs", "open")
 fn sim_open(baud: Int) -> Promise(Result(Conn, String))
+
+@external(javascript, "./sim_ffi.mjs", "openExisting")
+fn sim_open_existing(baud: Int) -> Promise(Result(Conn, String))
 
 @external(javascript, "./sim_ffi.mjs", "write")
 fn sim_write(conn: Conn, line: String) -> Promise(Result(Nil, String))
@@ -63,6 +70,7 @@ pub fn simulator() -> Backend {
     name: "Simulator",
     available: fn() { True },
     open: sim_open,
+    open_existing: sim_open_existing,
     write: sim_write,
     start_reading: sim_start_reading,
     close: sim_close,

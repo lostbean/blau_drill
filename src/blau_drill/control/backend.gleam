@@ -27,6 +27,11 @@ pub type Backend {
     /// (it calls `navigator.serial.requestPort()`); the sim connects instantly.
     /// Resolves `Error(reason)` on failure (cancelled picker, open error).
     open: fn(Int) -> Promise(Result(Conn, String)),
+    /// Re-open a PREVIOUSLY-AUTHORIZED port with no picker / no user gesture
+    /// (real backend uses `navigator.serial.getPorts()`). Resolves
+    /// `Error("no granted port")` when none is available — used for
+    /// auto-reconnect on load. The sim has no such concept and always errors.
+    open_existing: fn(Int) -> Promise(Result(Conn, String)),
     /// Write one payload to the port (caller has already framed it). Resolves
     /// `Error` if the port is gone.
     write: fn(Conn, String) -> Promise(Result(Nil, String)),

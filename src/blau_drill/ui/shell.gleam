@@ -148,14 +148,17 @@ fn connection_card(model: Model) -> Element(model.Msg) {
     h.div([a.class("conn-picker")], [
       h.label(
         [a.attribute("for", "device-select"), a.class("visually-hidden")],
-        [h.text("Device")],
+        [h.text("Backend")],
       ),
+      // Backend choice: the simulator (no hardware) vs the real Web Serial port.
+      // It is NOT a device list — Web Serial can't enumerate devices; the actual
+      // USB device is chosen in the browser's picker when you click Connect.
       h.select(
         [
           a.id("device-select"),
           a.class("conn-select"),
           a.disabled(connected),
-          a.attribute("aria-label", "Serial device"),
+          a.attribute("aria-label", "Connection backend"),
           event.on_change(fn(v) {
             case v {
               "real" -> SelectBackend(RealBackend)
@@ -174,16 +177,6 @@ fn connection_card(model: Model) -> Element(model.Msg) {
           ),
         ],
       ),
-      h.button(
-        [
-          a.class("conn-refresh"),
-          a.attribute("type", "button"),
-          a.disabled(connected),
-          a.attribute("aria-label", "Refresh device list"),
-          a.attribute("title", "Refresh device list"),
-        ],
-        [h.text("⟳")],
-      ),
     ]),
     case connected {
       False ->
@@ -194,7 +187,14 @@ fn connection_card(model: Model) -> Element(model.Msg) {
             a.attribute("type", "button"),
             event.on_click(ConnectDevice),
           ],
-          [h.text("Connect")],
+          // For the real port, the click opens the browser's serial-port picker;
+          // say so, since there's no in-page device list.
+          [
+            h.text(case model.backend_kind {
+              RealBackend -> "Choose Port & Connect"
+              SimBackend -> "Connect"
+            }),
+          ],
         )
       True ->
         h.button(

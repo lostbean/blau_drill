@@ -1,7 +1,7 @@
 // In-browser Marlin SIMULATOR — the "other end of the wire" so the app works
-// with NO hardware. Ported 1:1 from `lib/blau_drill/printer_connection/uart/sim.ex`.
+// with NO hardware.
 //
-// Behaviour replicated exactly:
+// Behaviour:
 //   * keeps a simulated head position (x,y,z, start 0,0,0) and a G90/G91
 //     absolute/relative flag (start absolute);
 //   * on each written line: G91 -> relative, G90 -> absolute, G0/G1 -> integrate
@@ -10,7 +10,7 @@
 //   * any other line -> emit one `ok` scheduled ~10ms ahead so a streamed
 //     program acks incrementally and progress animates. One ack per line.
 
-import { Ok } from "../../gleam.mjs";
+import { Ok, Error } from "../../gleam.mjs";
 
 const ACK_DELAY_MS = 10;
 
@@ -21,6 +21,12 @@ export function makeConn() {
 // Sim "connects" instantly. Async to share the Backend.open signature.
 export async function open(_baud) {
   return new Ok(makeConn());
+}
+
+// The sim has no "previously-authorized device" concept, so auto-reconnect is a
+// no-op for it: report none granted and let the host fall back to a normal open.
+export async function openExisting(_baud) {
+  return new Error("no granted port");
 }
 
 export function startReading(conn, onLine, _onError) {

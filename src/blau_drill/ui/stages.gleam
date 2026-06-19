@@ -754,11 +754,18 @@ fn connection_panel(c: Config) -> List(Element(model.Msg)) {
   [
     panel_header(
       "Connection Setup",
-      "Configure serial communication parameters for the CNC controller.",
+      "Serial communication parameters for the CNC controller.",
     ),
     card("Serial Port", [
-      h.div([a.class("field-grid cols-2")], [
-        text_field("port", "Port Identifier", c.port, "/dev/ttyUSB0"),
+      // The browser's Web Serial picker chooses the physical device — there is
+      // no OS device path to type. Only the baud rate is a settable parameter.
+      h.p([a.class("field-note")], [
+        h.text(
+          "The serial device is selected in the browser's port dialog when you "
+          <> "click Connect (Chromium only — no device path needed).",
+        ),
+      ]),
+      h.div([a.class("field-grid cols-1")], [
         select_field("baud", "Baud Rate", c.baud, [
           "9600", "19200", "38400", "57600", "115200", "250000",
         ]),
@@ -782,7 +789,8 @@ fn connection_panel(c: Config) -> List(Element(model.Msg)) {
           h.span([a.class("title")], [h.text("Auto-connect on startup")]),
           h.span([a.class("sub")], [
             h.text(
-              "Establish serial connection automatically when the system boots.",
+              "Reconnect a previously-authorized port automatically on load "
+              <> "(no picker needed once you've granted a device).",
             ),
           ]),
         ]),

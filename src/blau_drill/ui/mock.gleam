@@ -109,7 +109,6 @@ pub fn pending_fiducials(current_target: Int) -> List(Fiducial) {
 
 pub fn default_config() -> Config {
   Config(
-    port: "/dev/ttyUSB0",
     baud: "115200",
     auto_connect: False,
     max_x: "300.00",

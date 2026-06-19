@@ -227,11 +227,11 @@ pub type SettingsCategory {
 }
 
 /// The working printer configuration edited on the settings screen. Plain
-/// strings (as the inputs hold them); Phase 4 coerces + validates via
-/// `domain`/`Config`.
+/// strings (as the inputs hold them); coerced + validated into the domain
+/// `GcodeConfig` when a run starts. There is no `port` field — the serial device
+/// is chosen via the browser's Web Serial picker, not by an OS path.
 pub type Config {
   Config(
-    port: String,
     baud: String,
     auto_connect: Bool,
     max_x: String,

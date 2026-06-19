@@ -90,6 +90,21 @@ pub fn connect(controller: Controller, baud: Int) -> Effect(ControllerMsg) {
   Nil
 }
 
+/// Re-open a previously-authorized port at `baud` WITHOUT a picker / user gesture
+/// (via the backend's `open_existing`). Safe to call on load; resolves into the
+/// same `Opened` message, so an `Error("no granted port")` simply leaves the app
+/// disconnected with no prompt. Used for auto-reconnect.
+pub fn connect_existing(
+  controller: Controller,
+  baud: Int,
+) -> Effect(ControllerMsg) {
+  let backend = controller.backend
+  use dispatch <- effect.from
+  backend.open_existing(baud)
+  |> promise.map(fn(res) { dispatch(Opened(res)) })
+  Nil
+}
+
 // ── the update loop ──────────────────────────────────────────────────────────
 
 /// Route a `ControllerMsg` through the state machine and the transport.
