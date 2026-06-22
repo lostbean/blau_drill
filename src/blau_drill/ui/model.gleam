@@ -64,6 +64,28 @@ pub type StageId {
   StageDone
 }
 
+// ── Board side (which face is up in the printer) ────────────────────────────
+
+/// Which face of the board is up in the printer.
+///
+/// This is a VIEW concern only — it mirrors the on-screen board canvas so the
+/// display matches what the operator physically sees on the bench. When drilling
+/// the back copper, the board is flipped (copper up), so the bench view is the
+/// mirror image of the front-face `.drl`; rendering `Back` mirrored makes
+/// registration intuitive ("that hole, top-left" matches on screen and in the
+/// machine).
+///
+/// It does NOT change hole geometry, the alignment transform, or the G-code:
+/// drilling correctness comes entirely from registering against the real
+/// (back-side) features, which makes `alignment.fit` absorb the physical mirror.
+/// See ADR (board-side view flip).
+pub type BoardSide {
+  /// Front face up — canvas renders in the `.drl`'s native orientation.
+  Front
+  /// Back (copper) up — canvas renders X-mirrored to match the flipped board.
+  Back
+}
+
 // ── Connection / motion state machine (mirrors control/transport) ───────────
 
 /// The printer connection mode. Motion (jog / move / spindle) is structurally
@@ -337,6 +359,9 @@ pub type Model {
     applied_config: config.GcodeConfig,
     /// Count of bit changes seen so far in the active run (for the summary).
     bit_changes_seen: Int,
+    /// Which board face is up in the printer. A VIEW concern — mirrors the canvas
+    /// so the screen matches the bench. Does not affect drilling (see BoardSide).
+    board_side: BoardSide,
   )
 }
 
@@ -368,6 +393,8 @@ pub type Msg {
   ConnectDevice
   DisconnectDevice
   StartRegistering
+  /// Choose which board face is up in the printer (mirrors the canvas view).
+  SetBoardSide(BoardSide)
   /// Load the built-in sample board (segby_v1) so the demo runs with no file
   /// dialog. Picks the .drl + outline from the bundled fixture text.
   LoadSample

@@ -47,6 +47,7 @@ fn canvas_data(model: Model) -> CanvasData {
     head_confidence: model.head_confidence,
     stage: model.screen,
     zoom: model.zoom,
+    mirror: model.board_side == model.Back,
   )
 }
 
@@ -80,6 +81,7 @@ pub fn load(model: Model) -> Element(model.Msg) {
 fn load_loaded(model: Model) -> Element(model.Msg) {
   h.div([a.class("stage")], [
     diagnostic_bar(model),
+    board_side_toggle(model),
     h.div([a.class("canvas-frame")], [board_canvas.view(canvas_data(model))]),
     h.div([a.class("stage-actions")], [
       h.button(
@@ -92,6 +94,49 @@ fn load_loaded(model: Model) -> Element(model.Msg) {
         [h.text("Proceed to Align →")],
       ),
     ]),
+  ])
+}
+
+// Front/Back selector: which face is up in the printer. Mirrors the canvas so the
+// on-screen board matches the physically-flipped board during registration. A
+// VIEW concern only — drilling correctness comes from registering against the
+// real (back-side) features, which the alignment fit absorbs.
+fn board_side_toggle(model: Model) -> Element(model.Msg) {
+  let seg = fn(label, this_side, hint) {
+    h.button(
+      [
+        a.class(case model.board_side == this_side {
+          True -> "side-seg active"
+          False -> "side-seg"
+        }),
+        a.attribute("type", "button"),
+        a.attribute("aria-pressed", case model.board_side == this_side {
+          True -> "true"
+          False -> "false"
+        }),
+        a.attribute("title", hint),
+        event.on_click(model.SetBoardSide(this_side)),
+      ],
+      [h.text(label)],
+    )
+  }
+  h.div([a.class("side-toggle")], [
+    h.span([a.class("side-label")], [h.text("Board side in printer")]),
+    h.div([a.class("side-segs")], [
+      seg("Front", model.Front, "Front face up — canvas in native orientation"),
+      seg(
+        "Back (copper up)",
+        model.Back,
+        "Back/copper up — canvas mirrored to match the flipped board",
+      ),
+    ]),
+    case model.board_side {
+      model.Back ->
+        h.span([a.class("side-note")], [
+          h.text("Canvas mirrored to match the flipped board (copper up)."),
+        ])
+      model.Front -> element.none()
+    },
   ])
 }
 

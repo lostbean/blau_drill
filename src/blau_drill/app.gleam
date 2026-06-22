@@ -132,6 +132,7 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       transform: NoTransform,
       applied_config: bridge.gcode_config(cfg, config.DryRun),
       bit_changes_seen: 0,
+      board_side: model.Front,
     )
   // Re-parse the restored board (deterministic; no hardware). If the stored DRL
   // is empty or fails to parse, `parse_board` leaves the model board-less.
@@ -258,6 +259,7 @@ fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     ConnectDevice -> connect_device(model)
     DisconnectDevice -> disconnect_device(model)
     StartRegistering -> start_registering(model)
+    model.SetBoardSide(side) -> noeff(Model(..model, board_side: side))
 
     // Stage 2 — alignment
     Energize -> issue(model, printer.Energize)
@@ -967,6 +969,7 @@ fn new_board(model: Model) -> #(Model, Effect(Msg)) {
       bit_change: NoBitChange,
       summary: NoSummary,
       bit_changes_seen: 0,
+      board_side: model.Front,
     ),
   )
 }

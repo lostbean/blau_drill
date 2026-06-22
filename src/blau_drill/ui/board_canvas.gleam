@@ -67,34 +67,64 @@ pub type CanvasData {
     head_confidence: HeadConfidence,
     stage: model.Screen,
     zoom: Float,
+    /// When True, render the board X-mirrored (back/copper-up view) so the screen
+    /// matches the physically-flipped board. Applied in BOTH project and
+    /// unproject, so holes, markers, the head crosshair, AND click-to-jump stay
+    /// consistent. View-only — does not affect drilling.
+    mirror: Bool,
   )
 }
 
 // ── span / projection ───────────────────────────────────────────────────────
 
 type Span {
-  Span(w: Float, h: Float, minx: Float, miny: Float)
+  Span(w: Float, h: Float, minx: Float, miny: Float, mirror: Bool)
 }
 
-fn span(bbox: model.BBox) -> Span {
+fn span(bbox: model.BBox, mirror: Bool) -> Span {
   let w = float.max(bbox.maxx -. bbox.minx, 0.001) +. 2.0 *. pad
   let h = float.max(bbox.maxy -. bbox.miny, 0.001) +. 2.0 *. pad
-  Span(w:, h:, minx: bbox.minx, miny: bbox.miny)
+  Span(w:, h:, minx: bbox.minx, miny: bbox.miny, mirror:)
 }
 
-// Board point -> viewBox point. Y is flipped.
+// Board point -> viewBox point. Y is always flipped (math→screen); X is also
+// mirrored about the board width when `sp.mirror` (back/copper-up view).
 fn project(sp: Span, x: Float, y: Float) -> #(Float, Float) {
-  let px = x -. sp.minx +. pad
+  let px0 = x -. sp.minx +. pad
+  let px = case sp.mirror {
+    True -> sp.w -. px0
+    False -> px0
+  }
   let py = sp.h -. { y -. sp.miny +. pad }
   #(px, py)
 }
 
-// Inverse of project: a viewBox point -> board coords. Used to turn a click
-// (already in SVG user space) back into a board point for click-to-jump.
+// Inverse of project: a viewBox point -> board coords. MUST mirror the same way
+// as `project` so click-to-jump maps to the correct hole in the mirrored view.
 fn unproject(sp: Span, sx: Float, sy: Float) -> #(Float, Float) {
-  let bx = sx -. pad +. sp.minx
+  let sx0 = case sp.mirror {
+    True -> sp.w -. sx
+    False -> sx
+  }
+  let bx = sx0 -. pad +. sp.minx
   let by = sp.miny +. { sp.h -. sy } -. pad
   #(bx, by)
+}
+
+/// Test seam: project a board point to the viewBox then unproject it back, for a
+/// given bbox + mirror. MUST return the original point (within float epsilon) in
+/// BOTH orientations — that round-trip is what guarantees click-to-jump lands on
+/// the right hole when the board view is mirrored (back/copper-up). If project
+/// and unproject ever mirror differently, this breaks.
+pub fn roundtrip_board_point(
+  bbox: model.BBox,
+  mirror: Bool,
+  x: Float,
+  y: Float,
+) -> #(Float, Float) {
+  let sp = span(bbox, mirror)
+  let #(sx, sy) = project(sp, x, y)
+  unproject(sp, sx, sy)
 }
 
 // viewBox string, centred, clamped so the window stays inside the span.
@@ -158,7 +188,7 @@ fn tool_diameter(tools: List(Tool), id: String) -> Float {
 // ── the view ────────────────────────────────────────────────────────────────
 
 pub fn view(data: CanvasData) -> Element(model.Msg) {
-  let sp = span(data.bbox)
+  let sp = span(data.bbox, data.mirror)
   let mk = mark(data.zoom)
   let interactive = data.stage == Align
 
