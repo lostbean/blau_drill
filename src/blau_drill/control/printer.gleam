@@ -163,9 +163,14 @@ pub fn new() -> PrinterState {
 pub fn command(state: PrinterState, cmd: Command) -> Step {
   case state, cmd {
     // ── connect / disconnect ────────────────────────────────────────────────
+    // On connect, reset Marlin's line counter to match ours: send `M110 N0`
+    // raw. Marlin remembers its last line number across the USB session, so
+    // without this the first numbered send (N1) mismatches its expectation and
+    // it replies "Error:Line Number is not Last Line Number+1" + Resend.
     Disconnected, Connect ->
-      accepted(Idle(line_no: 0, pending: PendingNone), [], cmd)
-    _, Connect -> accepted(Idle(line_no: 0, pending: PendingNone), [], cmd)
+      accepted(Idle(line_no: 0, pending: PendingNone), ["M110 N0"], cmd)
+    _, Connect ->
+      accepted(Idle(line_no: 0, pending: PendingNone), ["M110 N0"], cmd)
 
     _, Disconnect -> Step(Disconnected, [], [Accepted(Disconnect)])
 
@@ -173,30 +178,35 @@ pub fn command(state: PrinterState, cmd: Command) -> Step {
     Disconnected, _ -> refused(state, cmd, NotConnected)
 
     // ── energize / release ──────────────────────────────────────────────────
-    Idle(line_no, _), Energize -> {
+    // Interactive one-offs (energize/release/jog/move/spindle) are sent RAW —
+    // unnumbered, like M112/M114. Only the streamed program uses line numbers +
+    // the resend handshake (where line loss matters and is recoverable). Adding
+    // these to the N-counter desynced it from Marlin on real hardware (every send
+    // → "Error:Line Number..." + Resend, never serviced outside streaming).
+    Idle(line_no, _), Energize ->
       // Energize is the structural entry into Jogging: emit M17 then settle.
-      let #(payload, n) = protocol.frame("M17", line_no)
-      accepted(Jogging(line_no: n, pending: PendingNone), [payload], cmd)
-    }
+      accepted(Jogging(line_no: line_no, pending: PendingNone), ["M17"], cmd)
     _, Energize ->
       case state {
         Faulted -> refused(state, cmd, WhileFaulted)
         _ -> refused(state, cmd, Busy)
       }
 
-    Jogging(line_no, _), Release -> {
-      let #(payload, n) = protocol.frame("M18", line_no)
-      accepted(Idle(line_no: n, pending: PendingNone), [payload], cmd)
-    }
+    Jogging(line_no, _), Release ->
+      accepted(Idle(line_no: line_no, pending: PendingNone), ["M18"], cmd)
     _, Release -> refuse_for_state(state, cmd)
 
     // ── motion (gated behind Jogging) ───────────────────────────────────────
+    // All raw/unnumbered (see energize note). Order within a burst is preserved
+    // by the controller writing them sequentially in one effect.
     Jogging(line_no, pending), Jog(axis, mm) -> {
-      // Relative move: switch to relative, move, restore absolute. The THREE
-      // lines are emitted as one ordered write batch (see module docs).
+      // Relative move: switch to relative, move, restore absolute.
       let move = "G0 " <> axis_letter(axis) <> protocol.format_mm(mm)
-      let #(writes, n) = frame_all(["G91", move, "G90"], line_no)
-      accepted(Jogging(line_no: n, pending: pending), writes, cmd)
+      accepted(
+        Jogging(line_no: line_no, pending: pending),
+        ["G91", move, "G90"],
+        cmd,
+      )
     }
     _, Jog(_, _) -> refuse_motion(state, cmd)
 
@@ -204,16 +214,17 @@ pub fn command(state: PrinterState, cmd: Command) -> Step {
       // Absolute rapid (already in G90/absolute).
       let line =
         "G0 X" <> protocol.format_mm(x) <> " Y" <> protocol.format_mm(y)
-      let #(payload, n) = protocol.frame(line, line_no)
-      accepted(Jogging(line_no: n, pending: pending), [payload], cmd)
+      accepted(Jogging(line_no: line_no, pending: pending), [line], cmd)
     }
     _, MoveTo(_, _) -> refuse_motion(state, cmd)
 
-    Jogging(line_no, pending), PulseSpindle(on_cmd, off_cmd) -> {
+    Jogging(line_no, pending), PulseSpindle(on_cmd, off_cmd) ->
       // Test the configured spindle: on, a short dwell, then off.
-      let #(writes, n) = frame_all([on_cmd, "G4 P800", off_cmd], line_no)
-      accepted(Jogging(line_no: n, pending: pending), writes, cmd)
-    }
+      accepted(
+        Jogging(line_no: line_no, pending: pending),
+        [on_cmd, "G4 P800", off_cmd],
+        cmd,
+      )
     _, PulseSpindle(_, _) -> refuse_motion(state, cmd)
 
     // ── where (M114, raw) ───────────────────────────────────────────────────
@@ -245,8 +256,9 @@ pub fn command(state: PrinterState, cmd: Command) -> Step {
     }
 
     // ── reconnect (Faulted -> Idle) ─────────────────────────────────────────
+    // Like Connect, resync Marlin's line counter with a raw `M110 N0`.
     Faulted, Reconnect ->
-      Step(Idle(line_no: 0, pending: PendingNone), [], [
+      Step(Idle(line_no: 0, pending: PendingNone), ["M110 N0"], [
         Accepted(Reconnect),
         Recovered,
       ])
@@ -402,18 +414,6 @@ fn refuse_for_state(state: PrinterState, cmd: Command) -> Step {
 }
 
 // ── small pure helpers ───────────────────────────────────────────────────────
-
-/// Frame a list of raw lines in order against a running counter. Returns the
-/// framed payloads (in order) and the advanced counter.
-fn frame_all(raws: List(String), line_no: Int) -> #(List(String), Int) {
-  let #(rev, n) =
-    list.fold(raws, #([], line_no), fn(acc, raw) {
-      let #(payloads, no) = acc
-      let #(payload, no2) = protocol.frame(raw, no)
-      #([payload, ..payloads], no2)
-    })
-  #(list.reverse(rev), n)
-}
 
 fn axis_letter(axis: Axis) -> String {
   case axis {

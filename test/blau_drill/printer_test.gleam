@@ -86,7 +86,25 @@ pub fn starts_disconnected_test() {
 pub fn connect_goes_idle_test() {
   let step = cmd(printer.new(), Connect)
   step.state |> printer.state_name |> should.equal("idle")
-  step.writes |> should.equal([])
+}
+
+// Regression: Marlin remembers its line number across a USB session, but the app
+// resets ITS counter to 0 on (re)connect. Without telling Marlin, the next send
+// (N1) mismatches Marlin's "Last Line: N" and triggers
+// "Error:Line Number is not Last Line Number+1" + Resend. So Connect must emit a
+// raw `M110 N0` (reset line number) to resync. Seen on real hardware.
+pub fn connect_emits_m110_line_reset_test() {
+  let step = cmd(printer.new(), Connect)
+  // M110 N0 is sent RAW (out-of-band — it IS the line-number reset), so the
+  // stripped form equals the literal payload (no N-prefix/checksum added).
+  step.writes |> should.equal(["M110 N0"])
+}
+
+pub fn reconnect_emits_m110_line_reset_test() {
+  let faulted = cmd(idle(), Halt).state
+  let step = cmd(faulted, Reconnect)
+  step.state |> printer.state_name |> should.equal("idle")
+  list.contains(step.writes, "M110 N0") |> should.be_true
 }
 
 pub fn energize_goes_jogging_and_sends_m17_test() {
@@ -122,11 +140,67 @@ pub fn jog_in_jogging_emits_relative_move_framed_test() {
   step.state |> printer.state_name |> should.equal("jogging")
 }
 
-pub fn jog_framing_is_correct_and_ordered_test() {
-  // After M17 (N1) the jog frames N2/N3/N4 with correct XOR checksums, in order.
+// Regression for the on-hardware disconnect: a `Resend:` / `Error:Line Number`
+// reply that arrives while NOT streaming (Jogging/Idle) must be ignored — never
+// trigger a (numbered) resend, change state, or emit writes. The original bug
+// numbered interactive jogs, so Marlin replied with these, the non-streaming
+// feed path didn't service them, and the counter desynced into a resend storm.
+// Now interactive commands are unnumbered so Marlin shouldn't send these at all,
+// but a stray one must still be handled gracefully.
+pub fn resend_while_jogging_is_ignored_test() {
+  let s = jogging()
+  let step1 =
+    feed(s, "Error:Line Number is not Last Line Number+1, Last Line: 8")
+  step1.state |> should.equal(s)
+  step1.writes |> should.equal([])
+  step1.events |> should.equal([])
+
+  let step2 = feed(s, "Resend: 9")
+  step2.state |> should.equal(s)
+  step2.writes |> should.equal([])
+  step2.events |> should.equal([])
+}
+
+pub fn resend_while_idle_is_ignored_test() {
+  let s = idle()
+  let step = feed(s, "Resend: 9")
+  step.state |> should.equal(s)
+  step.writes |> should.equal([])
+  step.events |> should.equal([])
+}
+
+// A pending Where (M114) must not be falsely resolved by a non-position reply
+// like a stray Resend/Error — it keeps waiting (no PositionUpdate, no writes).
+pub fn resend_does_not_resolve_pending_where_test() {
+  let waiting = cmd(jogging(), Where).state
+  let step = feed(waiting, "Error:Line Number is not Last Line Number+1")
+  step.writes |> should.equal([])
+  has_event(step.events, fn(e) {
+    case e {
+      PositionUpdate(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+}
+
+// Interactive one-off commands (jog/move/spindle) are sent UNNUMBERED — raw,
+// like M112/M114. Line numbers + checksums + the resend handshake are only used
+// for the streamed program (dry-run/drill), where line loss matters. Numbering
+// interactive jogs caused an unrecoverable counter desync on real hardware:
+// Marlin's "Last Line: N" drifted from the host's and every send got an
+// "Error:Line Number is not Last Line Number+1" + Resend (which the non-streaming
+// feed path never serviced). Raw interactive lines don't touch the N-counter, so
+// no desync. (The stream path stays numbered — see the stream tests.)
+pub fn jog_is_unnumbered_raw_test() {
   let step = cmd(jogging(), Jog(X, 1.0))
-  step.writes
-  |> should.equal(["N2 G91*19", "N3 G0 X1*99", "N4 G90*20"])
+  // Raw: exactly the bare G-code, no N-prefix and no *checksum.
+  step.writes |> should.equal(["G91", "G0 X1", "G90"])
+}
+
+pub fn move_to_is_unnumbered_raw_test() {
+  let step = cmd(jogging(), MoveTo(12.5, -3.0))
+  step.writes |> should.equal(["G0 X12.500 Y-3"])
 }
 
 pub fn jog_fractional_mm_is_three_decimals_test() {
@@ -389,19 +463,21 @@ pub fn reconnect_recovers_to_idle_test() {
   let faulted = cmd(idle(), Halt).state
   let step = cmd(faulted, Reconnect)
   step.state |> printer.state_name |> should.equal("idle")
-  step.writes |> should.equal([])
+  // Reconnect resyncs Marlin's line counter (raw M110 N0) — see
+  // reconnect_emits_m110_line_reset_test.
+  step.writes |> should.equal(["M110 N0"])
   has_event(step.events, fn(e) { e == Recovered }) |> should.be_true
 }
 
-pub fn reconnect_resets_line_counter_test() {
-  // Energize (N1), then halt, then reconnect: the next framed line must start at
-  // N1 again (counter reset, like the Elixir reopen).
+pub fn energize_is_raw_after_reconnect_test() {
+  // Interactive commands are unnumbered; after a halt+reconnect cycle, energize
+  // still emits a RAW M17 (no N-prefix). Marlin's line counter is resynced by the
+  // M110 N0 that Reconnect emits — see reconnect_emits_m110_line_reset_test.
   let after_energize = cmd(idle(), Energize).state
   let faulted = cmd(after_energize, Halt).state
   let recovered = cmd(faulted, Reconnect).state
-  // Energize again and check the frame counter restarted from 1.
   let step = cmd(recovered, Energize)
-  step.writes |> should.equal(["N1 M17*20"])
+  step.writes |> should.equal(["M17"])
 }
 
 // ── stream drivers (drive the pure handshake with synthetic acks) ────────────

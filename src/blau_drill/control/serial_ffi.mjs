@@ -62,21 +62,41 @@ export async function openExisting(baud) {
   }
 }
 
+// Write one line to the port. IMPORTANT: a WritableStream allows only ONE active
+// writer at a time. Callers MUST serialize writes (await each before the next) —
+// firing several concurrently makes the 2nd getWriter() throw "stream is locked",
+// which surfaces as a disconnect (this caused the first-jog disconnect, since a
+// jog is a G91/G0/G90 burst). The controller's write-sequence effect awaits each
+// write in turn; this function does not guard against concurrent callers itself.
+// Serialize ALL writes on a connection through one promise chain (conn.writeq),
+// so that even writes issued from independent effects (e.g. a jog burst and a
+// follow-up M114) can never overlap. A WritableStream allows only one active
+// writer; overlapping getWriter() calls throw "WritableStream is locked", which
+// surfaced as a disconnect after the head had already moved. The queue makes each
+// write wait for the previous to finish acquiring+releasing its writer.
 export async function write(conn, line) {
-  try {
-    if (!conn.port || !conn.port.writable) {
-      return new Error("port not writable");
-    }
-    const writer = conn.port.writable.getWriter();
+  const run = async () => {
     try {
-      await writer.write(conn.encoder.encode(line));
-    } finally {
-      writer.releaseLock();
+      if (!conn.port || !conn.port.writable) {
+        return new Error("port not writable");
+      }
+      const writer = conn.port.writable.getWriter();
+      try {
+        await writer.write(conn.encoder.encode(line));
+      } finally {
+        writer.releaseLock();
+      }
+      return new Ok(undefined);
+    } catch (e) {
+      console.warn("[serial] write failed:", e && e.message ? e.message : e);
+      return new Error(String(e && e.message ? e.message : e));
     }
-    return new Ok(undefined);
-  } catch (e) {
-    return new Error(String(e && e.message ? e.message : e));
-  }
+  };
+  // Chain onto the connection's write queue; never reject the chain itself.
+  const prev = conn.writeq || Promise.resolve();
+  const next = prev.then(run, run);
+  conn.writeq = next.catch(() => {});
+  return await next;
 }
 
 // Start the inbound read loop. Marlin replies are newline-terminated; we buffer
@@ -102,6 +122,7 @@ export function startReading(conn, onLine, onError) {
             }
           }
         } catch (e) {
+          console.warn("[serial] read loop ended (serial loss):", e && e.message ? e.message : e);
           if (!conn.closed) onError(String(e && e.message ? e.message : e));
           break;
         } finally {

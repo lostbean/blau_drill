@@ -28,9 +28,13 @@ pub fn checksum(body: String) -> Int {
   |> list.fold(0, fn(acc, byte) { int.bitwise_exclusive_or(acc, byte) })
 }
 
-/// Out-of-band commands bypass line numbering (sent raw): `M112`, `M114`.
+/// Out-of-band commands bypass line numbering (sent raw): `M112`, `M114`, `M110`.
+/// `M110` IS the line-number reset, so it carries its own `N0` and must never be
+/// wrapped in the host's incrementing N-prefix/checksum.
 pub fn is_oob(raw: String) -> Bool {
-  string.starts_with(raw, "M112") || string.starts_with(raw, "M114")
+  string.starts_with(raw, "M112")
+  || string.starts_with(raw, "M114")
+  || string.starts_with(raw, "M110")
 }
 
 /// Frame a raw line for the given line counter. Returns `#(payload, next_line_no)`.

@@ -20,8 +20,7 @@
 
 import blau_drill/control/backend.{type Backend, type Conn}
 import blau_drill/control/printer.{type Command, type Event, type PrinterState}
-import gleam/javascript/promise
-import gleam/list
+import gleam/javascript/promise.{type Promise}
 import lustre/effect.{type Effect}
 
 // ── controller record ────────────────────────────────────────────────────────
@@ -175,12 +174,39 @@ fn write_seq_effect(
   payloads: List(String),
 ) -> Effect(ControllerMsg) {
   use dispatch <- effect.from
-  list.each(payloads, fn(payload) {
-    b.write(conn, payload <> "\n")
-    |> promise.map(fn(res) { dispatch(WriteDone(res)) })
-    Nil
-  })
+  perform_writes(b, conn, payloads)
+  |> promise.map(fn(res) { dispatch(WriteDone(res)) })
   Nil
+}
+
+/// Write a burst of framed payloads to the port, SERIALIZED: each write is
+/// awaited before the next begins, and the burst short-circuits on the first
+/// error. Returns a single `Result` for the whole burst.
+///
+/// Serialization is essential, not stylistic: a Web Serial `WritableStream`
+/// allows only one active writer at a time, so firing the lines of a jog burst
+/// (`G91`/`G0`/`G90`) concurrently makes the 2nd `getWriter()` throw "stream is
+/// locked" — which the controller would read as serial loss and disconnect. This
+/// is exactly the first-jog-disconnect bug; awaiting each write avoids the
+/// overlapping writer. Each payload gets the trailing newline.
+pub fn perform_writes(
+  b: Backend,
+  conn: Conn,
+  payloads: List(String),
+) -> Promise(Result(Nil, String)) {
+  case payloads {
+    [] -> promise.resolve(Ok(Nil))
+    [payload, ..rest] ->
+      b.write(conn, payload <> "\n")
+      |> promise.await(fn(res) {
+        case res {
+          // Await this write fully before starting the next (single-writer rule).
+          Ok(_) -> perform_writes(b, conn, rest)
+          // Short-circuit: surface the failure so the caller can fault.
+          Error(reason) -> promise.resolve(Error(reason))
+        }
+      })
+  }
 }
 
 // ── inspection ───────────────────────────────────────────────────────────────
