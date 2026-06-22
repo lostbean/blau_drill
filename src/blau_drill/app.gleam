@@ -563,26 +563,16 @@ fn jog(model: Model, axis: String, sign: Float) -> #(Model, Effect(Msg)) {
         "Z" -> printer.Jog(printer.Z, mm)
         _ -> printer.Jog(printer.X, 0.0)
       }
-      // Issue the jog now; query position (M114) on the NEXT tick so the jog's
-      // ordered writes (G91/G0/G90) reach the wire BEFORE the M114 read — folding
-      // both into one `effect.batch` here would let `effect.batch`'s synchronous
-      // reversal run M114 first and read a stale position.
-      let #(m1, eff1) = issue(model, pcmd)
-      #(m1, effect.batch([eff1, request_where_effect()]))
+      // The jog burst now ends with M114 (in the same serialized write
+      // sequence), so the position reply reflects the settled head — no separate,
+      // racing query needed.
+      issue(model, pcmd)
     }
   }
 }
 
 // Dispatch a position query (M114) on the next microtask, so it runs after the
 // preceding motion effect's writes have been performed.
-fn request_where_effect() -> Effect(Msg) {
-  use dispatch <- effect.from
-  promise.resolve(Nil)
-  |> promise.map(fn(_) {
-    dispatch(ControllerEvent(controller.Issue(printer.Where)))
-  })
-  Nil
-}
 
 fn test_spindle(model: Model) -> #(Model, Effect(Msg)) {
   case model.printer == Jogging {
@@ -604,8 +594,10 @@ fn jump_to(model: Model, point: #(Float, Float)) -> #(Model, Effect(Msg)) {
       case bridge.board_to_machine(model.transform, model.captures, point) {
         Error(_) -> noeff(model)
         Ok(#(mx, my)) -> {
-          let #(m1, eff1) = issue(model, printer.MoveTo(mx, my))
-          #(m1, effect.batch([eff1, request_where_effect()]))
+          // Safe jump: retract to zsafe, travel, descend to hover (config values).
+          // The burst ends with M114, so the settled position is read with no race.
+          let cfg = model.applied_config
+          issue(model, printer.MoveTo(mx, my, cfg.zsafe, cfg.hover))
         }
       }
   }

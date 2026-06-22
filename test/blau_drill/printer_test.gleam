@@ -135,8 +135,8 @@ pub fn jog_in_idle_writes_nothing_and_refuses_test() {
 
 pub fn jog_in_jogging_emits_relative_move_framed_test() {
   let step = cmd(jogging(), Jog(X, 1.0))
-  // Energized: emits exactly G91 / G0 X1 / G90 in order.
-  stripped_writes(step) |> should.equal(["G91", "G0 X1", "G90"])
+  // Energized: emits G91 / G0 X1 / G90 in order, then M114 to read the position.
+  stripped_writes(step) |> should.equal(["G91", "G0 X1", "G90", "M114"])
   step.state |> printer.state_name |> should.equal("jogging")
 }
 
@@ -194,32 +194,47 @@ pub fn resend_does_not_resolve_pending_where_test() {
 // no desync. (The stream path stays numbered — see the stream tests.)
 pub fn jog_is_unnumbered_raw_test() {
   let step = cmd(jogging(), Jog(X, 1.0))
-  // Raw: exactly the bare G-code, no N-prefix and no *checksum.
-  step.writes |> should.equal(["G91", "G0 X1", "G90"])
+  // Raw: bare G-code, no N-prefix/checksum; M114 (also raw) closes the burst.
+  step.writes |> should.equal(["G91", "G0 X1", "G90", "M114"])
 }
 
+// Click-to-jump (MoveTo) is a SAFE jump: retract to zsafe, THEN move XY, THEN
+// descend to the hover height — never a flat XY rapid at the current Z (which
+// could drag the bit across the board). Raw/unnumbered like other interactive
+// commands. zsafe/hover are passed in (from config) so the pure core stays
+// config-agnostic.
 pub fn move_to_is_unnumbered_raw_test() {
-  let step = cmd(jogging(), MoveTo(12.5, -3.0))
-  step.writes |> should.equal(["G0 X12.500 Y-3"])
+  let step = cmd(jogging(), MoveTo(12.5, -3.0, 5.0, 0.2))
+  // Burst ends with M114 so the settled position is read in the same sequence.
+  step.writes
+  |> should.equal(["G0 Z5", "G0 X12.500 Y-3", "G0 Z0.200", "M114"])
 }
 
 pub fn jog_fractional_mm_is_three_decimals_test() {
   let step = cmd(jogging(), Jog(Y, 1.5))
-  stripped_writes(step) |> should.equal(["G91", "G0 Y1.500", "G90"])
+  stripped_writes(step) |> should.equal(["G91", "G0 Y1.500", "G90", "M114"])
 }
 
 pub fn move_to_in_idle_writes_nothing_test() {
-  let step = cmd(idle(), MoveTo(10.0, 20.0))
+  let step = cmd(idle(), MoveTo(10.0, 20.0, 5.0, 0.2))
   step.writes |> should.equal([])
   has_event(step.events, fn(e) {
-    e == Refused(MoveTo(10.0, 20.0), NotEnergized)
+    e == Refused(MoveTo(10.0, 20.0, 5.0, 0.2), NotEnergized)
   })
   |> should.be_true
 }
 
-pub fn move_to_in_jogging_emits_absolute_g0_test() {
-  let step = cmd(jogging(), MoveTo(12.5, -3.0))
-  stripped_writes(step) |> should.equal(["G0 X12.500 Y-3"])
+pub fn move_to_retracts_before_xy_test() {
+  // Safety: the retract (G0 Z<zsafe>) must come BEFORE the XY move, and the XY
+  // move before the descent — so the bit is never dragged across the board. The
+  // trailing M114 reads the settled position.
+  let step = cmd(jogging(), MoveTo(12.5, -3.0, 5.0, 0.2))
+  let assert [first, second, third, fourth] = stripped_writes(step)
+  string.starts_with(first, "G0 Z5") |> should.be_true
+  string.contains(second, "X12.500") |> should.be_true
+  string.contains(second, "Z") |> should.be_false
+  string.starts_with(third, "G0 Z0.200") |> should.be_true
+  fourth |> should.equal("M114")
   // Absolute — must NOT switch to relative like jog does.
   list.any(stripped_writes(step), fn(w) { string.contains(w, "G91") })
   |> should.be_false

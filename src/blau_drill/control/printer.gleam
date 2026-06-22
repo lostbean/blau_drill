@@ -95,8 +95,11 @@ pub type Command {
   Release
   /// Relative jog of `axis` by `mm`. Only valid in `Jogging`.
   Jog(axis: Axis, mm: Float)
-  /// Absolute rapid (`G0 X.. Y..`) to a machine point. Only valid in `Jogging`.
-  MoveTo(x: Float, y: Float)
+  /// Click-to-jump to an absolute machine XY. A SAFE jump: retract to `z_safe`,
+  /// move XY at that height, then descend to `z_hover` — never a flat XY rapid at
+  /// the current Z (which could drag the bit across the board). `z_safe`/`z_hover`
+  /// are supplied by the caller from config so the core stays config-agnostic.
+  MoveTo(x: Float, y: Float, z_safe: Float, z_hover: Float)
   /// Pulse the configured spindle: `on_cmd`, an `G4 P800` dwell, then `off_cmd`.
   /// Only valid in `Jogging` (gated like motion).
   PulseSpindle(on_cmd: String, off_cmd: String)
@@ -199,24 +202,36 @@ pub fn command(state: PrinterState, cmd: Command) -> Step {
     // ── motion (gated behind Jogging) ───────────────────────────────────────
     // All raw/unnumbered (see energize note). Order within a burst is preserved
     // by the controller writing them sequentially in one effect.
-    Jogging(line_no, pending), Jog(axis, mm) -> {
-      // Relative move: switch to relative, move, restore absolute.
+    Jogging(line_no, _pending), Jog(axis, mm) -> {
+      // Relative move: switch to relative, move, restore absolute. M114 is the
+      // LAST line of the SAME burst so the position reply reflects the settled
+      // head — the caller no longer needs a separate (racing) query.
       let move = "G0 " <> axis_letter(axis) <> protocol.format_mm(mm)
       accepted(
-        Jogging(line_no: line_no, pending: pending),
-        ["G91", move, "G90"],
+        Jogging(line_no: line_no, pending: PendingWhere),
+        ["G91", move, "G90", "M114"],
         cmd,
       )
     }
     _, Jog(_, _) -> refuse_motion(state, cmd)
 
-    Jogging(line_no, pending), MoveTo(x, y) -> {
-      // Absolute rapid (already in G90/absolute).
-      let line =
-        "G0 X" <> protocol.format_mm(x) <> " Y" <> protocol.format_mm(y)
-      accepted(Jogging(line_no: line_no, pending: pending), [line], cmd)
+    Jogging(line_no, _pending), MoveTo(x, y, z_safe, z_hover) -> {
+      // SAFE jump (absolute / G90): retract to z_safe FIRST so the bit clears the
+      // board, then travel XY at that height, then descend to z_hover (just above
+      // the surface) — never a flat XY rapid at the current Z. The lines are
+      // written in order by the controller (one effect), so the retract always
+      // precedes the XY move. M114 is the LAST line of the SAME burst, so the
+      // position reply reflects the SETTLED head — no race with a separate query.
+      let xy = "G0 X" <> protocol.format_mm(x) <> " Y" <> protocol.format_mm(y)
+      let writes = [
+        "G0 Z" <> protocol.format_mm(z_safe),
+        xy,
+        "G0 Z" <> protocol.format_mm(z_hover),
+        "M114",
+      ]
+      accepted(Jogging(line_no: line_no, pending: PendingWhere), writes, cmd)
     }
-    _, MoveTo(_, _) -> refuse_motion(state, cmd)
+    _, MoveTo(_, _, _, _) -> refuse_motion(state, cmd)
 
     Jogging(line_no, pending), PulseSpindle(on_cmd, off_cmd) ->
       // Test the configured spindle: on, a short dwell, then off.
