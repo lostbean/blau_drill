@@ -5,9 +5,9 @@ import blau_drill/domain/correspondence.{type Correspondence, Correspondence}
 import blau_drill/domain/job.{
   type Job, Aligned, AlignmentRejected, Capture, Complete, ConfirmRegistration,
   ConfirmRegistrationE, Done, Drilling, DryRun, Faulted, Fit, FitDegenerate,
-  FitTooFew, IllegalTransition, Parsed, Recapture, Reconnect, RedoAlignment,
-  Registering, RestartAlignment, RunDryRun, RunDryRunE, SerialLoss,
-  StartRegistering, StartRegisteringE,
+  FitTooFew, IllegalTransition, OverrideAlignment, OverrideAlignmentE, Parsed,
+  Recapture, Reconnect, RedoAlignment, Registering, RestartAlignment, RunDryRun,
+  RunDryRunE, SerialLoss, StartRegistering, StartRegisteringE,
 }
 import blau_drill/domain/pending_alignment
 import gleam/list
@@ -120,7 +120,41 @@ pub fn fit_over_tol_routes_to_rejected_test() {
   j.state |> should.equal(AlignmentRejected)
   let assert Some(r) = j.residuals
   { r.max >. 0.05 } |> should.be_true
-  j.alignment |> should.equal(None)
+  // The over-tolerance alignment is KEPT (not dropped) so the operator can
+  // inspect per-point residuals and, with an explicit override, proceed on it.
+  case j.alignment {
+    Some(_) -> Nil
+    None -> should.fail()
+  }
+}
+
+// Explicit acknowledged override: a rejected fit can be promoted to Aligned on
+// its already-solved transform. This is the ONLY non-recapture path past the
+// residual gate (the UI gates it behind a deliberate confirm).
+pub fn override_rejected_promotes_to_aligned_test() {
+  let j = register_with(job(), misfit_corrs())
+  let assert Ok(rj) = job.transition(j, Fit(0.05))
+  rj.state |> should.equal(AlignmentRejected)
+  let assert Ok(aj) = job.transition(rj, OverrideAlignment)
+  aj.state |> should.equal(Aligned)
+  // The transform carried through is the same solved (over-tol) one.
+  case aj.alignment {
+    Some(_) -> Nil
+    None -> should.fail()
+  }
+}
+
+// Override is listed as legal exactly in AlignmentRejected — not elsewhere.
+pub fn override_is_legal_only_when_rejected_test() {
+  let j = register_with(job(), misfit_corrs())
+  let assert Ok(rj) = job.transition(j, Fit(0.05))
+  job.can(rj, OverrideAlignmentE) |> should.be_true
+
+  // From a clean Aligned (good fit) it is not legal.
+  let good = register_with(job(), exact_corrs())
+  let assert Ok(aj) = job.transition(good, Fit(0.1))
+  aj.state |> should.equal(Aligned)
+  job.can(aj, OverrideAlignmentE) |> should.be_false
 }
 
 pub fn same_fit_looser_tol_passes_test() {

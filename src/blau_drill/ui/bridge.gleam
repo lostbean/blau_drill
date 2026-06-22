@@ -146,6 +146,101 @@ pub fn parse_error_message(err: board_model.ParseError) -> String {
   }
 }
 
+// ── alignment-fit diagnostics ────────────────────────────────────────────────
+
+/// Diagnose a completed (over-tolerance) fit from its per-point errors + tol.
+/// `point_errors` is in capture order (from `alignment.point_errors`). Returns a
+/// `model.FitDiag` with per-point residuals, the worst point, a likely-cause
+/// hint, and `can_override: True` (a transform was solved).
+pub fn diagnose_fit(point_errors: List(Float), tol: Float) -> model.FitDiag {
+  let points =
+    point_errors
+    |> list.index_map(fn(e, i) { model.PointResidual(index: i, error_mm: e) })
+  let worst = worst_point(points)
+  model.FitDiag(
+    points:,
+    worst:,
+    hint: fit_hint(points, worst, tol),
+    can_override: True,
+  )
+}
+
+/// Diagnosis for a degenerate fit (collinear / coincident points): no per-point
+/// residuals (the fit didn't solve) and NO override — just geometry guidance.
+pub fn degenerate_diagnosis() -> model.FitDiag {
+  model.FitDiag(
+    points: [],
+    worst: model.NoWorst,
+    hint: "Points are nearly in a line (or too close together). Capture a third "
+      <> "point well off that line — spread the fiducials across the board.",
+    can_override: False,
+  )
+}
+
+fn worst_point(points: List(model.PointResidual)) -> model.WorstOpt {
+  case points {
+    [] -> model.NoWorst
+    [first, ..rest] ->
+      model.HaveWorst(
+        list.fold(rest, first, fn(acc, p) {
+          case p.error_mm >. acc.error_mm {
+            True -> p
+            False -> acc
+          }
+        }),
+      )
+  }
+}
+
+/// Heuristic likely-cause hint:
+///   * one point much worse than the rest → that point is likely mis-captured;
+///   * all points similarly over tolerance → a systematic error (wrong board
+///     origin / wrong point clicked / board shifted);
+///   * otherwise → generic recapture guidance.
+fn fit_hint(
+  points: List(model.PointResidual),
+  worst: model.WorstOpt,
+  tol: Float,
+) -> String {
+  case worst {
+    model.NoWorst -> "Capture at least 3 well-spread points and fit again."
+    model.HaveWorst(w) -> {
+      // Median-ish reference: the second-worst error. If the worst dwarfs the
+      // rest, it's an outlier (one bad capture); if all are high, it's systemic.
+      let others =
+        points
+        |> list.filter(fn(p) { p.index != w.index })
+        |> list.map(fn(p) { p.error_mm })
+      let next_worst = case others {
+        [] -> 0.0
+        _ -> list.fold(others, 0.0, float.max)
+      }
+      case w.error_mm >. 2.0 *. float.max(next_worst, tol), next_worst <=. tol {
+        // Worst is a clear outlier AND the rest are within tolerance.
+        True, True ->
+          "Point "
+          <> int.to_string(w.index + 1)
+          <> " is off by "
+          <> float.to_string(round2(w.error_mm))
+          <> " mm while the others are within tolerance — it was likely "
+          <> "mis-captured. Recapture just that point."
+        // All points are over tolerance: a systematic problem.
+        _, False ->
+          "All points are over tolerance — likely the wrong board origin, the "
+          <> "wrong feature clicked, or the board shifted between captures. "
+          <> "Re-check the board origin and recapture."
+        // Mixed.
+        _, _ ->
+          "Worst point ("
+          <> int.to_string(w.index + 1)
+          <> ") is "
+          <> float.to_string(round2(w.error_mm))
+          <> " mm off. Recapture it (or all) and fit again."
+      }
+    }
+  }
+}
+
 // ── pre-fit click-to-jump estimate ───────────────────────────────────────────
 
 /// Best machine point for a board point, using whatever transform is available:

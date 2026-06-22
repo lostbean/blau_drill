@@ -439,22 +439,106 @@ fn quality_class(pct: Int) -> #(String, String) {
 
 fn rejected_box(model: Model) -> Element(model.Msg) {
   case model.alignment_rejected {
-    True ->
-      h.div([a.class("rejected-box")], [
-        h.text(
-          "Alignment rejected — residual over tolerance. Recapture fiducials.",
-        ),
-        h.button(
-          [
-            a.class("btn btn-surface btn-block"),
-            a.style("margin-top", "0.75rem"),
-            a.attribute("type", "button"),
-            event.on_click(Recapture),
-          ],
-          [h.text("Recapture")],
-        ),
-      ])
     False -> element.none()
+    True -> {
+      let #(hint, points, can_override) = case model.fit_diag {
+        model.HaveFitDiag(d) -> #(d.hint, fit_point_rows(d), d.can_override)
+        model.NoFitDiag -> #(
+          "Alignment rejected — residual over tolerance.",
+          [],
+          False,
+        )
+      }
+      h.div(
+        [a.class("rejected-box")],
+        list.flatten([
+          [
+            h.p([a.class("rejected-title")], [h.text("⚠ Alignment rejected")]),
+            h.p([a.class("rejected-hint")], [h.text(hint)]),
+          ],
+          points,
+          [
+            h.button(
+              [
+                a.class("btn btn-primary btn-block"),
+                a.style("margin-top", "0.75rem"),
+                a.attribute("type", "button"),
+                event.on_click(Recapture),
+              ],
+              [h.text("Recapture fiducials")],
+            ),
+          ],
+          // The explicit, acknowledged override — only when a transform solved.
+          case can_override {
+            True -> [
+              h.div([a.class("override-box")], [
+                h.p([a.class("override-warn")], [
+                  h.text(
+                    "Override: proceed on this fit despite "
+                    <> fmt3(model.residual_max)
+                    <> " mm error. Holes may be off by this much. Only do this if "
+                    <> "you understand the risk.",
+                  ),
+                ]),
+                h.button(
+                  [
+                    a.class("btn btn-danger btn-block"),
+                    a.attribute("type", "button"),
+                    event.on_click(model.OverrideAlignment),
+                  ],
+                  [
+                    h.text(
+                      "Proceed anyway (" <> fmt3(model.residual_max) <> " mm)",
+                    ),
+                  ],
+                ),
+              ]),
+            ]
+            False -> []
+          },
+        ]),
+      )
+    }
+  }
+}
+
+// Per-fiducial residual rows; the worst point is flagged.
+fn fit_point_rows(d: model.FitDiag) -> List(Element(model.Msg)) {
+  let worst_idx = case d.worst {
+    model.HaveWorst(w) -> w.index
+    model.NoWorst -> -1
+  }
+  case d.points {
+    [] -> []
+    points -> [
+      h.div(
+        [a.class("residual-list")],
+        list.map(points, fn(p) {
+          let is_worst = p.index == worst_idx
+          h.div(
+            [
+              a.class(case is_worst {
+                True -> "residual-row worst"
+                False -> "residual-row"
+              }),
+            ],
+            [
+              h.span([], [h.text("Point " <> int.to_string(p.index + 1))]),
+              h.span([], [
+                h.text(
+                  fmt3(p.error_mm)
+                  <> " mm"
+                  <> case is_worst {
+                    True -> "  ← worst"
+                    False -> ""
+                  },
+                ),
+              ]),
+            ],
+          )
+        }),
+      ),
+    ]
   }
 }
 

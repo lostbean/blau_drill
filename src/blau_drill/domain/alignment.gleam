@@ -218,19 +218,27 @@ fn residuals(
   transform: Transform2D,
   correspondences: List(Correspondence),
 ) -> Residuals {
-  let errors =
-    list.map(correspondences, fn(corr) {
-      let Correspondence(board: board, machine: #(mx, my)) = corr
-      let #(px, py) = transform2d.apply(transform, board)
-      let dx = px -. mx
-      let dy = py -. my
-      float_sqrt(dx *. dx +. dy *. dy)
-    })
-
+  let errors = point_errors(transform, correspondences)
   let n = int.to_float(list.length(errors))
   let sum_sq = list.fold(errors, 0.0, fn(acc, e) { acc +. e *. e })
-
   Residuals(rms: float_sqrt(sum_sq /. n), max: max_list(errors))
+}
+
+/// The per-correspondence residual: the Euclidean distance (mm) between where the
+/// transform projects each board point and where its machine point was captured,
+/// in the SAME order as `correspondences`. Lets the UI show which captured point
+/// is off and by how much (the worst-point callout / per-fiducial diagnostics).
+pub fn point_errors(
+  transform: Transform2D,
+  correspondences: List(Correspondence),
+) -> List(Float) {
+  list.map(correspondences, fn(corr) {
+    let Correspondence(board: board, machine: #(mx, my)) = corr
+    let #(px, py) = transform2d.apply(transform, board)
+    let dx = px -. mx
+    let dy = py -. my
+    float_sqrt(dx *. dx +. dy *. dy)
+  })
 }
 
 fn max_list(xs: List(Float)) -> Float {

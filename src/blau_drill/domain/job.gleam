@@ -53,6 +53,11 @@ pub type Event {
   Capture(Correspondence)
   Fit(tol: Float)
   Recapture
+  /// Explicit, acknowledged override of a rejected (over-tolerance) fit:
+  /// `AlignmentRejected -> Aligned` on the already-solved transform. The residual
+  /// gate stays a hard guard; this is the ONLY non-recapture way past it, and the
+  /// UI gates it behind a deliberate confirm.
+  OverrideAlignment
   RestartAlignment
   RunDryRun
   RedoAlignment
@@ -69,6 +74,7 @@ pub type EventName {
   CaptureE
   FitE
   RecaptureE
+  OverrideAlignmentE
   RestartAlignmentE
   RunDryRunE
   RedoAlignmentE
@@ -157,11 +163,16 @@ pub fn transition(job: Job, event: Event) -> Result(Job, TransitionError) {
                 ),
               )
             False ->
+              // Keep the solved (but over-tolerance) alignment so the operator
+              // can inspect per-point residuals AND, with an explicit
+              // acknowledged override, proceed on it. The residual gate stays a
+              // hard guard — `AlignmentRejected` still has no path to drilling
+              // except via `OverrideAlignment` (loud, deliberate) or recapture.
               Ok(
                 Job(
                   ..job,
                   state: AlignmentRejected,
-                  alignment: None,
+                  alignment: Some(al),
                   residuals: Some(r),
                 ),
               )
@@ -173,6 +184,16 @@ pub fn transition(job: Job, event: Event) -> Result(Job, TransitionError) {
 
     // alignment_rejected -> registering : recapture
     AlignmentRejected, Recapture -> Ok(Job(..job, state: Registering))
+
+    // alignment_rejected -> aligned : explicit acknowledged override. Promotes
+    // the already-solved (over-tolerance) alignment so the flow can continue.
+    // Only legal when an alignment is actually present; the UI gates this behind
+    // a deliberate confirm. The residual gate is otherwise untouched.
+    AlignmentRejected, OverrideAlignment ->
+      case job.alignment {
+        Some(_) -> Ok(Job(..job, state: Aligned))
+        None -> Error(IllegalTransition)
+      }
 
     // {registering | aligned | alignment_rejected} -> registering :
     // start the whole alignment over (WIPES pending/alignment/residuals).
@@ -220,7 +241,7 @@ pub fn legal_events(job: Job) -> List(EventName) {
   case job.state {
     Parsed -> [StartRegisteringE]
     Registering -> [CaptureE, FitE, RestartAlignmentE]
-    AlignmentRejected -> [RecaptureE, RestartAlignmentE]
+    AlignmentRejected -> [RecaptureE, OverrideAlignmentE, RestartAlignmentE]
     Aligned -> [RunDryRunE, RestartAlignmentE]
     DryRun -> [RedoAlignmentE, ConfirmRegistrationE]
     Drilling -> [CompleteE, SerialLossE]

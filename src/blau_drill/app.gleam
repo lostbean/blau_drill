@@ -46,16 +46,16 @@ import blau_drill/ui/model.{
   ConfRough, ConfirmRegistration, ConnectDevice, Connection, ControllerEvent,
   DisconnectDevice, Disconnected, Done, Drill, DrillMode, DrlPicked, DryRun,
   DryRunMode, Energize, Faulted, Fiducial, Fit, GoToSession, GoToSettings,
-  HaveBitChange, HaveBoard, HaveBoardModel, HaveDiagnostic, HaveHeadPos, HaveJob,
-  HaveProgress, HaveSummary, HaveTransform, Head, HoleDone, Jog, Jogging, JumpTo,
-  Load, LoadSample, Model, NavStage, NewBoard, NoBitChange, NoBoard,
-  NoBoardModel, NoDiagnostic, NoHeadPos, NoJob, NoProgress, NoSummary,
-  NoTransform, OutlinePicked, ParseBoard, Progress, RealBackend, Recapture,
-  Reconnect, RedoAlignment, Release, ResetDefaults, ResetView, RestartAlignment,
-  ResumeDrilling, RunDryRun, SelectBackend, SelectCategory, SelectFile,
-  SelectOutline, SetConfigField, SetCurrentTarget, SetJogStep, Settings,
-  SimBackend, StageAlign, StageDone, StageDrill, StageDryRun, StageLoad,
-  StartRegistering, Summary, TestSpindle, ToggleAutoConnect,
+  HaveBitChange, HaveBoard, HaveBoardModel, HaveDiagnostic, HaveFitDiag,
+  HaveHeadPos, HaveJob, HaveProgress, HaveSummary, HaveTransform, Head, HoleDone,
+  Jog, Jogging, JumpTo, Load, LoadSample, Model, NavStage, NewBoard, NoBitChange,
+  NoBoard, NoBoardModel, NoDiagnostic, NoFitDiag, NoHeadPos, NoJob, NoProgress,
+  NoSummary, NoTransform, OutlinePicked, ParseBoard, Progress, RealBackend,
+  Recapture, Reconnect, RedoAlignment, Release, ResetDefaults, ResetView,
+  RestartAlignment, ResumeDrilling, RunDryRun, SelectBackend, SelectCategory,
+  SelectFile, SelectOutline, SetConfigField, SetCurrentTarget, SetJogStep,
+  Settings, SimBackend, StageAlign, StageDone, StageDrill, StageDryRun,
+  StageLoad, StartRegistering, Summary, TestSpindle, ToggleAutoConnect,
 }
 import blau_drill/ui/sample
 import blau_drill/ui/shell
@@ -112,6 +112,7 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       residual_max: 0.0,
       residual_rms: 0.0,
       alignment_rejected: False,
+      fit_diag: NoFitDiag,
       progress: NoProgress,
       bit_change: NoBitChange,
       summary: NoSummary,
@@ -272,6 +273,7 @@ fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     model.CaptureFiducial -> capture(model)
     Fit -> fit(model)
     Recapture -> recapture(model)
+    model.OverrideAlignment -> override_alignment(model)
     RestartAlignment -> restart_alignment(model)
     RunDryRun -> run_dry_run(model)
 
@@ -665,13 +667,20 @@ fn can_capture(j: job.Job) -> Bool {
 }
 
 // Fit: drive the job FSM Fit(tol). On Aligned, store the transform + quality; on
-// AlignmentRejected, set the recapture path. A failed fit (too few / degenerate)
-// leaves the model unchanged (the FSM stays in Registering).
+// AlignmentRejected, build actionable diagnostics (per-point residuals + worst
+// point + likely-cause hint) and offer the explicit override. A degenerate /
+// too-few fit no longer silently no-ops — it surfaces guidance.
 fn fit(model: Model) -> #(Model, Effect(Msg)) {
   case model.job {
     HaveJob(j) ->
       case list.length(model.captures) >= 3 {
-        False -> noeff(model)
+        False ->
+          noeff(
+            Model(
+              ..model,
+              upload_error: "Capture at least 3 fiducials before fitting.",
+            ),
+          )
         True ->
           case job.transition(j, job.Fit(j.tol)) {
             Ok(j2) ->
@@ -683,6 +692,18 @@ fn fit(model: Model) -> #(Model, Effect(Msg)) {
                   }
                 job.AlignmentRejected -> {
                   let #(rmax, rrms) = residuals_of(j2)
+                  // Per-point residuals from the (kept) solved transform.
+                  let diag = case j2.alignment {
+                    Some(al) -> {
+                      let errs =
+                        alignment.point_errors(
+                          al.transform,
+                          j2.pending.captured,
+                        )
+                      HaveFitDiag(bridge.diagnose_fit(errs, j.tol))
+                    }
+                    None -> NoFitDiag
+                  }
                   noeff(
                     Model(
                       ..model,
@@ -691,12 +712,30 @@ fn fit(model: Model) -> #(Model, Effect(Msg)) {
                       residual_max: rmax,
                       residual_rms: rrms,
                       alignment_rejected: True,
+                      fit_diag: diag,
+                      upload_error: "",
                     ),
                   )
                 }
                 _ -> noeff(Model(..model, job: HaveJob(j2)))
               }
-            Error(_) -> noeff(model)
+            // A failed fit no longer silently does nothing: degenerate → geometry
+            // guidance; too-few → count guidance.
+            Error(job.FitDegenerate) ->
+              noeff(
+                Model(
+                  ..model,
+                  alignment_rejected: True,
+                  fit_diag: HaveFitDiag(bridge.degenerate_diagnosis()),
+                ),
+              )
+            Error(_) ->
+              noeff(
+                Model(
+                  ..model,
+                  upload_error: "Capture at least 3 well-spread fiducials.",
+                ),
+              )
           }
       }
     NoJob -> noeff(model)
@@ -753,11 +792,30 @@ fn recapture(model: Model) -> #(Model, Effect(Msg)) {
       current_target: 0,
       quality: -1,
       alignment_rejected: False,
+      fit_diag: NoFitDiag,
       transform: NoTransform,
       head_pos: NoHeadPos,
       head_confidence: ConfNone,
     ),
   )
+}
+
+// Explicit acknowledged override: promote the rejected (over-tolerance) fit to
+// Aligned on its solved transform, then apply it like a normal fit. The UI gates
+// this behind a deliberate confirm, so reaching here IS the acknowledgement.
+fn override_alignment(model: Model) -> #(Model, Effect(Msg)) {
+  case model.job {
+    HaveJob(j) ->
+      case job.transition(j, job.OverrideAlignment) {
+        Ok(j2) ->
+          case j2.alignment {
+            Some(al) -> noeff(apply_fit(model, j2, al, True))
+            None -> noeff(model)
+          }
+        Error(_) -> noeff(model)
+      }
+    NoJob -> noeff(model)
+  }
 }
 
 fn restart_alignment(model: Model) -> #(Model, Effect(Msg)) {
@@ -771,6 +829,7 @@ fn restart_alignment(model: Model) -> #(Model, Effect(Msg)) {
       current_target: 0,
       quality: -1,
       alignment_rejected: False,
+      fit_diag: NoFitDiag,
       transform: NoTransform,
       head_pos: NoHeadPos,
       head_confidence: ConfNone,
@@ -965,6 +1024,7 @@ fn new_board(model: Model) -> #(Model, Effect(Msg)) {
       residual_max: 0.0,
       residual_rms: 0.0,
       alignment_rejected: False,
+      fit_diag: NoFitDiag,
       progress: NoProgress,
       bit_change: NoBitChange,
       summary: NoSummary,

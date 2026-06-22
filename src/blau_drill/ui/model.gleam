@@ -175,6 +175,38 @@ pub type DiagnosticOpt {
   HaveDiagnostic(Diagnostic)
 }
 
+// ── Alignment-fit diagnostics ───────────────────────────────────────────────
+
+/// One captured point's residual for the per-fiducial diagnostics list.
+/// `index` is 0-based (the UI shows 1-based); `error_mm` is its residual.
+pub type PointResidual {
+  PointResidual(index: Int, error_mm: Float)
+}
+
+/// Actionable read on a fit: per-point residuals, the worst point, a hint, and
+/// whether an override is available (a transform was solved). `bridge.diagnose_fit`
+/// builds this; the rejected-fit panel renders it.
+pub type FitDiag {
+  FitDiag(
+    points: List(PointResidual),
+    worst: WorstOpt,
+    hint: String,
+    /// True when the fit solved a transform (so override is possible); False for
+    /// degenerate/too-few fits (recapture only).
+    can_override: Bool,
+  )
+}
+
+pub type WorstOpt {
+  NoWorst
+  HaveWorst(PointResidual)
+}
+
+pub type FitDiagOpt {
+  NoFitDiag
+  HaveFitDiag(FitDiag)
+}
+
 // ── Live head ───────────────────────────────────────────────────────────────
 
 /// The live machine-head position (machine coords) for the bottom-bar readout,
@@ -321,6 +353,10 @@ pub type Model {
     residual_rms: Float,
     /// True when a fit produced residuals over tolerance (recapture path).
     alignment_rejected: Bool,
+    /// Actionable diagnosis of the last fit (per-point residuals + worst point +
+    /// likely-cause hint), shown on the rejected-fit panel. `NoFitDiag` until a
+    /// fit has produced diagnostics.
+    fit_diag: FitDiagOpt,
     progress: ProgressOpt,
     bit_change: BitChangeOpt,
     summary: SummaryOpt,
@@ -422,6 +458,9 @@ pub type Msg {
   CaptureFiducial
   Fit
   Recapture
+  /// Explicit, acknowledged override of a rejected (over-tolerance) fit — proceed
+  /// on the solved transform despite residuals over tolerance.
+  OverrideAlignment
   RestartAlignment
   RunDryRun
 
