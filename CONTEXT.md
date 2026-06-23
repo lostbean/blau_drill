@@ -130,8 +130,12 @@ drives a `Backend` seam (`transport.web_serial()` over the browser **Web Serial
 API**, or `transport.simulator()` for hardware-free dev). It hides the entire
 Marlin protocol — line numbering, checksums, the `ok`/`resend` handshake, `M114`
 polling, flow control — behind verbs `Energize`/`Release`/`Jog`/`MoveTo`/
-`Where`/`Stream`/`Halt`/`Reconnect`. Its mode is one of `Disconnected | Idle |
-Jogging | Streaming | Faulted`.
+`Where`/`Stream`/`Halt`/`Reconnect`, plus `CancelStream` (benign stop → Jogging,
+for navigating away from a dry-run) and `ResumeStream` (continue past an in-app
+pause). Its mode is one of `Disconnected | Idle | Jogging | Streaming |
+StreamPaused | Faulted`, where `StreamPaused` is a stream halted at an in-app
+pause point (`app_pause`) awaiting `ResumeStream`; `Halt` and `CancelStream` stay
+reachable from it so abort is never gated.
 _Avoid:_ "serial driver" / "the port" as the noun, and do **not** model it as
 OctoPrint or a general print host — it owns the port only for the session.
 
