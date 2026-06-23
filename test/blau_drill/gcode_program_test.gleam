@@ -9,7 +9,7 @@ import blau_drill/domain/alignment.{type Alignment}
 import blau_drill/domain/board_model.{type BoardModel}
 import blau_drill/domain/config.{Drill, DryRun, GcodeConfig}
 import blau_drill/domain/correspondence.{Correspondence}
-import blau_drill/domain/gcode_program.{type GcodeProgram}
+import blau_drill/domain/gcode_program.{type GcodeProgram, GcodeProgram}
 import blau_drill/domain/transform2d.{type Transform2D, Transform2D}
 import blau_drill/fixtures
 import gleam/dict
@@ -571,6 +571,97 @@ pub fn defaults_to_dry_run_test() {
   p.mode |> should.equal(DryRun)
   let assert Ok(re) = regexp.from_string("^\\s*M3\\s+S[1-9]")
   list.any(p.lines, fn(l) { regexp.check(re, l) }) |> should.be_false
+}
+
+// --- stream_lines / is_streamable -------------------------------------------
+//
+// The HANG fix: the streamed view must drop blank lines and FULL-LINE comments
+// (Marlin doesn't reliably `ok` a blank line, so the handshake stalls), while
+// keeping every real command — INCLUDING commands with a trailing inline
+// comment.
+
+// Build a `GcodeProgram` with arbitrary lines for the unit tests (mode/bbox/
+// tool_order are irrelevant to `stream_lines`, which only filters `lines`).
+fn program_with_lines(lines: List(String)) -> GcodeProgram {
+  GcodeProgram(
+    lines: lines,
+    mode: DryRun,
+    bbox_machine: #(0.0, 0.0, 0.0, 0.0),
+    tool_order: [],
+  )
+}
+
+pub fn is_streamable_classifies_lines_test() {
+  // Dropped: blanks, whitespace-only, full-line ( and ; comments.
+  gcode_program.is_streamable("") |> should.be_false
+  gcode_program.is_streamable("   ") |> should.be_false
+  gcode_program.is_streamable("\t") |> should.be_false
+  gcode_program.is_streamable("( blau-drill native G-code )") |> should.be_false
+  gcode_program.is_streamable("  ( indented full-line comment )")
+  |> should.be_false
+  gcode_program.is_streamable(";foo") |> should.be_false
+  gcode_program.is_streamable("  ; leading semicolon comment")
+  |> should.be_false
+
+  // Kept: real commands, including those with a TRAILING inline comment.
+  gcode_program.is_streamable("G0 Z5") |> should.be_true
+  gcode_program.is_streamable("G92 X0 Y0 Z0") |> should.be_true
+  gcode_program.is_streamable("M0      (Temporary machine stop.)")
+  |> should.be_true
+  gcode_program.is_streamable("G00 Z30 (Retract)") |> should.be_true
+  gcode_program.is_streamable("M3 S255      (Spindle on clockwise.)")
+  |> should.be_true
+}
+
+pub fn stream_lines_drops_blanks_and_full_comments_test() {
+  let p =
+    program_with_lines([
+      "( c )",
+      "",
+      "  ",
+      "G0 Z5",
+      "M0  (stop)",
+      ";foo",
+      "G92 X0 Y0 Z0",
+    ])
+  gcode_program.stream_lines(p)
+  |> should.equal(["G0 Z5", "M0  (stop)", "G92 X0 Y0 Z0"])
+}
+
+// REGRESSION (the bug): over the REAL generated program, nothing streamed is a
+// blank/whitespace-only line and nothing's trim starts with `(` — in BOTH modes.
+pub fn stream_lines_real_program_has_no_blank_or_full_comment_test() {
+  [Drill, DryRun]
+  |> each(fn(mode) {
+    let p =
+      gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
+    let streamed = gcode_program.stream_lines(p)
+    // Every streamed line is streamable (non-blank, not a full-line comment).
+    list.all(streamed, gcode_program.is_streamable) |> should.be_true
+    // Belt-and-braces: explicit blank + leading-`(` checks.
+    list.any(streamed, fn(l) { string.trim(l) == "" }) |> should.be_false
+    list.any(streamed, fn(l) { string.starts_with(string.trim(l), "(") })
+    |> should.be_false
+  })
+}
+
+// LOSSLESS for commands: `stream_lines` == `lines` minus exactly the dropped
+// noise, in the SAME order (filter, not reorder). The count of streamable lines
+// in the raw program equals the streamed count, and the streamed list IS the
+// filtered raw list.
+pub fn stream_lines_lossless_for_commands_test() {
+  [Drill, DryRun]
+  |> each(fn(mode) {
+    let p =
+      gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
+    let streamed = gcode_program.stream_lines(p)
+    let expected = list.filter(p.lines, gcode_program.is_streamable)
+    // Order preserved (filter, not reorder) and counts agree.
+    streamed |> should.equal(expected)
+    list.length(streamed) |> should.equal(list.length(expected))
+    // Sanity: the program really did contain droppable noise.
+    { list.length(p.lines) > list.length(streamed) } |> should.be_true
+  })
 }
 
 // --- tiny helpers -----------------------------------------------------------

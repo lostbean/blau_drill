@@ -1178,7 +1178,7 @@ fn run_dry_run_unguarded(model: Model) -> #(Model, Effect(Msg)) {
                 mode: DryRunMode,
               )),
             )
-          issue(m, printer.Stream(program.lines))
+          issue(m, printer.Stream(gcode_program.stream_lines(program)))
         }
         _, _ -> noeff(model)
       }
@@ -1240,7 +1240,7 @@ fn confirm_registration(model: Model) -> #(Model, Effect(Msg)) {
               telemetry_spindle: spindle_label(model.config),
               telemetry_eta: "—",
             )
-          issue(m, printer.Stream(program.lines))
+          issue(m, printer.Stream(gcode_program.stream_lines(program)))
         }
         _, _ -> noeff(model)
       }
@@ -1409,6 +1409,10 @@ fn apply_progress(model: Model, sent: Int, _total: Int) -> Model {
 
 // The program currently streaming (rebuilt from the job + applied config so the
 // confirmed-prefix hole count is exact). Cheap to rebuild; keeps the model flat.
+// MUST mirror exactly what was fed to `printer.Stream` — the sanitized
+// `stream_lines`, not the rich `.lines` — so `Progress.sent` indexes the same
+// list (`apply_progress` does `list.take(program, sent)`); otherwise the
+// confirmed-prefix hole count would desync from the handshake on real hardware.
 fn current_program(model: Model, j: job.Job) -> List(String) {
   case j.alignment, model.progress {
     Some(al), HaveProgress(p) -> {
@@ -1417,7 +1421,7 @@ fn current_program(model: Model, j: job.Job) -> List(String) {
         DryRunMode -> config.DryRun
       }
       let cfg = config.GcodeConfig(..model.applied_config, mode: mode)
-      gcode_program.build(j.board, al, cfg).lines
+      gcode_program.stream_lines(gcode_program.build(j.board, al, cfg))
     }
     _, _ -> []
   }

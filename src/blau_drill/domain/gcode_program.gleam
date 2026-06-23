@@ -90,6 +90,36 @@ pub fn build(
 }
 
 // ---------------------------------------------------------------------------
+// Streamable view — the form actually fed over the ok/resend handshake.
+//
+// `build` emits a HUMAN-READABLE program: blank grouping lines `""` and
+// full-line `( ... )` comments. Real Marlin does NOT reliably emit an `ok` for
+// a blank line, so streaming `program.lines` VERBATIM stalls the handshake on
+// the first blank line (it hangs on hardware; the simulator masks it by acking
+// everything). `stream_lines` returns the same lines with the non-command noise
+// (blank/whitespace-only lines and FULL-LINE comments) dropped, in original
+// order. `program.lines` itself is left untouched — the rich form is correct for
+// human-readable export/preview.
+// ---------------------------------------------------------------------------
+
+/// The lines to actually stream: `program.lines` minus blank lines and
+/// full-line comments. Order preserved; only `list.filter`, never reorder.
+pub fn stream_lines(program: GcodeProgram) -> List(String) {
+  list.filter(program.lines, is_streamable)
+}
+
+/// A line is streamable iff, after trimming, it is non-empty AND does not begin
+/// with a comment marker (`(` RepRap-style or `;`). Commands with a TRAILING
+/// inline comment (e.g. `"M0      (Temporary machine stop.)"`) start with a
+/// command token, so they pass — only FULL-LINE comments and blanks are dropped.
+pub fn is_streamable(line: String) -> Bool {
+  let trimmed = string.trim(line)
+  trimmed != ""
+  && !string.starts_with(trimmed, "(")
+  && !string.starts_with(trimmed, ";")
+}
+
+// ---------------------------------------------------------------------------
 // Tool ordering — file order of first appearance.
 // ---------------------------------------------------------------------------
 

@@ -146,6 +146,21 @@ _Avoid:_ "the gcode file" — it is an in-memory value (`lines`, `mode`,
 `bbox_machine`), generated natively, not produced by pcb2gcode or a Python
 post-processor.
 
+The **streamed** form and the **export** form differ by design (ADR-0009).
+`lines` is the rich, human-readable program (blank lines, `( comments )`, `M0`
+stops); a future export uses it verbatim. The app never streams `lines` directly
+— it streams `stream_lines(program)`, which is **sanitized**: no blank/comment
+lines (real Marlin does not `ok` a blank line, so a streamed blank stalls the
+handshake at 0 — the simulator masks this by acking everything). `M0` stops are
+governed by `app_pause`: in the in-app workflow `M0` is omitted and the app pauses
+the stream in-app at touch-off / each bit change (control stays on the screen);
+export keeps `M0`. A streamed program that omits `M0` still **pauses** at each
+bit-change boundary — a bit swap opportunity is mandatory. Each tool block also
+moves to the board **centroid** (center of mass of the machine-space holes) for
+the bit exchange after retracting Z.
+_Avoid:_ streaming `lines` verbatim (stalls on blanks); "the gcode" without
+distinguishing the sanitized stream from the rich export.
+
 ### Job
 
 The session **state machine** that enforces the only legal order: `parsed →
