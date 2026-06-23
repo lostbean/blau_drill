@@ -411,6 +411,106 @@ fn per_tool_plunge_counts(lines: List(String)) -> List(Int) {
   |> list.map(fn(pair) { pair.1 })
 }
 
+// --- centroid (bit-exchange position) ---------------------------------------
+
+fn approx(a: Float, b: Float) -> Bool {
+  float.absolute_value(a -. b) <. 1.0e-9
+}
+
+// Center-of-MASS: the mean of all points. A symmetric 4-corner square -> center.
+pub fn centroid_is_mean_of_points_test() {
+  let #(cx, cy) =
+    gcode_program.centroid_of_points([
+      #(0.0, 0.0),
+      #(10.0, 0.0),
+      #(0.0, 10.0),
+      #(10.0, 10.0),
+    ])
+  approx(cx, 5.0) |> should.be_true
+  approx(cy, 5.0) |> should.be_true
+}
+
+// MEAN, not bbox-center: a dense cluster pulls the centroid. Three at (0,0) and
+// one at (12,0) -> mean x = 12/4 = 3.0 (bbox-center would be 6.0).
+pub fn centroid_is_mass_not_bbox_center_test() {
+  let #(cx, cy) =
+    gcode_program.centroid_of_points([
+      #(0.0, 0.0),
+      #(0.0, 0.0),
+      #(0.0, 0.0),
+      #(12.0, 0.0),
+    ])
+  approx(cx, 3.0) |> should.be_true
+  approx(cy, 0.0) |> should.be_true
+}
+
+pub fn centroid_empty_is_origin_test() {
+  let #(cx, cy) = gcode_program.centroid_of_points([])
+  approx(cx, 0.0) |> should.be_true
+  approx(cy, 0.0) |> should.be_true
+}
+
+// The expected machine-space centroid for the real fixture board, computed
+// independently of the generator (parse -> transform every hole -> mean).
+fn expected_machine_centroid() -> #(Float, Float) {
+  let board = board_from_fixture()
+  let t = xmirror_alignment().transform
+  let machine_pts =
+    list.map(board.holes, fn(h) { transform2d_apply(t, #(h.x, h.y)) })
+  gcode_program.centroid_of_points(machine_pts)
+}
+
+// Every tool block emits ONE bit-exchange move (the centroid move), placed
+// IMMEDIATELY after the `G00 Z<zchange> (Retract)` line and BEFORE the swap.
+pub fn each_tool_block_retract_followed_by_exchange_move_test() {
+  let p =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let assert Ok(retract_re) = regexp.from_string("^G00 Z.*\\(Retract\\)")
+  let assert Ok(exchange_re) =
+    regexp.from_string("^G0 X.*Y.*bit-exchange position")
+
+  // Walk pairs: every retract line is immediately followed by an exchange move.
+  let pairs =
+    list.window_by_2(p.lines)
+    |> list.filter(fn(pair) { regexp.check(retract_re, pair.0) })
+  // There is one retract per tool block.
+  list.length(pairs) |> should.equal(list.length(p.tool_order))
+  list.all(pairs, fn(pair) { regexp.check(exchange_re, pair.1) })
+  |> should.be_true
+
+  // Count of exchange-move lines == number of tool sizes.
+  list.filter(p.lines, fn(l) { regexp.check(exchange_re, l) })
+  |> list.length
+  |> should.equal(list.length(p.tool_order))
+}
+
+// The exchange move's X/Y equal the board centroid in machine space, and the
+// SAME XY appears for every tool block (one shared centroid).
+pub fn exchange_move_uses_shared_board_centroid_test() {
+  let p =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let assert Ok(exchange_re) =
+    regexp.from_string("^G0 X.*Y.*bit-exchange position")
+  let exchange_lines =
+    list.filter(p.lines, fn(l) { regexp.check(exchange_re, l) })
+
+  // One per tool size, and they are all byte-identical (one shared centroid).
+  list.length(exchange_lines) |> should.equal(list.length(p.tool_order))
+  case exchange_lines {
+    [first, ..rest] -> list.all(rest, fn(l) { l == first }) |> should.be_true
+    [] -> should.fail()
+  }
+
+  // The XY equals the independently-computed machine centroid.
+  let #(ex_cx, ex_cy) = expected_machine_centroid()
+  list.all(exchange_lines, fn(l) {
+    let assert Some(x) = parse_axis(l, "X")
+    let assert Some(y) = parse_axis(l, "Y")
+    approx(x, round5(ex_cx)) && approx(y, round5(ex_cy))
+  })
+  |> should.be_true
+}
+
 // --- golden semantic diff ---------------------------------------------------
 
 pub fn drill_golden_drilled_set_test() {

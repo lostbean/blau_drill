@@ -1429,9 +1429,13 @@ fn current_program(model: Model, j: job.Job) -> List(String) {
 
 // Every hole emits exactly one `G0 X..` rapid (the per-hole XY rapid format);
 // the postamble home is `G00 X..` and the tool lift is `G0 Z..`, so neither is
-// miscounted.
+// miscounted. The per-tool bit-exchange move is ALSO a `G0 X..` rapid, but it
+// carries the exchange comment, so it's excluded — it isn't a drilled hole.
 fn count_holes(lines: List(String)) -> Int {
-  list.count(lines, fn(l) { string.starts_with(l, "G0 X") })
+  list.count(lines, fn(l) {
+    string.starts_with(l, "G0 X")
+    && !string.contains(l, "bit-exchange position")
+  })
 }
 
 fn stream_complete(model: Model) -> Model {

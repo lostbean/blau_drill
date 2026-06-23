@@ -64,13 +64,18 @@ pub fn build(
 
   let by_tool = group_by_tool(machine_holes)
 
+  // The bit-exchange position: the whole-board centroid (center of mass of all
+  // machine-space holes). Computed ONCE — the same exchange spot for every tool
+  // block — so every bit swap happens at a consistent, board-centered location.
+  let centroid = centroid_machine(machine_holes)
+
   let body =
     list.flat_map(order, fn(tool) {
       let holes = case dict.get(by_tool, tool) {
         Ok(hs) -> hs
         Error(_) -> []
       }
-      tool_block(tool, holes, board.tools, cfg)
+      tool_block(tool, holes, board.tools, cfg, centroid)
     })
 
   let lines =
@@ -209,13 +214,23 @@ fn tool_block(
   holes: List(MachineHole),
   tools: board_model.ToolTable,
   cfg: GcodeConfig,
+  centroid: #(Float, Float),
 ) -> List(String) {
   let diameter = fmt_diameter(tool_diameter(tools, tool))
+  let #(cx, cy) = centroid
 
   let change =
     list.flatten([
       [
         "G00 Z" <> fmt5(cfg.zchange) <> " (Retract)",
+        // Move XY to the board centroid at the retracted (zchange) height, so
+        // the operator swaps the bit at a consistent, board-centered spot.
+        // Emitted AFTER the Z retract, so it travels at the safe retract height.
+        "G0 X"
+          <> fmt5(cx)
+          <> " Y"
+          <> fmt5(cy)
+          <> " (Move to bit-exchange position — board centre)",
         tool,
         "M5      (Spindle stop.)",
         "G04 P1.00000",
@@ -309,6 +324,37 @@ fn postamble(cfg: GcodeConfig) -> List(String) {
 // ---------------------------------------------------------------------------
 // Bounding box (machine space)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Centroid (center of mass, machine space)
+//
+// The MEAN of all machine hole X's and Y's — every hole counts, so dense
+// regions pull the centroid (this is NOT the bbox center). Used as the
+// bit-exchange position. Empty list -> #(0.0, 0.0).
+// ---------------------------------------------------------------------------
+
+fn centroid_machine(holes: List(MachineHole)) -> #(Float, Float) {
+  case holes {
+    [] -> #(0.0, 0.0)
+    _ -> {
+      let #(sum_x, sum_y, n) =
+        list.fold(holes, #(0.0, 0.0, 0), fn(acc, h) {
+          let #(sum_x, sum_y, n) = acc
+          #(sum_x +. h.x, sum_y +. h.y, n + 1)
+        })
+      let count = int.to_float(n)
+      #(sum_x /. count, sum_y /. count)
+    }
+  }
+}
+
+// A thin public wrapper so `centroid_machine` is unit-testable without exposing
+// the private `MachineHole` type: takes raw machine-space #(x, y) points.
+pub fn centroid_of_points(points: List(#(Float, Float))) -> #(Float, Float) {
+  centroid_machine(
+    list.map(points, fn(p) { MachineHole(tool: "", x: p.0, y: p.1) }),
+  )
+}
 
 fn bbox_machine(holes: List(MachineHole)) -> BboxMachine {
   case holes {

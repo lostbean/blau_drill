@@ -133,8 +133,13 @@ fn build_drill_program() -> gcode_program.GcodeProgram {
 pub fn drill_program_streams_to_complete_test() -> Promise(Nil) {
   let program = build_drill_program()
   let total_lines = list.length(program.lines)
+  // Count actual hole moves: `G0 X..` lines, EXCLUDING the per-tool-block
+  // bit-exchange move (also a `G0 X..`, but carrying the exchange comment).
   let hole_count =
-    list.count(program.lines, fn(l) { string.starts_with(l, "G0 X") })
+    list.count(program.lines, fn(l) {
+      string.starts_with(l, "G0 X")
+      && !string.contains(l, "bit-exchange position")
+    })
   hole_count |> should.equal(130)
 
   let b = transport.simulator()
