@@ -107,6 +107,14 @@ pub type Command {
   Where
   /// Stream a G-code program with the ok-handshake. Valid in `Idle`/`Jogging`.
   Stream(lines: List(String))
+  /// Benign stream cancel: `Streaming -> Idle`. Stops feeding the program (no
+  /// further lines go out) and returns to a CONNECTED, non-streaming state
+  /// WITHOUT emitting M112 and WITHOUT faulting. This is the graceful counterpart
+  /// to `Halt` for navigating away from a dry-run: the machine hasn't moved, the
+  /// dry-run is spindle-off, so dropping the remaining lines is safe and the
+  /// connection (and any captured alignment in the host) is preserved. A no-op in
+  /// any non-streaming connected state. Use `Halt` for a real emergency abort.
+  CancelStream
   /// Emergency abort (M112, raw): any active state -> `Faulted`.
   Halt
   /// Recover after a fault: `Faulted -> Idle` (resets the line counter).
@@ -258,6 +266,22 @@ pub fn command(state: PrinterState, cmd: Command) -> Step {
     Jogging(line_no, _), Stream(lines) -> start_stream(line_no, lines, cmd)
     Streaming(_, _), Stream(_) -> refused(state, cmd, Busy)
     Faulted, Stream(_) -> refused(state, cmd, WhileFaulted)
+
+    // ── cancel stream (benign "go back") — NO write, NO fault ────────────────
+    // Stop feeding the program and return to JOGGING (motors stay energized),
+    // staying connected. A dry-run is only ever started from Jogging, so the
+    // motors are still held and the head is locked in position — returning to
+    // Jogging reflects that, so the operator can immediately jog/re-capture and
+    // the UI shows MOTORS LIVE. Unlike Halt (M112), this writes nothing and never
+    // faults (head hasn't moved, dry-run is spindle-off). The line counter resets
+    // to 0 like a fresh connection so a subsequent stream starts cleanly (we
+    // stopped mid-handshake, so the in-flight `N` was never `ok`'d).
+    Streaming(_, _), CancelStream ->
+      accepted(Jogging(line_no: 0, pending: PendingNone), [], cmd)
+    // Benign no-op when there is nothing to cancel (already connected, idle/jog).
+    Idle(_, _), CancelStream -> accepted(state, [], cmd)
+    Jogging(_, _), CancelStream -> accepted(state, [], cmd)
+    Faulted, CancelStream -> refused(state, cmd, WhileFaulted)
 
     // ── halt (M112, raw) — always reachable from an active state ─────────────
     Faulted, Halt ->

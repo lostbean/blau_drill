@@ -13,9 +13,9 @@
 
 import blau_drill/control/printer.{
   type Command, type Event, type PrinterState, type Step, Accepted, Busy,
-  Connect, Energize, Faulted, Faulting, Halt, Jog, MoveTo, NotEnergized,
-  PositionUpdate, Progress, PulseSpindle, Reconnect, Recovered, Refused, Release,
-  Stream, Where, X, Y,
+  CancelStream, Connect, Energize, Faulted, Faulting, Halt, Jog, MoveTo,
+  NotEnergized, PositionUpdate, Progress, PulseSpindle, Reconnect, Recovered,
+  Refused, Release, Stream, Where, X, Y,
 }
 import blau_drill/control/protocol
 import gleam/list
@@ -456,6 +456,73 @@ pub fn motion_while_faulted_is_refused_test() {
   let step = cmd(faulted, Jog(X, 1.0))
   step.writes |> should.equal([])
   step.state |> should.equal(Faulted)
+}
+
+// ── benign stream cancel (graceful "go back", NOT a fault) ────────────────────
+
+// CancelStream is the benign counterpart to Halt: it stops feeding the program
+// (no more lines go out) and returns the machine to a CONNECTED, motors-energized
+// state — JOGGING — WITHOUT emitting M112 and WITHOUT faulting. This is what
+// navigating BACK from a dry-run uses: a dry-run is only ever started from
+// Jogging, so the motors are still held and the head is locked in position;
+// returning to Jogging reflects that (the operator can immediately re-jog and the
+// UI shows motors live). The head hasn't moved and the dry-run is spindle-off
+// (nothing to switch off), so stopping mid-stream is safe and must not drop the
+// connection. Contrast halt_from_streaming_*, which DOES fault.
+pub fn cancel_stream_returns_to_jogging_without_m112_test() {
+  let program = ["G90", "G0 X1 Y1", "M400"]
+  let s0 = cmd(jogging(), Stream(program))
+  let s1 = feed(s0.state, "ok")
+  // Mid-stream cancel: back to jogging (motors live), NO write at all (no M112,
+  // no further lines).
+  let step = cmd(s1.state, CancelStream)
+  step.state |> printer.state_name |> should.equal("jogging")
+  step.writes |> should.equal([])
+  // Accepted, never a Faulting event — the connection is preserved.
+  has_event(step.events, fn(e) { e == Accepted(CancelStream) })
+  |> should.be_true
+  has_event(step.events, fn(e) {
+    case e {
+      Faulting(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+}
+
+// After a benign cancel the machine is Jogging (motors held), so a fresh stream
+// starts cleanly (line state is sound — the cancel did not corrupt the counter).
+pub fn cancel_stream_then_fresh_stream_works_test() {
+  let program = ["G90", "G0 X1 Y1", "M400"]
+  let s0 = cmd(jogging(), Stream(program))
+  let s1 = feed(s0.state, "ok")
+  let cancelled = cmd(s1.state, CancelStream).state
+  // A new stream from the cancelled (Jogging) machine sends only its first line.
+  let again = cmd(cancelled, Stream(["G91", "M400"]))
+  stripped_writes(again) |> should.equal(["G91"])
+  again.state |> printer.state_name |> should.equal("streaming")
+}
+
+// CancelStream is only meaningful while streaming. From any non-streaming state
+// it is a benign no-op success: no write, no state change, no fault.
+pub fn cancel_stream_while_idle_is_noop_test() {
+  let step = cmd(idle(), CancelStream)
+  step.writes |> should.equal([])
+  step.state |> printer.state_name |> should.equal("idle")
+  has_event(step.events, fn(e) { e == Accepted(CancelStream) })
+  |> should.be_true
+}
+
+pub fn cancel_stream_while_jogging_is_noop_test() {
+  let step = cmd(jogging(), CancelStream)
+  step.writes |> should.equal([])
+  step.state |> printer.state_name |> should.equal("jogging")
+}
+
+pub fn cancel_stream_while_disconnected_is_refused_test() {
+  let step = cmd(printer.new(), CancelStream)
+  step.writes |> should.equal([])
+  step.state |> printer.state_name |> should.equal("disconnected")
 }
 
 pub fn energize_while_faulted_is_refused_test() {

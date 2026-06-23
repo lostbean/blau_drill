@@ -292,6 +292,23 @@ pub fn dry_run_redo_alignment_test() {
   j.state |> should.equal(Aligned)
 }
 
+// Going BACK from the dry-run (RedoAlignment) must PRESERVE the solved alignment:
+// the machine hasn't moved, so the fitted transform + residuals are still valid
+// and the operator can re-proceed without re-capturing. (This guards the
+// alignment-flow-fixes bug: back/forward nav must not clear the transform.)
+pub fn dry_run_redo_alignment_keeps_transform_test() {
+  let dry = dry_run_job()
+  let assert Ok(back) = job.transition(dry, RedoAlignment)
+  // The alignment carried into DryRun is the SAME one after going back.
+  back.alignment |> should.equal(dry.alignment)
+  back.residuals |> should.equal(dry.residuals)
+  // It is genuinely present (not just both-None).
+  case back.alignment {
+    Some(_) -> Nil
+    None -> should.fail()
+  }
+}
+
 pub fn dry_run_confirm_to_drilling_test() {
   let assert Ok(j) = job.transition(dry_run_job(), ConfirmRegistration)
   j.state |> should.equal(Drilling)

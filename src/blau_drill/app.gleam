@@ -55,7 +55,8 @@ import blau_drill/ui/model.{
   RestartAlignment, ResumeDrilling, RunDryRun, SelectBackend, SelectCategory,
   SelectFile, SelectOutline, SetConfigField, SetCurrentTarget, SetJogStep,
   Settings, SimBackend, StageAlign, StageDone, StageDrill, StageDryRun,
-  StageLoad, StartRegistering, Summary, TestSpindle, ToggleAutoConnect,
+  StageLoad, StartRegistering, Streaming, Summary, TestSpindle,
+  ToggleAutoConnect,
 }
 import blau_drill/ui/sample
 import blau_drill/ui/shell
@@ -244,10 +245,14 @@ fn persist_effect(model: Model) -> Effect(Msg) {
 
 fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
-    // navigation
+    // navigation. Going back/forward must NEVER disconnect or clear the
+    // alignment (transform/captures/job are left untouched below) — the machine
+    // hasn't physically moved. The one hazard is leaving a dry-run stream
+    // mid-flight, so any nav that changes the session screen first cancels an
+    // in-flight stream GRACEFULLY (→ Idle, still connected), never via Halt.
     GoToSettings -> noeff(Model(..model, screen: Settings))
-    GoToSession -> noeff(Model(..model, screen: resting_screen(model)))
-    NavStage(stage) -> noeff(Model(..model, screen: stage_screen(stage)))
+    GoToSession -> nav_to(model, resting_screen(model))
+    NavStage(stage) -> nav_to(model, stage_screen(stage))
 
     // Stage 1 — load & connect
     SelectFile -> #(model, pick_drl_effect())
@@ -322,6 +327,26 @@ fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 
 fn noeff(model: Model) -> #(Model, Effect(Msg)) {
   #(model, effect.none())
+}
+
+// Navigate to `screen`, but first cancel any in-flight dry-run stream GRACEFULLY
+// (CancelStream → Idle, still connected) so we never leave a zombie stream on the
+// controller. Crucially this does NOT touch transform/captures/job, so the
+// alignment survives the navigation — only the screen changes (and the stream,
+// if any, stops cleanly without faulting/disconnecting).
+fn nav_to(model: Model, screen: model.Screen) -> #(Model, Effect(Msg)) {
+  let #(model, eff) = cancel_active_stream(model)
+  #(Model(..model, screen: screen), eff)
+}
+
+// If a stream is currently in flight, issue a benign CancelStream (→ Idle, stays
+// connected, no M112, no fault). Otherwise a no-op. This is the single place
+// "leaving an active stream via navigation" is handled gracefully.
+fn cancel_active_stream(model: Model) -> #(Model, Effect(Msg)) {
+  case model.printer {
+    Streaming -> issue(model, printer.CancelStream)
+    _ -> noeff(model)
+  }
 }
 
 // ── controller bridge ────────────────────────────────────────────────────────
@@ -938,8 +963,15 @@ fn run_dry_run(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 fn redo_alignment(model: Model) -> #(Model, Effect(Msg)) {
+  // Going BACK from the dry-run: if a dry-run stream is still in flight, stop it
+  // GRACEFULLY (CancelStream → Idle, stay connected) — NOT an emergency Halt
+  // (M112, which would fault/disconnect). The machine hasn't moved, so the
+  // captured fiducials + fitted transform stay valid; we only roll the job back
+  // DryRun → Aligned and return to the Align screen. transform/captures are
+  // untouched here, so the operator can re-proceed without re-aligning.
+  let #(model, eff) = cancel_active_stream(model)
   let job2 = job_advance(model.job, job.RedoAlignment)
-  noeff(Model(..model, job: job2, screen: Align, progress: NoProgress))
+  #(Model(..model, job: job2, screen: Align, progress: NoProgress), eff)
 }
 
 fn confirm_registration(model: Model) -> #(Model, Effect(Msg)) {
