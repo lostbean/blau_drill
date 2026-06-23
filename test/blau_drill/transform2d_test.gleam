@@ -56,6 +56,51 @@ pub fn mirror_translation_segby_shape_test() {
   assert_point(t2d.apply(t, #(-57.15, 80.01)), #(57.15, 80.01), delta)
 }
 
+// --- mirror_x_about ---------------------------------------------------------
+
+pub fn mirror_x_about_fixes_points_on_the_line_test() {
+  // Points on x = cx are fixed (any y).
+  let cx = 12.5
+  let m = t2d.mirror_x_about(cx)
+  [#(cx, 0.0), #(cx, 7.0), #(cx, -42.0), #(cx, 1000.0)]
+  |> assert_each(fn(p) { assert_point(t2d.apply(m, p), p, delta) })
+}
+
+pub fn mirror_x_about_mirrors_x_keeps_y_test() {
+  let m = t2d.mirror_x_about(50.0)
+  assert_point(t2d.apply(m, #(10.0, 7.0)), #(90.0, 7.0), delta)
+  assert_point(t2d.apply(m, #(70.0, 7.0)), #(30.0, 7.0), delta)
+}
+
+pub fn mirror_x_about_is_an_involution_test() {
+  let m = t2d.mirror_x_about(33.0)
+  [#(0.0, 0.0), #(10.0, 7.0), #(-12.5, 7.25), #(200.0, -200.0)]
+  |> assert_each(fn(p) { assert_point(t2d.apply(m, t2d.apply(m, p)), p, delta) })
+}
+
+pub fn mirror_x_about_compose_twice_is_identity_test() {
+  // Composing a reflection with itself yields identity (det = +1, no offset).
+  let m = t2d.mirror_x_about(50.0)
+  let twice = t2d.compose(m, m)
+  [#(0.0, 0.0), #(10.0, 7.0), #(-12.5, 7.25), #(200.0, -200.0)]
+  |> assert_each(fn(p) {
+    assert_point(t2d.apply(twice, p), t2d.apply(t2d.identity(), p), delta)
+  })
+}
+
+pub fn mirror_x_about_is_a_reflection_test() {
+  // a = -1, d = 1 ⇒ determinant a*d - b*c = -1 (negative ⇒ orientation flip).
+  let m = t2d.mirror_x_about(50.0)
+  close(m.a, -1.0, delta) |> should.be_true
+  close(m.b, 0.0, delta) |> should.be_true
+  close(m.c, 0.0, delta) |> should.be_true
+  close(m.d, 1.0, delta) |> should.be_true
+  close(m.tx, 100.0, delta) |> should.be_true
+  close(m.ty, 0.0, delta) |> should.be_true
+  let det = m.a *. m.d -. m.b *. m.c
+  close(det, -1.0, delta) |> should.be_true
+}
+
 // --- compose ----------------------------------------------------------------
 
 pub fn compose_applies_b_first_then_a_test() {

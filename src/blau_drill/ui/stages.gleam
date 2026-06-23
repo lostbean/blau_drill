@@ -8,6 +8,7 @@
 ////   * Confirm-registration (the only path to drilling) is a hazard-striped
 ////     two-step gate routed through dry-run.
 
+import blau_drill/domain/job
 import blau_drill/ui/board_canvas.{type CanvasData, CanvasData}
 import blau_drill/ui/mock
 import blau_drill/ui/model.{
@@ -47,7 +48,6 @@ fn canvas_data(model: Model) -> CanvasData {
     head_confidence: model.head_confidence,
     stage: model.screen,
     zoom: model.zoom,
-    mirror: model.board_side == model.Back,
   )
 }
 
@@ -97,11 +97,15 @@ fn load_loaded(model: Model) -> Element(model.Msg) {
   ])
 }
 
-// Front/Back selector: which face is up in the printer. Mirrors the canvas so the
-// on-screen board matches the physically-flipped board during registration. A
-// VIEW concern only — drilling correctness comes from registering against the
-// real (back-side) features, which the alignment fit absorbs.
+// Front/Back selector: which face is up in the printer. Flipping to Back
+// X-mirrors the WORKING board geometry once, upstream — the drill pattern, the
+// alignment job, and the g-code all derive from that one transformed model, so
+// every path (canvas, click-to-jump, g-code) stays consistent. It is a
+// Stage-1 / pre-registration choice: once registration starts the working
+// geometry is fixed for the session (captures are against that orientation), so
+// the toggle LOCKS.
 fn board_side_toggle(model: Model) -> Element(model.Msg) {
+  let locked = registration_started(model.job)
   let seg = fn(label, this_side, hint) {
     h.button(
       [
@@ -110,6 +114,7 @@ fn board_side_toggle(model: Model) -> Element(model.Msg) {
           False -> "side-seg"
         }),
         a.attribute("type", "button"),
+        a.disabled(locked),
         a.attribute("aria-pressed", case model.board_side == this_side {
           True -> "true"
           False -> "false"
@@ -123,21 +128,42 @@ fn board_side_toggle(model: Model) -> Element(model.Msg) {
   h.div([a.class("side-toggle")], [
     h.span([a.class("side-label")], [h.text("Board side in printer")]),
     h.div([a.class("side-segs")], [
-      seg("Front", model.Front, "Front face up — canvas in native orientation"),
+      seg(
+        "Front",
+        model.Front,
+        "Front face up — drill pattern in native orientation",
+      ),
       seg(
         "Back (copper up)",
         model.Back,
-        "Back/copper up — canvas mirrored to match the flipped board",
+        "Back/copper up — drill pattern mirrored to match the flipped board",
       ),
     ]),
-    case model.board_side {
-      model.Back ->
+    case locked, model.board_side {
+      True, _ ->
         h.span([a.class("side-note")], [
-          h.text("Canvas mirrored to match the flipped board (copper up)."),
+          h.text("Board side locked once alignment starts."),
         ])
-      model.Front -> element.none()
+      False, model.Back ->
+        h.span([a.class("side-note")], [
+          h.text("Board flipped (copper up) — drill pattern mirrored to match."),
+        ])
+      False, model.Front -> element.none()
     },
   ])
+}
+
+// Registration has started once the job has left `Parsed` (Registering or
+// beyond): the board side / working geometry is fixed for the session.
+fn registration_started(job: model.JobOpt) -> Bool {
+  case job {
+    model.HaveJob(j) ->
+      case j.state {
+        job.Parsed -> False
+        _ -> True
+      }
+    model.NoJob -> False
+  }
 }
 
 fn load_picker(model: Model) -> Element(model.Msg) {

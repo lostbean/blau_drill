@@ -54,6 +54,104 @@ pub fn board_of(bm: BoardModel) -> model.Board {
   )
 }
 
+/// The board-transform for a given side, over the board's own bbox.
+///
+///   * `Front` → `identity` (the canvas renders the `.drl`'s native orientation).
+///   * `Back`  → an X-mirror about the bbox **centre** X, so the flipped board
+///     keeps the same footprint.
+///
+/// Returns a plain `Transform2D` so future sides / rotations are just different
+/// constructors — there is no `Front`/`Back` special-casing downstream.
+pub fn board_xform(
+  side: model.BoardSide,
+  bbox: board_model.Bbox,
+) -> transform2d.Transform2D {
+  case side {
+    model.Front -> transform2d.identity()
+    model.Back -> {
+      let #(minx, _miny, maxx, _maxy) = bbox
+      let cx = { minx +. maxx } /. 2.0
+      transform2d.mirror_x_about(cx)
+    }
+  }
+}
+
+/// Build the canvas-facing `Board` for a given side, applying ONE transform to
+/// every coordinate: each hole's `(x, y)`, every outline point, and every
+/// candidate point. The bbox is **recomputed** from the transformed holes (a
+/// transform can reorder min/max, so the old corners are not reused). Tools have
+/// no coordinates and pass through unchanged; hole tool/status and ordering are
+/// preserved.
+///
+/// `working_board(bm, Front)` equals `board_of(bm)` exactly (identity ⇒ no-op).
+///
+/// Implemented as `board_of(working_board_model(bm, side))` so the canvas board,
+/// the alignment job, and the g-code all derive from ONE transformed source (the
+/// working `BoardModel`). The flip lives in exactly one place.
+pub fn working_board(bm: BoardModel, side: model.BoardSide) -> model.Board {
+  board_of(working_board_model(bm, side))
+}
+
+/// Apply ONE board transform (`board_xform(side, bm.bbox)`) to the parsed
+/// `BoardModel`, producing the WORKING model the canvas, the alignment job, and
+/// the g-code all derive from. The flip lives in exactly one place.
+///
+/// Every hole `(x, y)` and every fiducial `(x, y)` are transformed (tool / kind
+/// preserved); the outline points are transformed when present; tools (no
+/// coordinates) pass through. The bbox is **recomputed** from the transformed
+/// holes (a transform can reorder min/max, so the old corners are not reused).
+/// Hole order is preserved.
+///
+/// `Front` is a no-op: `working_board_model(bm, Front) == bm` (identity).
+pub fn working_board_model(
+  bm: BoardModel,
+  side: model.BoardSide,
+) -> BoardModel {
+  let xf = board_xform(side, bm.bbox)
+  let holes =
+    list.map(bm.holes, fn(h) {
+      let #(x, y) = transform2d.apply(xf, #(h.x, h.y))
+      board_model.Hole(x:, y:, tool: h.tool)
+    })
+  let outline = case bm.outline {
+    Some(pts) -> Some(list.map(pts, transform2d.apply(xf, _)))
+    None -> None
+  }
+  let fiducials =
+    list.map(bm.fiducials, fn(f) {
+      let #(x, y) = transform2d.apply(xf, #(f.x, f.y))
+      board_model.Fiducial(x:, y:, kind: f.kind)
+    })
+  board_model.BoardModel(
+    holes:,
+    outline:,
+    fiducials:,
+    tools: bm.tools,
+    bbox: bbox_of_holes(holes),
+  )
+}
+
+/// Recompute an axis-aligned bbox `#(min_x, min_y, max_x, max_y)` from a list of
+/// (already transformed) holes. Folds min/max over the hole coordinates; empty
+/// holes yield a degenerate zero bbox (the parser guarantees at least one hole,
+/// so this is a safe floor).
+fn bbox_of_holes(holes: List(board_model.Hole)) -> board_model.Bbox {
+  case holes {
+    [] -> #(0.0, 0.0, 0.0, 0.0)
+    [first, ..rest] -> {
+      list.fold(rest, #(first.x, first.y, first.x, first.y), fn(acc, h) {
+        let #(minx, miny, maxx, maxy) = acc
+        #(
+          float.min(minx, h.x),
+          float.min(miny, h.y),
+          float.max(maxx, h.x),
+          float.max(maxy, h.y),
+        )
+      })
+    }
+  }
+}
+
 /// The parse diagnostic shown after Stage 1.
 pub fn diagnostic_of(bm: BoardModel) -> model.Diagnostic {
   let #(minx, miny, maxx, maxy) = bm.bbox

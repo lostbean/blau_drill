@@ -44,6 +44,17 @@ pub fn identity() -> Transform2D {
   Transform2D(a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0)
 }
 
+/// A reflection about the vertical line `x = cx`, leaving Y unchanged:
+///
+///     x' = 2 * cx - x
+///     y' = y
+///
+/// As a matrix this is `a = -1, d = 1` with `tx = 2 * cx`. It is a reflection
+/// (negative determinant) and an involution: `apply(m, apply(m, p)) == p`.
+pub fn mirror_x_about(cx: Float) -> Transform2D {
+  Transform2D(a: -1.0, b: 0.0, c: 0.0, d: 1.0, tx: 2.0 *. cx, ty: 0.0)
+}
+
 /// Apply the transform to a board point, returning the machine point.
 ///
 ///     mx = a * bx + b * by + tx

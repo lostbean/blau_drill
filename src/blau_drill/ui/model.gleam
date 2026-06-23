@@ -68,21 +68,20 @@ pub type StageId {
 
 /// Which face of the board is up in the printer.
 ///
-/// This is a VIEW concern only — it mirrors the on-screen board canvas so the
-/// display matches what the operator physically sees on the bench. When drilling
-/// the back copper, the board is flipped (copper up), so the bench view is the
-/// mirror image of the front-face `.drl`; rendering `Back` mirrored makes
-/// registration intuitive ("that hole, top-left" matches on screen and in the
-/// machine).
+/// This drives the BOARD TRANSFORM applied once, upstream, to produce the WORKING
+/// board model (`bridge.working_board_model`): `Front` is the identity, `Back` is
+/// an X-mirror about the board centre (copper up — the board is physically
+/// flipped). The canvas board, the alignment job, and the G-code all derive from
+/// that single transformed model, so every path (display, click-to-jump,
+/// generated G-code) stays consistent — the flip lives in exactly one place.
 ///
-/// It does NOT change hole geometry, the alignment transform, or the G-code:
-/// drilling correctness comes entirely from registering against the real
-/// (back-side) features, which makes `alignment.fit` absorb the physical mirror.
-/// See ADR (board-side view flip).
+/// It is a Stage-1 / pre-registration choice: once registration starts the
+/// working geometry is fixed for the session (captures are against that
+/// orientation), so the toggle locks. See ADR (board-transform pipeline).
 pub type BoardSide {
-  /// Front face up — canvas renders in the `.drl`'s native orientation.
+  /// Front face up — working geometry in the `.drl`'s native orientation.
   Front
-  /// Back (copper) up — canvas renders X-mirrored to match the flipped board.
+  /// Back (copper) up — working geometry X-mirrored to match the flipped board.
   Back
 }
 
@@ -395,8 +394,9 @@ pub type Model {
     applied_config: config.GcodeConfig,
     /// Count of bit changes seen so far in the active run (for the summary).
     bit_changes_seen: Int,
-    /// Which board face is up in the printer. A VIEW concern — mirrors the canvas
-    /// so the screen matches the bench. Does not affect drilling (see BoardSide).
+    /// Which board face is up in the printer. Drives the board transform applied
+    /// once upstream to the WORKING board model (canvas, alignment job, and G-code
+    /// all derive from it). Locked once registration starts. See BoardSide.
     board_side: BoardSide,
   )
 }
@@ -429,7 +429,8 @@ pub type Msg {
   ConnectDevice
   DisconnectDevice
   StartRegistering
-  /// Choose which board face is up in the printer (mirrors the canvas view).
+  /// Choose which board face is up in the printer (rebuilds the working board
+  /// geometry pre-registration; locked once aligning).
   SetBoardSide(BoardSide)
   /// Load the built-in sample board (segby_v1) so the demo runs with no file
   /// dialog. Picks the .drl + outline from the bundled fixture text.

@@ -1,10 +1,10 @@
-//// Board-canvas projection tests, focused on the back/copper-up VIEW MIRROR.
+//// Board-canvas projection tests.
 ////
-//// The mirror is view-only (it does not change drilling), but it MUST keep
-//// click-to-jump correct: a click is unprojected back to a board point, so
-//// `project` and `unproject` must mirror identically. These tests pin that
-//// project∘unproject round-trips to identity in BOTH orientations, and that the
-//// Back orientation genuinely mirrors X (so the toggle isn't a no-op).
+//// The canvas is orientation-agnostic: any board flip (front/back, copper-up)
+//// is baked into the WORKING board upstream (`bridge.working_board_model`), so
+//// the canvas has NO mirror logic. Click-to-jump correctness still rests on
+//// `project` and `unproject` being exact inverses, so these tests pin
+//// project∘unproject round-trips to identity.
 
 import blau_drill/ui/board_canvas
 import blau_drill/ui/model.{BBox}
@@ -16,55 +16,39 @@ fn approx(a: Float, b: Float) -> Bool {
 }
 
 fn bbox() -> model.BBox {
-  // An asymmetric board so a mirror is detectable.
+  // An asymmetric board so a sign error would be detectable.
   BBox(minx: 0.0, miny: 0.0, maxx: 81.28, maxy: 83.82)
 }
 
 // ── round-trip identity (the click-correctness guarantee) ─────────────────────
 
-pub fn roundtrip_front_is_identity_test() {
-  let #(x, y) = board_canvas.roundtrip_board_point(bbox(), False, 12.5, 60.0)
+pub fn roundtrip_is_identity_test() {
+  let #(x, y) = board_canvas.roundtrip_board_point(bbox(), 12.5, 60.0)
   approx(x, 12.5) |> should.be_true
   approx(y, 60.0) |> should.be_true
 }
 
-pub fn roundtrip_back_is_identity_test() {
-  // The critical case: even mirrored, a board point survives project→unproject,
-  // so a click in the mirrored view maps to the correct hole.
-  let #(x, y) = board_canvas.roundtrip_board_point(bbox(), True, 12.5, 60.0)
-  approx(x, 12.5) |> should.be_true
-  approx(y, 60.0) |> should.be_true
-}
-
-pub fn roundtrip_back_identity_at_corner_test() {
-  let #(x, y) = board_canvas.roundtrip_board_point(bbox(), True, 0.0, 0.0)
+pub fn roundtrip_identity_at_corner_test() {
+  let #(x, y) = board_canvas.roundtrip_board_point(bbox(), 0.0, 0.0)
   approx(x, 0.0) |> should.be_true
   approx(y, 0.0) |> should.be_true
 
-  let #(x2, y2) = board_canvas.roundtrip_board_point(bbox(), True, 81.28, 83.82)
+  let #(x2, y2) = board_canvas.roundtrip_board_point(bbox(), 81.28, 83.82)
   approx(x2, 81.28) |> should.be_true
   approx(y2, 83.82) |> should.be_true
 }
 
-// ── the mirror is real (not a no-op) ──────────────────────────────────────────
-// We can't read the intermediate viewBox point directly (project is private), but
-// we CAN show that a point and its X-reflection about the board centre swap under
-// the mirror: unprojecting the SAME screen X in Front vs Back yields board X
-// values symmetric about the board's X centre. We verify this via the round-trip:
-// a left-of-centre board point in Front corresponds (same screen position) to a
-// right-of-centre board point in Back. Concretely, the Back round-trip of a point
-// equals the point (identity, above); the distinctness is asserted by checking
-// that projecting differs — exposed here through asymmetry of two points.
+// ── the projection does NOT mirror (the canvas is orientation-agnostic) ───────
+// X is a straight shift, not a reflection: distinct board X values round-trip to
+// themselves and stay distinct, with no swap about the board centre. Any flip is
+// the working board's job, not the canvas's.
 
-pub fn mirror_changes_handedness_test() {
-  // A point left of the X centre and one right of it. Under the mirror, their
-  // screen positions swap, but each still round-trips to itself. The meaningful
-  // assertion: the two points are distinct and the mirror preserves each — i.e.
-  // the mapping is a bijection in both modes (no collapse).
-  let left = board_canvas.roundtrip_board_point(bbox(), True, 10.0, 40.0)
-  let right = board_canvas.roundtrip_board_point(bbox(), True, 70.0, 40.0)
+pub fn projection_does_not_mirror_x_test() {
+  let left = board_canvas.roundtrip_board_point(bbox(), 10.0, 40.0)
+  let right = board_canvas.roundtrip_board_point(bbox(), 70.0, 40.0)
+  // Each point round-trips to itself (no reflection about the X centre).
   approx(left.0, 10.0) |> should.be_true
   approx(right.0, 70.0) |> should.be_true
-  // distinct points stay distinct (mirror is not collapsing X)
+  // Distinct points stay distinct (the mapping is a bijection, no collapse).
   { left.0 == right.0 } |> should.be_false
 }

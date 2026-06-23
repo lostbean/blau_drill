@@ -260,7 +260,7 @@ fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     ConnectDevice -> connect_device(model)
     DisconnectDevice -> disconnect_device(model)
     StartRegistering -> start_registering(model)
-    model.SetBoardSide(side) -> noeff(Model(..model, board_side: side))
+    model.SetBoardSide(side) -> noeff(set_board_side(model, side))
 
     // Stage 2 — alignment
     Energize -> issue(model, printer.Energize)
@@ -463,20 +463,7 @@ fn parse_board(model: Model) -> #(Model, Effect(Msg)) {
         s -> Some(s)
       }
       case board_model.parse(Inputs(drl: Some(drl), edge_cuts: edge)) {
-        Ok(bm) -> {
-          let board = bridge.board_of(bm)
-          let diag = bridge.diagnostic_of(bm)
-          noeff(
-            Model(
-              ..model,
-              board: HaveBoard(board),
-              board_model: HaveBoardModel(bm),
-              diagnostic: HaveDiagnostic(diag),
-              job: HaveJob(job.new(bm)),
-              upload_error: "",
-            ),
-          )
-        }
+        Ok(bm) -> noeff(install_board(model, bm))
         Error(err) ->
           noeff(
             Model(
@@ -490,6 +477,64 @@ fn parse_board(model: Model) -> #(Model, Effect(Msg)) {
           )
       }
     }
+  }
+}
+
+// Install a freshly-parsed `BoardModel` for the current `board_side`: build the
+// single WORKING model (the flip lives in exactly one place) and derive the
+// canvas board, the diagnostic, and the job (hence the g-code) all from it. The
+// raw `bm` is not retained — the source text in `pending_drl` / `pending_edge_cuts`
+// lets us re-derive for a different side pre-registration (see `set_board_side`).
+fn install_board(model: Model, bm: board_model.BoardModel) -> Model {
+  let wm = bridge.working_board_model(bm, model.board_side)
+  Model(
+    ..model,
+    board: HaveBoard(bridge.board_of(wm)),
+    board_model: HaveBoardModel(wm),
+    diagnostic: HaveDiagnostic(bridge.diagnostic_of(wm)),
+    job: HaveJob(job.new(wm)),
+    upload_error: "",
+  )
+}
+
+// Set the board side. Pre-registration (job still in `Parsed`, or no board yet)
+// the working geometry depends on the side, so re-parse the retained source text
+// and rebuild the working model + job for the new side. Once registration has
+// started the side is locked (the UI disables the toggle), so this path only ever
+// runs with a fresh, unregistered job; if a registered job somehow gets here we
+// leave the geometry untouched and only record the side.
+fn set_board_side(model: Model, side: model.BoardSide) -> Model {
+  let m = Model(..model, board_side: side)
+  case registration_started(model.job), model.pending_drl {
+    // Locked after registration: only record the side, keep the working model.
+    True, _ -> m
+    // No source to rebuild from (no board loaded yet): just record the side.
+    False, "" -> m
+    False, drl -> {
+      let edge = case model.pending_edge_cuts {
+        "" -> None
+        s -> Some(s)
+      }
+      case board_model.parse(Inputs(drl: Some(drl), edge_cuts: edge)) {
+        Ok(bm) -> install_board(m, bm)
+        // The source already parsed once to load the board; a re-parse failure is
+        // not expected. Fall back to just recording the side.
+        Error(_) -> m
+      }
+    }
+  }
+}
+
+// Registration has started once the job has left `Parsed` (Registering or
+// beyond): the working geometry is fixed for the session.
+fn registration_started(job: model.JobOpt) -> Bool {
+  case job {
+    HaveJob(j) ->
+      case j.state {
+        job.Parsed -> False
+        _ -> True
+      }
+    NoJob -> False
   }
 }
 
