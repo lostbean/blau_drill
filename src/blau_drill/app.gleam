@@ -268,7 +268,7 @@ fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     SetJogStep(step) -> noeff(Model(..model, jog_step: step))
     Jog(axis, sign) -> jog(model, axis, sign)
     TestSpindle -> test_spindle(model)
-    SetCurrentTarget(idx) -> noeff(Model(..model, current_target: idx))
+    SetCurrentTarget(idx) -> set_current_target(model, idx)
     JumpTo(point) -> jump_to(model, point)
     model.CaptureFiducial -> capture(model)
     Fit -> fit(model)
@@ -626,6 +626,36 @@ fn test_spindle(model: Model) -> #(Model, Effect(Msg)) {
       let #(on, off) = bridge.spindle_commands(model.config)
       issue(model, printer.PulseSpindle(on, off))
     }
+  }
+}
+
+// Select a fiducial target by index and, when motion is allowed, jump the head to
+// that fiducial's CENTRE (its candidate board point). Clicking a marker selects it
+// (so `current_target` always updates for the UI), but only jogs when the same
+// safe-jump guard as `jump_to` holds (Align + Jogging). The destination is the
+// fiducial's exact candidate point, routed through the identical safe-jump path
+// (`jump_to` → `bridge.board_to_machine` → `printer.MoveTo`). This does NOT touch
+// the board-elsewhere `JumpTo(exact)` path, which still jumps to the exact click.
+fn set_current_target(model: Model, idx: Int) -> #(Model, Effect(Msg)) {
+  let selected = Model(..model, current_target: idx)
+  case target_candidate(model.board, idx) {
+    // Marker click → jump to its centre via the shared safe-jump path (which
+    // applies the Align + Jogging guard itself; selection still took effect).
+    Ok(point) -> jump_to(selected, point)
+    // No board / index out of range: just record the selection.
+    Error(_) -> noeff(selected)
+  }
+}
+
+// PURE: the candidate board point for a fiducial index, if a board is loaded and
+// the index is in range. The fiducial's centre is `board.candidates[idx]`.
+pub fn target_candidate(
+  board: model.BoardOpt,
+  idx: Int,
+) -> Result(#(Float, Float), Nil) {
+  case board {
+    HaveBoard(b) -> list_at(b.candidates, idx)
+    NoBoard -> Error(Nil)
   }
 }
 

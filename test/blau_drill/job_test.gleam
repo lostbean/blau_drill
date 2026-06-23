@@ -144,6 +144,26 @@ pub fn override_rejected_promotes_to_aligned_test() {
   }
 }
 
+// After override, drilling MUST still route through the mandatory dry-run.
+// Override only gets past the residual gate — it lands in `Aligned`, where the
+// ONLY forward edge is `RunDryRun`. There is NO Aligned -> Drilling shortcut, so
+// `ConfirmRegistrationE` is not directly reachable. This pins the reported
+// symptom (operator seeing only realign/drill, no dry-run) as a non-defect at the
+// FSM level: after override, run-dry-run is legal and confirm-registration is not.
+pub fn override_still_requires_dry_run_test() {
+  let j = register_with(job(), misfit_corrs())
+  let assert Ok(rj) = job.transition(j, Fit(0.05))
+  rj.state |> should.equal(AlignmentRejected)
+  let assert Ok(aj) = job.transition(rj, OverrideAlignment)
+  aj.state |> should.equal(Aligned)
+  // Forward path is dry-run, NOT a direct drill-confirm.
+  job.can(aj, RunDryRunE) |> should.be_true
+  job.can(aj, ConfirmRegistrationE) |> should.be_false
+  // And the FSM actually refuses a direct confirm/complete from here.
+  job.transition(aj, ConfirmRegistration)
+  |> should.equal(Error(IllegalTransition))
+}
+
 // Override is listed as legal exactly in AlignmentRejected — not elsewhere.
 pub fn override_is_legal_only_when_rejected_test() {
   let j = register_with(job(), misfit_corrs())

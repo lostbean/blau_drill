@@ -10,7 +10,9 @@
 //// machine state behind it.
 
 import blau_drill/app
-import blau_drill/ui/model.{Align, Done, Drill, DryRun, Load, Settings}
+import blau_drill/ui/model.{
+  Align, BBox, Board, Done, Drill, DryRun, HaveBoard, Load, NoBoard, Settings,
+}
 import gleeunit/should
 
 // ── Settings: always safe ────────────────────────────────────────────────────
@@ -79,4 +81,36 @@ pub fn restore_error_with_board_caps_to_load_test() {
 
 pub fn restore_error_without_board_caps_to_load_test() {
   app.restore_target(Error(Nil), False) |> should.equal(Load)
+}
+
+// ── target_candidate/2: marker-click → that fiducial's centre ─────────────────
+// Clicking a fiducial marker selects it AND jumps the head to its centre. The
+// pure half of that — picking `board.candidates[idx]` — is unit-tested here; the
+// jog itself is a browser Effect verified in-app.
+
+fn board_with(candidates: List(#(Float, Float))) -> model.BoardOpt {
+  HaveBoard(Board(
+    holes: [],
+    tools: [],
+    bbox: BBox(0.0, 0.0, 10.0, 10.0),
+    outline: [],
+    candidates: candidates,
+  ))
+}
+
+pub fn target_candidate_picks_indexed_point_test() {
+  let b = board_with([#(1.0, 2.0), #(3.0, 4.0), #(5.0, 6.0)])
+  app.target_candidate(b, 0) |> should.equal(Ok(#(1.0, 2.0)))
+  app.target_candidate(b, 1) |> should.equal(Ok(#(3.0, 4.0)))
+  app.target_candidate(b, 2) |> should.equal(Ok(#(5.0, 6.0)))
+}
+
+pub fn target_candidate_out_of_range_is_error_test() {
+  let b = board_with([#(1.0, 2.0), #(3.0, 4.0)])
+  app.target_candidate(b, 2) |> should.equal(Error(Nil))
+  app.target_candidate(b, 99) |> should.equal(Error(Nil))
+}
+
+pub fn target_candidate_no_board_is_error_test() {
+  app.target_candidate(NoBoard, 0) |> should.equal(Error(Nil))
 }
