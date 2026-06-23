@@ -398,6 +398,14 @@ pub type Model {
     /// once upstream to the WORKING board model (canvas, alignment job, and G-code
     /// all derive from it). Locked once registration starts. See BoardSide.
     board_side: BoardSide,
+    /// True when a previously-fitted alignment was RESTORED from localStorage on
+    /// reload but is NOT yet trusted: the live serial port is gone after a reload,
+    /// so the restored transform must be re-confirmed by the operator. While set,
+    /// the Align stage shows a "Board hasn't moved — resume" prompt instead of a
+    /// trusted alignment; `ResumeAlignment` (only once reconnected) clears it and
+    /// promotes the restored alignment to `ConfAligned`. False in every other
+    /// case (a fresh fit, a reset, or no persisted alignment).
+    resume_pending: Bool,
   )
 }
 
@@ -463,6 +471,11 @@ pub type Msg {
   /// on the solved transform despite residuals over tolerance.
   OverrideAlignment
   RestartAlignment
+  /// Re-instate an alignment RESTORED from the previous session (reload). Only
+  /// meaningful while `resume_pending` is set; the handler refuses unless the
+  /// printer is reconnected (the operator must re-open the serial port first).
+  /// On success it promotes the restored transform to a trusted `ConfAligned`.
+  ResumeAlignment
   RunDryRun
 
   // Stage 3 — dry-run

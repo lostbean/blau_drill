@@ -10,9 +10,26 @@
 //// machine state behind it.
 
 import blau_drill/app
+import blau_drill/control/controller
+import blau_drill/control/printer
+import blau_drill/control/transport
+import blau_drill/domain/board_model.{Inputs}
+import blau_drill/domain/config
+import blau_drill/domain/job
+import blau_drill/domain/transform2d.{Transform2D}
+import blau_drill/ui/bridge
+import blau_drill/ui/mock
 import blau_drill/ui/model.{
-  Align, BBox, Board, Done, Drill, DryRun, HaveBoard, Load, NoBoard, Settings,
+  type Model, Align, BBox, Board, ConfAligned, ConfNone, ConfRough, Connection,
+  Disconnected, Done, Drill, DryRun, Faulted, Front, HaveBoard, HaveBoardModel,
+  HaveJob, HaveTransform, Head, Idle, Jogging, Load, Model, NoBitChange, NoBoard,
+  NoDiagnostic, NoFitDiag, NoHeadPos, NoProgress, NoSummary, NoTransform,
+  ResumeAlignment, Settings, Streaming,
 }
+import blau_drill/ui/sample
+import blau_drill/ui/storage.{type AlignmentSave, AlignmentSave}
+import gleam/list
+import gleam/option.{None, Some}
 import gleeunit/should
 
 // ── Settings: always safe ────────────────────────────────────────────────────
@@ -113,4 +130,185 @@ pub fn target_candidate_out_of_range_is_error_test() {
 
 pub fn target_candidate_no_board_is_error_test() {
   app.target_candidate(NoBoard, 0) |> should.equal(Error(Nil))
+}
+
+// ── resume gate: a restored alignment is re-instated only once reconnected ─────
+// SAFETY PROPERTY: a transform restored from the previous session must NEVER be
+// silently trusted. It is re-instated to `ConfAligned` only after the operator
+// has reconnected the serial port (printer != Disconnected) and confirmed the
+// board hasn't moved. While Disconnected, resume is refused and confidence stays
+// at the unconfirmed `ConfRough`.
+
+pub fn can_resume_disconnected_is_false_test() {
+  app.can_resume(Disconnected) |> should.be_false
+}
+
+pub fn can_resume_idle_is_true_test() {
+  app.can_resume(Idle) |> should.be_true
+}
+
+pub fn can_resume_jogging_is_true_test() {
+  app.can_resume(Jogging) |> should.be_true
+}
+
+pub fn can_resume_streaming_is_true_test() {
+  app.can_resume(Streaming) |> should.be_true
+}
+
+pub fn can_resume_faulted_is_true_test() {
+  // Faulted is still a live (if halted) port — reconnect/recover handles it.
+  app.can_resume(Faulted) |> should.be_true
+}
+
+pub fn resume_confidence_disconnected_stays_unconfirmed_test() {
+  app.resume_confidence(Disconnected) |> should.equal(ConfRough)
+}
+
+pub fn resume_confidence_connected_is_trusted_test() {
+  app.resume_confidence(Idle) |> should.equal(ConfAligned)
+  app.resume_confidence(Jogging) |> should.equal(ConfAligned)
+}
+
+// ── reload-restore → resume-pending Model (the C2 bounce) ─────────────────────
+// SAFETY PROPERTY: restoring a persisted alignment on reload must reinstate it
+// HELD-UNCONFIRMED — `resume_pending: True`, `head_confidence` NOT `ConfAligned`
+// — and it must stay that way through a (re)connect, until the operator EXPLICITLY
+// resumes. These pin the bounce: unit-level proof that `restore_alignment` builds
+// the unconfirmed Model, that the connect-fold doesn't silently trust it, and
+// that `ResumeAlignment` flips it ONLY once reconnected. (Build/Fit replay is the
+// same machinery a live fit uses, so a real solved transform is restored.)
+
+// A base, board-parsed Model (job in `Parsed`) for the sample board, Front side
+// and DISCONNECTED — the state `init` lands in just before the restore branch.
+fn base_model() -> Model {
+  let cfg = mock.default_config()
+  let assert Ok(bm) =
+    board_model.parse(Inputs(drl: Some(sample.drl()), edge_cuts: None))
+  let wm = bridge.working_board_model(bm, Front)
+  Model(
+    screen: Load,
+    printer: Disconnected,
+    board: HaveBoard(bridge.board_of(wm)),
+    diagnostic: NoDiagnostic,
+    file_selected: True,
+    outline_file: "",
+    upload_error: "",
+    head: Head(0.0, 0.0, 0.0),
+    head_pos: NoHeadPos,
+    head_confidence: ConfNone,
+    jog_step: 1.0,
+    captured: [],
+    current_target: 0,
+    fiducial_target: 4,
+    quality: -1,
+    residual_max: 0.0,
+    residual_rms: 0.0,
+    alignment_rejected: False,
+    fit_diag: NoFitDiag,
+    progress: NoProgress,
+    bit_change: NoBitChange,
+    summary: NoSummary,
+    telemetry_bit: "—",
+    telemetry_eta: "—",
+    telemetry_spindle: "OFF",
+    zoom: 1.0,
+    category: Connection,
+    config: cfg,
+    config_dirty: False,
+    controller: controller.new(transport.simulator()),
+    backend_kind: model.SimBackend,
+    board_model: HaveBoardModel(wm),
+    job: HaveJob(job.new(wm)),
+    pending_drl: sample.drl(),
+    pending_edge_cuts: "",
+    captures: [],
+    transform: NoTransform,
+    applied_config: bridge.gcode_config(cfg, config.DryRun),
+    bit_changes_seen: 0,
+    board_side: Front,
+    resume_pending: False,
+  )
+}
+
+// Three identity board↔machine captures from the board's first candidates (a
+// perfect identity fit — well within the 0.1mm gate), as a persisted slice would
+// hold them. The transform field is irrelevant to the replay (the captures are
+// re-fitted), so an identity transform is stored.
+fn saved_alignment() -> AlignmentSave {
+  let base = base_model()
+  let assert HaveBoard(b) = base.board
+  let pts = list.take(b.candidates, 3)
+  AlignmentSave(
+    transform: Transform2D(a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0),
+    captures: list.map(pts, fn(p) { #(p, p) }),
+    side: Front,
+    quality: 100,
+    residual_max: 0.0,
+    residual_rms: 0.0,
+  )
+}
+
+pub fn restore_alignment_holds_unconfirmed_test() {
+  let assert Ok(m) = app.restore_alignment(base_model(), saved_alignment())
+  // Held UNCONFIRMED: the resume prompt is up and the head is NOT trusted.
+  m.resume_pending |> should.be_true
+  { m.head_confidence != ConfAligned } |> should.be_true
+  // The alignment is genuinely solved (a real transform was restored), and we
+  // landed on the Align screen.
+  m.screen |> should.equal(Align)
+  case m.transform {
+    HaveTransform(_) -> True
+    NoTransform -> False
+  }
+  |> should.be_true
+}
+
+pub fn restore_then_connect_keeps_resume_pending_test() {
+  // The reported bounce: a (re)connect after restore must NOT silently trust the
+  // restored alignment. Drive the REAL connect-fold (Issue(Connect) → Idle,
+  // emits Accepted(Connect)) through `update` and assert resume_pending survives.
+  let assert Ok(m) = app.restore_alignment(base_model(), saved_alignment())
+  let #(m2, _eff) =
+    app.update(m, model.ControllerEvent(controller.Issue(printer.Connect)))
+  // Now connected (machine ready) but the restored alignment is STILL held.
+  m2.printer |> should.equal(Idle)
+  m2.resume_pending |> should.be_true
+  { m2.head_confidence != ConfAligned } |> should.be_true
+}
+
+pub fn resume_while_disconnected_is_refused_test() {
+  // Resume is refused while the port is gone: the prompt stays up, nothing
+  // trusted. (Mirrors `can_resume(Disconnected) == False` at the Model level.)
+  let assert Ok(m) = app.restore_alignment(base_model(), saved_alignment())
+  let #(m2, _eff) = app.update(m, ResumeAlignment)
+  m2.resume_pending |> should.be_true
+  { m2.head_confidence != ConfAligned } |> should.be_true
+}
+
+pub fn resume_when_connected_trusts_alignment_test() {
+  // Once reconnected, the EXPLICIT ResumeAlignment click flips the restored
+  // alignment to trusted: ConfAligned + resume prompt cleared.
+  let assert Ok(m0) = app.restore_alignment(base_model(), saved_alignment())
+  // Reconnect first (Issue(Connect) → Idle), then resume.
+  let #(m1, _e1) =
+    app.update(m0, model.ControllerEvent(controller.Issue(printer.Connect)))
+  let #(m2, _e2) = app.update(m1, ResumeAlignment)
+  m2.resume_pending |> should.be_false
+  m2.head_confidence |> should.equal(ConfAligned)
+}
+
+pub fn dry_run_refused_while_resume_pending_test() {
+  // SAFETY: an UNCONFIRMED restored alignment must not be dry-run. Even connected,
+  // RunDryRun is a no-op while resume_pending — the operator must resume first.
+  let assert Ok(m0) = app.restore_alignment(base_model(), saved_alignment())
+  let #(m1, _e1) =
+    app.update(m0, model.ControllerEvent(controller.Issue(printer.Connect)))
+  let #(m2, _e2) = app.update(m1, model.RunDryRun)
+  // Did NOT advance to the dry-run screen; still held on Align, still pending.
+  m2.screen |> should.equal(Align)
+  m2.resume_pending |> should.be_true
+  // After an explicit resume, the dry-run is allowed (screen advances).
+  let #(m3, _e3) = app.update(m2, ResumeAlignment)
+  let #(m4, _e4) = app.update(m3, model.RunDryRun)
+  m4.screen |> should.equal(DryRun)
 }

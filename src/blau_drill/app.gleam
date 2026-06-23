@@ -52,10 +52,10 @@ import blau_drill/ui/model.{
   NoBoard, NoBoardModel, NoDiagnostic, NoFitDiag, NoHeadPos, NoJob, NoProgress,
   NoSummary, NoTransform, OutlinePicked, ParseBoard, Progress, RealBackend,
   Recapture, Reconnect, RedoAlignment, Release, ResetDefaults, ResetView,
-  RestartAlignment, ResumeDrilling, RunDryRun, SelectBackend, SelectCategory,
-  SelectFile, SelectOutline, SetConfigField, SetCurrentTarget, SetJogStep,
-  Settings, SimBackend, StageAlign, StageDone, StageDrill, StageDryRun,
-  StageLoad, StartRegistering, Streaming, Summary, TestSpindle,
+  RestartAlignment, ResumeAlignment, ResumeDrilling, RunDryRun, SelectBackend,
+  SelectCategory, SelectFile, SelectOutline, SetConfigField, SetCurrentTarget,
+  SetJogStep, Settings, SimBackend, StageAlign, StageDone, StageDrill,
+  StageDryRun, StageLoad, StartRegistering, Streaming, Summary, TestSpindle,
   ToggleAutoConnect,
 }
 import blau_drill/ui/sample
@@ -68,6 +68,7 @@ import gleam/int
 import gleam/javascript/promise
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import gleam/string
 import lustre
 import lustre/attribute as a
@@ -135,6 +136,7 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       applied_config: bridge.gcode_config(cfg, config.DryRun),
       bit_changes_seen: 0,
       board_side: model.Front,
+      resume_pending: False,
     )
   // Re-parse the restored board (deterministic; no hardware). If the stored DRL
   // is empty or fails to parse, `parse_board` leaves the model board-less.
@@ -146,13 +148,30 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
   // into a connection/alignment-dependent stage (DryRun/Drill/Done), and never
   // into Align without a board. Anything else collapses to Load.
   let m = case restore_screen(m) {
-    // Restoring into Align must drive the job FSM Parsed → Registering (and take
-    // the config snapshot), exactly as the "Proceed to Align" button does —
-    // otherwise the job stays in Parsed and Capture silently no-ops.
-    Align -> {
-      let #(m2, _) = start_registering(m)
-      m2
-    }
+    // Restoring into Align: if a fitted alignment was persisted AND restores
+    // cleanly, re-instate it into a NOT-YET-TRUSTED state (resume_pending) so the
+    // operator can resume without re-capturing — but only after reconnecting and
+    // confirming the board hasn't moved. Otherwise fall back to a fresh
+    // Registering (the job FSM Parsed → Registering, exactly as "Proceed to
+    // Align" does — else the job stays in Parsed and Capture silently no-ops).
+    Align ->
+      case storage.load_alignment() {
+        Ok(saved) ->
+          case restore_alignment(m, saved) {
+            Ok(m2) -> m2
+            // A persisted slice that can't be replayed into Aligned (e.g. the
+            // captures no longer fit) is discarded: fall back to fresh register.
+            Error(_) -> {
+              storage.clear_alignment()
+              let #(m2, _) = start_registering(m)
+              m2
+            }
+          }
+        Error(_) -> {
+          let #(m2, _) = start_registering(m)
+          m2
+        }
+      }
     screen -> Model(..m, screen: screen)
   }
   // Auto-reconnect: if enabled and the real Web Serial backend is selected, try
@@ -213,7 +232,7 @@ fn backend_for(kind: BackendKind) -> backend.Backend {
 
 // ── update ───────────────────────────────────────────────────────────────────
 
-fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
+pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   let #(next, eff) = update_inner(model, msg)
   // Reflect the reload-survivable slice (board + UI prefs) to localStorage and
   // the current screen to the URL hash after every update — cheap, idempotent,
@@ -239,6 +258,21 @@ fn persist_effect(model: Model) -> Effect(Msg) {
     jog_step: model.jog_step,
     zoom: model.zoom,
   ))
+  // Persist the SOLVED alignment so a reload can resume it (restored unconfirmed,
+  // re-instated only after reconnect — see init/ResumeAlignment). A reset / new
+  // board / restart sets `transform: NoTransform`, which clears the slice here.
+  case model.transform {
+    HaveTransform(t) ->
+      storage.save_alignment(storage.AlignmentSave(
+        transform: t,
+        captures: list.map(model.captures, fn(c) { #(c.board, c.machine) }),
+        side: model.board_side,
+        quality: model.quality,
+        residual_max: model.residual_max,
+        residual_rms: model.residual_rms,
+      ))
+    NoTransform -> storage.clear_alignment()
+  }
   storage.save_screen(model.screen)
   Nil
 }
@@ -280,6 +314,7 @@ fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     Recapture -> recapture(model)
     model.OverrideAlignment -> override_alignment(model)
     RestartAlignment -> restart_alignment(model)
+    ResumeAlignment -> resume_alignment(model)
     RunDryRun -> run_dry_run(model)
 
     // Stage 3 — dry-run
@@ -614,8 +649,136 @@ fn start_registering(model: Model) -> #(Model, Effect(Msg)) {
       transform: NoTransform,
       head_pos: NoHeadPos,
       head_confidence: ConfNone,
+      resume_pending: False,
     ),
   )
+}
+
+// Restore a previously-fitted alignment (loaded from localStorage on reload)
+// into a NOT-YET-TRUSTED resume state. The live serial port is gone after a
+// reload, so the restored transform is held UNCONFIRMED: `resume_pending` is set,
+// confidence stays at `ConfRough` (not `ConfAligned`), and the operator must
+// reconnect + confirm "board hasn't moved" (ResumeAlignment) before it is
+// trusted. The job FSM is driven Parsed → Registering → (replay captures) →
+// Aligned by re-fitting the SAVED captures (the same machinery a live fit uses),
+// so the alignment is genuinely solved (alignment: Some(_)), not fabricated.
+// Returns `Error(Nil)` if the saved captures can't be replayed into Aligned.
+pub fn restore_alignment(
+  model: Model,
+  saved: storage.AlignmentSave,
+) -> Result(Model, Nil) {
+  // Rebuild the working board for the SAVED side first (the captures are against
+  // that orientation). Pre-registration the side rebuild is a no-op or a re-parse
+  // (set_board_side handles Parsed → rebuild).
+  let m = set_board_side(model, saved.side)
+  case m.job {
+    HaveJob(j0) -> {
+      // Parsed → Registering, then replay each saved capture, then Fit.
+      use j1 <- result.try(transition_ok(j0, job.StartRegistering))
+      let j2 =
+        list.fold(saved.captures, j1, fn(j, pair) {
+          let #(board, machine) = pair
+          let corr = Correspondence(board: board, machine: machine)
+          case job.transition(j, job.Capture(corr)) {
+            Ok(jj) -> jj
+            Error(_) -> j
+          }
+        })
+      use j3 <- result.try(transition_ok(j2, job.Fit(j2.tol)))
+      // The fit may land Aligned (within tol) or AlignmentRejected (the saved
+      // alignment had been overridden over tolerance): in the latter case promote
+      // it with the same explicit OverrideAlignment edge a live override uses.
+      use j4 <- result.try(case j3.state {
+        job.Aligned -> Ok(j3)
+        job.AlignmentRejected -> transition_ok(j3, job.OverrideAlignment)
+        _ -> Error(Nil)
+      })
+      case j4.alignment {
+        Some(al) -> {
+          let r = al.residuals
+          // Rebuild the captured-fiducial overlay (green rings) by mapping each
+          // saved board point back to its candidate index in the working board.
+          let captured = restore_fiducials(m.board, saved.captures)
+          let captures =
+            list.map(saved.captures, fn(p) {
+              let #(b, mc) = p
+              Capture(board: b, machine: mc)
+            })
+          Ok(
+            Model(
+              ..m,
+              screen: Align,
+              job: HaveJob(j4),
+              applied_config: bridge.gcode_config(m.config, config.DryRun),
+              captured: captured,
+              captures: captures,
+              current_target: 0,
+              transform: HaveTransform(al.transform),
+              quality: quality_pct(r.max, j4.tol),
+              residual_max: r.max,
+              residual_rms: r.rms,
+              alignment_rejected: False,
+              fit_diag: NoFitDiag,
+              // NOT trusted yet: the port is gone, nothing confirmed.
+              head_confidence: ConfRough,
+              head_pos: NoHeadPos,
+              resume_pending: True,
+            ),
+          )
+        }
+        None -> Error(Nil)
+      }
+    }
+    NoJob -> Error(Nil)
+  }
+}
+
+fn transition_ok(j: job.Job, event: job.Event) -> Result(job.Job, Nil) {
+  case job.transition(j, event) {
+    Ok(jj) -> Ok(jj)
+    Error(_) -> Error(Nil)
+  }
+}
+
+// Rebuild the captured-fiducial overlay from saved captures: each capture's board
+// point is matched to the nearest candidate index in the working board so the
+// canvas draws the restored captures as completed (green) markers.
+fn restore_fiducials(
+  board: model.BoardOpt,
+  captures: List(#(transform2d.Point, transform2d.Point)),
+) -> List(model.Fiducial) {
+  case board {
+    HaveBoard(b) ->
+      list.map(captures, fn(pair) {
+        let #(#(bx, by), _machine) = pair
+        let idx = nearest_candidate_index(b.candidates, bx, by)
+        Fiducial(bx, by, idx, Captured)
+      })
+    NoBoard -> []
+  }
+}
+
+fn nearest_candidate_index(
+  candidates: List(#(Float, Float)),
+  bx: Float,
+  by: Float,
+) -> Int {
+  candidates
+  |> list.index_map(fn(pt, i) {
+    let #(cx, cy) = pt
+    let dx = cx -. bx
+    let dy = cy -. by
+    #(i, dx *. dx +. dy *. dy)
+  })
+  |> list.fold(#(-1, 0.0), fn(best, cand) {
+    let #(best_i, best_d) = best
+    let #(i, d) = cand
+    case best_i < 0 || d <. best_d {
+      True -> #(i, d)
+      False -> best
+    }
+  })
+  |> fn(best) { best.0 }
 }
 
 // ── Stage 2: alignment ───────────────────────────────────────────────────────
@@ -852,6 +1015,8 @@ fn apply_fit(
     transform: HaveTransform(al.transform),
     head_confidence: ConfAligned,
     head_pos: HaveHeadPos(project_head(al.transform, model.head)),
+    // A live fit (or override) is trusted immediately — no resume prompt.
+    resume_pending: False,
   )
 }
 
@@ -888,6 +1053,7 @@ fn recapture(model: Model) -> #(Model, Effect(Msg)) {
       transform: NoTransform,
       head_pos: NoHeadPos,
       head_confidence: ConfNone,
+      resume_pending: False,
     ),
   )
 }
@@ -925,13 +1091,71 @@ fn restart_alignment(model: Model) -> #(Model, Effect(Msg)) {
       transform: NoTransform,
       head_pos: NoHeadPos,
       head_confidence: ConfNone,
+      // A restart discards the restored alignment too — clear the resume prompt.
+      resume_pending: False,
     ),
   )
+}
+
+// Re-instate a restored (unconfirmed) alignment: the operator has reconnected the
+// serial port and confirmed the board has NOT moved. Only legal while
+// `resume_pending` is set AND the printer is reconnected (not Disconnected) — the
+// restored transform must not be trusted until a live port is back. On success
+// the head confidence is promoted to `ConfAligned` (trusted), the resume prompt
+// clears, and the crosshair re-projects through the restored transform.
+fn resume_alignment(model: Model) -> #(Model, Effect(Msg)) {
+  case model.resume_pending && can_resume(model.printer) {
+    False -> noeff(model)
+    True ->
+      case model.transform {
+        HaveTransform(t) ->
+          noeff(
+            Model(
+              ..model,
+              resume_pending: False,
+              head_confidence: ConfAligned,
+              head_pos: HaveHeadPos(project_head(t, model.head)),
+            ),
+          )
+        NoTransform -> noeff(Model(..model, resume_pending: False))
+      }
+  }
+}
+
+/// PURE guard for `ResumeAlignment`: a restored alignment may only be re-instated
+/// once a live serial port is back — i.e. the printer is anything but
+/// `Disconnected`. (Energizing/jogging is a separate, later gate.)
+pub fn can_resume(printer: model.PrinterState) -> Bool {
+  printer != Disconnected
+}
+
+/// PURE: the head confidence after a `ResumeAlignment` attempt with a restored
+/// (unconfirmed) alignment. Resuming flips the restored transform to TRUSTED
+/// (`ConfAligned`) ONLY when the printer is reconnected; while still
+/// `Disconnected` it stays at the unconfirmed `ConfRough`. This is the heart of
+/// the "never silently trust a restored transform" rule, unit-tested directly.
+pub fn resume_confidence(printer: model.PrinterState) -> model.HeadConfidence {
+  case can_resume(printer) {
+    True -> ConfAligned
+    False -> ConfRough
+  }
 }
 
 // ── Stage 3/4: dry-run + drilling (streaming) ────────────────────────────────
 
 fn run_dry_run(model: Model) -> #(Model, Effect(Msg)) {
+  // A RESTORED alignment is UNCONFIRMED until the operator explicitly resumes
+  // (board-hasn't-moved): refuse to dry-run it while `resume_pending` is set, so
+  // an unconfirmed restored transform is never trusted into a run. This mirrors
+  // the disabled "Proceed to Dry-run" button — belt-and-braces (the handler must
+  // not depend on the view's gate alone).
+  case model.resume_pending {
+    True -> noeff(model)
+    False -> run_dry_run_unguarded(model)
+  }
+}
+
+fn run_dry_run_unguarded(model: Model) -> #(Model, Effect(Msg)) {
   // Only legal from Aligned with a solved transform; the job FSM gates it.
   case model.job {
     HaveJob(j) ->
@@ -1129,6 +1353,7 @@ fn new_board(model: Model) -> #(Model, Effect(Msg)) {
       summary: NoSummary,
       bit_changes_seen: 0,
       board_side: model.Front,
+      resume_pending: False,
     ),
   )
 }
@@ -1139,14 +1364,21 @@ fn new_board(model: Model) -> #(Model, Effect(Msg)) {
 fn apply_head(model: Model, x: Float, y: Float, z: Float) -> Model {
   let head = Head(x: x, y: y, z: z)
   let m = Model(..model, head: head)
-  case model.transform {
-    HaveTransform(t) ->
+  case model.transform, model.resume_pending {
+    // A RESTORED-but-unconfirmed alignment must NOT be silently promoted to
+    // trusted by an incoming M114 after reconnect: keep it at the lower
+    // confidence (the crosshair still projects through the restored transform so
+    // the operator has a visual, but it stays explicitly UNCONFIRMED until they
+    // resume).
+    HaveTransform(t), True ->
+      Model(..m, head_pos: HaveHeadPos(project_head(t, head)))
+    HaveTransform(t), False ->
       Model(
         ..m,
         head_confidence: ConfAligned,
         head_pos: HaveHeadPos(project_head(t, head)),
       )
-    NoTransform -> refresh_head_conf(m)
+    NoTransform, _ -> refresh_head_conf(m)
   }
 }
 

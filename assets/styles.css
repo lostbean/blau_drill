@@ -937,6 +937,12 @@ button {
 .panel-high {
   background: var(--surface-container-high);
 }
+/* A restored-but-unconfirmed alignment prompt: error-tinted to flag that the
+   restored transform is NOT trusted until the operator reconnects and resumes. */
+.panel-warn {
+  border-color: var(--error);
+  background: rgba(255, 180, 171, 0.08);
+}
 
 .panel-head {
   display: flex;

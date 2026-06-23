@@ -3,9 +3,12 @@
 //// newline+`=`-delimited key/value blob (no JSON dependency); unknown / missing
 //// keys fall back to the seed config so an old or partial blob still loads.
 
+import blau_drill/domain/transform2d.{type Point, type Transform2D, Transform2D}
 import blau_drill/ui/model.{type BackendKind, type Config, Config}
 import gleam/float
+import gleam/int
 import gleam/list
+import gleam/result
 import gleam/string
 
 const config_key = "blau_drill.config"
@@ -22,6 +25,8 @@ const session_edge_key = "blau_drill.session.edge"
 const session_outline_key = "blau_drill.session.outline"
 
 const session_prefs_key = "blau_drill.session.prefs"
+
+const session_alignment_key = "blau_drill.session.alignment"
 
 @external(javascript, "./storage_ffi.mjs", "getItem")
 fn get_item(key: String) -> String
@@ -205,6 +210,158 @@ pub fn clear_session_board() -> Nil {
   remove_item(session_drl_key)
   remove_item(session_edge_key)
   remove_item(session_outline_key)
+}
+
+// ── alignment (fitted transform + captures) ──────────────────────────────────
+
+/// The reload-survivable slice of a SOLVED alignment. Persisted on a successful
+/// fit so a page reload can RESTORE the transform without re-capturing fiducials.
+/// It is deliberately NOT trusted on restore: the live serial port is gone after
+/// a reload, so the operator must reconnect and explicitly confirm the board has
+/// not moved ("resume") before the restored alignment is re-instated. See
+/// `app.init` / `ResumeAlignment`.
+pub type AlignmentSave {
+  AlignmentSave(
+    transform: Transform2D,
+    captures: List(#(Point, Point)),
+    side: model.BoardSide,
+    quality: Int,
+    residual_max: Float,
+    residual_rms: Float,
+  )
+}
+
+/// Persist the alignment slice (best-effort; never throws).
+pub fn save_alignment(a: AlignmentSave) -> Nil {
+  set_item(session_alignment_key, encode_alignment(a))
+}
+
+/// Load the persisted alignment slice. Returns `Error(Nil)` when nothing is
+/// stored or the blob is garbled — a bad/partial slice simply means "no restore".
+pub fn load_alignment() -> Result(AlignmentSave, Nil) {
+  case get_item(session_alignment_key) {
+    "" -> Error(Nil)
+    blob -> decode_alignment(blob)
+  }
+}
+
+/// Forget the persisted alignment (on reset / restart / new board).
+pub fn clear_alignment() -> Nil {
+  remove_item(session_alignment_key)
+}
+
+/// PURE serialize of the alignment slice — newline-delimited `key=value` lines,
+/// floats via `float.to_string`, captures as `bx,by,mx,my` quads joined by `;`.
+/// Separated from the FFI so it is unit-testable without real localStorage.
+pub fn encode_alignment(a: AlignmentSave) -> String {
+  let t = a.transform
+  let captures =
+    a.captures
+    |> list.map(fn(pair) {
+      let #(#(bx, by), #(mx, my)) = pair
+      float.to_string(bx)
+      <> ","
+      <> float.to_string(by)
+      <> ","
+      <> float.to_string(mx)
+      <> ","
+      <> float.to_string(my)
+    })
+    |> string.join(";")
+  [
+    #("a", float.to_string(t.a)),
+    #("b", float.to_string(t.b)),
+    #("c", float.to_string(t.c)),
+    #("d", float.to_string(t.d)),
+    #("tx", float.to_string(t.tx)),
+    #("ty", float.to_string(t.ty)),
+    #("side", side_str(a.side)),
+    #("quality", int_str(a.quality)),
+    #("rmax", float.to_string(a.residual_max)),
+    #("rrms", float.to_string(a.residual_rms)),
+    #("captures", captures),
+  ]
+  |> list.map(fn(kv) { kv.0 <> "=" <> kv.1 })
+  |> string.join("\n")
+}
+
+/// PURE parse of the alignment slice. Returns `Error(Nil)` on any missing /
+/// unparseable field (so a partial or corrupt blob just means "no restore").
+pub fn decode_alignment(blob: String) -> Result(AlignmentSave, Nil) {
+  let kv =
+    blob
+    |> string.split("\n")
+    |> list.filter_map(fn(line) { string.split_once(line, "=") })
+  let float_field = fn(key) {
+    list.key_find(kv, key) |> result.try(fn(v) { float.parse(v) })
+  }
+  use a <- result.try(float_field("a"))
+  use b <- result.try(float_field("b"))
+  use c <- result.try(float_field("c"))
+  use d <- result.try(float_field("d"))
+  use tx <- result.try(float_field("tx"))
+  use ty <- result.try(float_field("ty"))
+  use rmax <- result.try(float_field("rmax"))
+  use rrms <- result.try(float_field("rrms"))
+  use side <- result.try(list.key_find(kv, "side") |> result.try(parse_side))
+  use quality <- result.try(
+    list.key_find(kv, "quality") |> result.try(int.parse),
+  )
+  use captures <- result.try(
+    list.key_find(kv, "captures") |> result.try(parse_captures),
+  )
+  Ok(AlignmentSave(
+    transform: Transform2D(a: a, b: b, c: c, d: d, tx: tx, ty: ty),
+    captures: captures,
+    side: side,
+    quality: quality,
+    residual_max: rmax,
+    residual_rms: rrms,
+  ))
+}
+
+// Parse the `;`-joined `bx,by,mx,my` capture quads. An empty string yields the
+// empty list; any malformed quad fails the whole parse (→ no restore).
+fn parse_captures(s: String) -> Result(List(#(Point, Point)), Nil) {
+  case s {
+    "" -> Ok([])
+    _ ->
+      s
+      |> string.split(";")
+      |> list.try_map(parse_capture)
+  }
+}
+
+fn parse_capture(quad: String) -> Result(#(Point, Point), Nil) {
+  case string.split(quad, ",") {
+    [bx, by, mx, my] -> {
+      use bx <- result.try(float.parse(bx))
+      use by <- result.try(float.parse(by))
+      use mx <- result.try(float.parse(mx))
+      use my <- result.try(float.parse(my))
+      Ok(#(#(bx, by), #(mx, my)))
+    }
+    _ -> Error(Nil)
+  }
+}
+
+fn side_str(side: model.BoardSide) -> String {
+  case side {
+    model.Front -> "front"
+    model.Back -> "back"
+  }
+}
+
+fn parse_side(s: String) -> Result(model.BoardSide, Nil) {
+  case s {
+    "front" -> Ok(model.Front)
+    "back" -> Ok(model.Back)
+    _ -> Error(Nil)
+  }
+}
+
+fn int_str(n: Int) -> String {
+  int.to_string(n)
 }
 
 // ── URL hash <-> screen ───────────────────────────────────────────────────────

@@ -99,6 +99,34 @@ index) into the canvas `Fiducial`/`CanvasData` so the marker can show its error
 and whether it's the worst. Keep it legible (small mono label; only show after a
 fit / when rejected).
 
+## Item 3 — C2 specifics (reload persist + reconnect-and-resume)
+
+Decided: persist alignment, restore-with-reconnect (a reload drops the Web Serial
+port, so the connection can't survive — but the alignment can be re-instated after
+reconnect with an explicit human confirm).
+
+- **Persist (when the job reaches `Aligned`):** the fitted `Transform2D` (6 floats:
+  a,b,c,d,tx,ty), the `captures` (List of board/machine point pairs), and the
+  `board_side`. Store as a new storage slice (e.g. `blau_drill.session.alignment`),
+  serialized as simple text (floats joined by separators). Clear it on a new board
+  / restart-alignment (stale alignment must not linger).
+- **On reload:** restore the board (already happens) AND the saved alignment, but
+  into a NOT-YET-TRUSTED state — the port is gone, so `head_confidence` cannot be
+  `ConfAligned` immediately. Restore the transform/captures into the model + the
+  job (Aligned), screen Align, but with a "pending resume" marker so the UI shows a
+  RESUME affordance rather than silently trusting it.
+- **Reconnect-and-resume UX:** after the operator reconnects the port, present an
+  explicit **"Board hasn't moved — resume alignment"** button. Clicking it
+  re-instates `head_confidence: ConfAligned` (and any aligned-state UI) WITHOUT
+  re-capturing. Until then, motion that relies on the transform stays gated /
+  clearly marked as needing confirmation. (Mirrors the residual gate's spirit: a
+  human confirms the physical setup.)
+- **Cap:** like the existing screen-restore cap, never restore straight into Drill/
+  Done — restore to Align (the resume point) at most.
+- The existing safety reset (init sets transform=NoTransform, captures=[],
+  ConfNone) is REPLACED by this restore-then-resume only when a persisted alignment
+  exists AND restores cleanly; otherwise the clean reset stands.
+
 ## Gate (every chunk)
 
 `cd /code/edgar/blau_drill && nix develop -c bash -c 'gleam build && gleam test'`
