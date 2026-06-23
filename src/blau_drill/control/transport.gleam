@@ -76,3 +76,41 @@ pub fn simulator() -> Backend {
     close: sim_close,
   )
 }
+
+// ── emulator ─────────────────────────────────────────────────────────────────
+
+@external(javascript, "./emulator_ffi.mjs", "open")
+fn emu_open(baud: Int) -> Promise(Result(Conn, String))
+
+@external(javascript, "./emulator_ffi.mjs", "openExisting")
+fn emu_open_existing(baud: Int) -> Promise(Result(Conn, String))
+
+@external(javascript, "./emulator_ffi.mjs", "write")
+fn emu_write(conn: Conn, line: String) -> Promise(Result(Nil, String))
+
+@external(javascript, "./emulator_ffi.mjs", "startReading")
+fn emu_start_reading(
+  conn: Conn,
+  on_line: fn(String) -> Nil,
+  on_error: fn(String) -> Nil,
+) -> Nil
+
+@external(javascript, "./emulator_ffi.mjs", "close")
+fn emu_close(conn: Conn) -> Promise(Nil)
+
+/// The emulator backend: connects instantly, always available, and pumps a
+/// FAITHFUL pure Marlin core (`marlin_emulator.gleam`) — modelling motor-enable,
+/// the numbered ok/resend handshake, blank-line stalls, and M0 pauses. Unlike
+/// the thin simulator (which acks everything), this lets headless e2e tests
+/// reproduce real-hardware bug classes.
+pub fn emulator() -> Backend {
+  Backend(
+    name: "Emulator",
+    available: fn() { True },
+    open: emu_open,
+    open_existing: emu_open_existing,
+    write: emu_write,
+    start_reading: emu_start_reading,
+    close: emu_close,
+  )
+}

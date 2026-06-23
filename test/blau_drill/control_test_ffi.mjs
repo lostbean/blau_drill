@@ -37,3 +37,12 @@ export function deferredResolve(d, value) {
   d.resolve(value);
   return value;
 }
+
+// A macrotask "tick": a Promise that resolves on a 0ms timer. Awaiting it drains
+// the ENTIRE microtask queue first (microtasks always run before the next
+// macrotask), so any chained reply->write->reply microtasks the emulator backend
+// scheduled have all flushed by the time it resolves. Used by the emulator e2e
+// suite to settle a burst of the async handshake between discrete command phases.
+export function tick() {
+  return new Promise((res) => setTimeout(() => res(undefined), 0));
+}
