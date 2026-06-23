@@ -25,15 +25,16 @@
 
 import blau_drill/ui/model.{
   type Fiducial, type Head, type HeadConfidence, type HeadPosOpt, type Hole,
-  type Tool, Active, Align, Captured, ConfAligned, ConfEstimate, ConfNone,
-  ConfRough, Current, FidPending, HaveHeadPos, HoleDone, JumpTo, NoHeadPos,
-  Pending, SetCurrentTarget,
+  type PointResidual, type Tool, Active, Align, Captured, ConfAligned,
+  ConfEstimate, ConfNone, ConfRough, Current, FidPending, HaveHeadPos, HoleDone,
+  JumpTo, NoHeadPos, Pending, SetCurrentTarget,
 }
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/float
 import gleam/int
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import lustre/attribute as a
 import lustre/element.{type Element}
@@ -71,7 +72,40 @@ pub type CanvasData {
     head_confidence: HeadConfidence,
     stage: model.Screen,
     zoom: Float,
+    /// Per-captured-fiducial residuals from the last fit, keyed by the
+    /// fiducial's `index`. Empty before a fit (no annotations drawn). Populated
+    /// from `model.fit_diag` by `stages.canvas_data`.
+    point_residuals: List(PointResidual),
+    /// The fiducial index of the WORST residual, or -1 when none (no fit yet).
+    /// The marker at this index is highlighted distinctly.
+    worst_index: Int,
   )
+}
+
+// ── residual lookup (pure; unit-tested) ──────────────────────────────────────
+
+/// The residual error (mm) for the captured fiducial at `idx`, if the last fit
+/// produced one. `None` means no annotation (uncaptured point, or pre-fit).
+pub fn residual_for(residuals: List(PointResidual), idx: Int) -> Option(Float) {
+  case list.find(residuals, fn(r) { r.index == idx }) {
+    Ok(r) -> Some(r.error_mm)
+    Error(_) -> None
+  }
+}
+
+/// Whether the fiducial at `idx` is the worst-residual point. `worst_index` is
+/// -1 when there is no fit, so no fiducial is ever flagged pre-fit.
+pub fn is_worst_index(worst_index: Int, idx: Int) -> Bool {
+  worst_index >= 0 && worst_index == idx
+}
+
+/// Resolve the worst fiducial index from a `WorstOpt`: the worst point's index,
+/// or -1 when there is no worst (degenerate / no fit).
+pub fn worst_index_of(worst: model.WorstOpt) -> Int {
+  case worst {
+    model.HaveWorst(w) -> w.index
+    model.NoWorst -> -1
+  }
 }
 
 // ── span / projection ───────────────────────────────────────────────────────
@@ -205,7 +239,9 @@ pub fn view(data: CanvasData) -> Element(model.Msg) {
         substrate(sp, mk),
         outline_path(sp, data.outline, mk),
         list.map(data.holes, fn(hole) { hole_circle(sp, data.tools, hole, mk) }),
-        list.map(data.fiducials, fn(fid) { fiducial(sp, fid, mk) }),
+        list.map(data.fiducials, fn(fid) {
+          fiducial(sp, fid, mk, data.point_residuals, data.worst_index)
+        }),
         head_marker(sp, data.head_pos, data.head_confidence, mk),
       ]),
     )
@@ -335,12 +371,28 @@ fn hole_fill(hole: Hole, tools: List(Tool)) -> String {
 
 // ── fiducials ───────────────────────────────────────────────────────────────
 
-fn fiducial(sp: Span, fid: Fiducial, mk: Float) -> Element(model.Msg) {
+fn fiducial(
+  sp: Span,
+  fid: Fiducial,
+  mk: Float,
+  residuals: List(PointResidual),
+  worst_index: Int,
+) -> Element(model.Msg) {
   let #(px, py) = project(sp, fid.x, fid.y)
   let clickable = fid.state == FidPending || fid.state == Current
+  // Only captured fiducials carry a residual; uncaptured points have no error.
+  let residual = case fid.state {
+    Captured -> residual_for(residuals, fid.index)
+    _ -> None
+  }
+  let worst = is_worst_index(worst_index, fid.index)
+  let cls = case worst {
+    True -> "fid " <> fid_class(fid.state) <> " fid-worst"
+    False -> "fid " <> fid_class(fid.state)
+  }
   let attrs =
     list.flatten([
-      [a.class("fid " <> fid_class(fid.state))],
+      [a.class(cls)],
       case clickable {
         True -> [
           a.attribute("role", "button"),
@@ -353,7 +405,50 @@ fn fiducial(sp: Span, fid: Fiducial, mk: Float) -> Element(model.Msg) {
         False -> [a.attribute("aria-label", fid_aria(fid))]
       },
     ])
-  svg.g(attrs, fid_shapes(fid.state, px, py, mk))
+  let shapes =
+    list.append(
+      fid_shapes(fid.state, px, py, mk),
+      residual_label(residual, worst, px, py, mk),
+    )
+  svg.g(attrs, shapes)
+}
+
+// A small mono residual label (mm) drawn just up-and-right of a captured
+// fiducial marker, so it doesn't sit on the crosshair. Worst point gets the
+// error-colour class; others the neutral residual class. No residual → nothing.
+fn residual_label(
+  residual: Option(Float),
+  worst: Bool,
+  px: Float,
+  py: Float,
+  mk: Float,
+) -> List(Element(model.Msg)) {
+  case residual {
+    None -> []
+    Some(err) -> {
+      let cls = case worst {
+        True -> "fid-residual-label worst"
+        False -> "fid-residual-label"
+      }
+      [
+        svg.text(
+          [
+            a.attribute("x", num(px +. 2.0 *. mk)),
+            a.attribute("y", num(py -. 1.6 *. mk)),
+            a.attribute("font-size", num(1.6 *. mk)),
+            a.attribute("font-family", "var(--font-data)"),
+            a.class(cls),
+          ],
+          fmt_mm(err),
+        ),
+      ]
+    }
+  }
+}
+
+// Residual error formatted compactly (2dp) for the on-board label, e.g. "1.43".
+fn fmt_mm(f: Float) -> String {
+  float.to_string(round2(f))
 }
 
 fn fid_class(state: model.FiducialState) -> String {

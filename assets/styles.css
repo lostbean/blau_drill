@@ -1475,6 +1475,26 @@ button {
   stroke: #40e56c;
 }
 
+/* Post-fit residual annotations: the worst captured fiducial turns error-red
+   (ring, check, and label) so the operator can spot which dot is off; every
+   captured fiducial gets a small mono mm label beside its marker. */
+.fid-worst circle {
+  stroke: var(--error);
+}
+.fid-worst path {
+  stroke: var(--error);
+}
+.fid-residual-label {
+  fill: #40e56c;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.65);
+  stroke-width: 0.08px;
+}
+.fid-residual-label.worst {
+  fill: var(--error);
+}
+
 /* head crosshair */
 .head {
   animation: spin 6s linear infinite;

@@ -37,6 +37,12 @@ fn canvas_data(model: Model) -> CanvasData {
   }
   // fiducials = captured + pending candidates not yet captured.
   let fiducials = list.append(model.captured, pending_fiducials(model))
+  // Per-fiducial residuals from the last fit (empty / -1 before a fit), so the
+  // canvas annotates each captured marker with its error and flags the worst.
+  let #(point_residuals, worst_index) = case model.fit_diag {
+    model.HaveFitDiag(d) -> #(d.points, board_canvas.worst_index_of(d.worst))
+    model.NoFitDiag -> #([], -1)
+  }
   CanvasData(
     holes: board.holes,
     outline: board.outline,
@@ -48,6 +54,8 @@ fn canvas_data(model: Model) -> CanvasData {
     head_confidence: model.head_confidence,
     stage: model.screen,
     zoom: model.zoom,
+    point_residuals: point_residuals,
+    worst_index: worst_index,
   )
 }
 
