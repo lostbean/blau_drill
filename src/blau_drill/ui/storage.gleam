@@ -57,6 +57,7 @@ fn encode_config(c: Config) -> String {
   [
     #("baud", c.baud),
     #("auto_connect", bool_str(c.auto_connect)),
+    #("app_pause", bool_str(c.app_pause)),
     #("max_x", c.max_x),
     #("max_y", c.max_y),
     #("max_z", c.max_z),
@@ -93,6 +94,7 @@ fn decode_config(blob: String, seed: Config) -> Config {
   Config(
     baud: get("baud", seed.baud),
     auto_connect: get("auto_connect", bool_str(seed.auto_connect)) == "true",
+    app_pause: get("app_pause", bool_str(seed.app_pause)) == "true",
     max_x: get("max_x", seed.max_x),
     max_y: get("max_y", seed.max_y),
     max_z: get("max_z", seed.max_z),

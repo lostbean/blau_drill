@@ -22,6 +22,14 @@ pub fn default_fields_match_consts_test() {
   d.drill_feed |> should.equal(config.default_drill_feed)
   d.spindle_speed |> should.equal(config.default_spindle_speed)
   d.hover |> should.equal(config.default_hover)
+  d.app_pause |> should.equal(config.default_app_pause)
+}
+
+// app_pause defaults OFF: M0 is kept by default (ADR-0009 — the in-app pause
+// workflow is opt-in; any g-code export keeps the mandatory machine stop).
+pub fn default_app_pause_is_false_test() {
+  config.default().app_pause |> should.be_false
+  config.default_app_pause |> should.be_false
 }
 
 pub fn default_const_values_test() {

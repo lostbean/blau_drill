@@ -17,7 +17,7 @@ import blau_drill/ui/model.{
   MotionLimits, NewBoard, ParseBoard, Recapture, RedoAlignment, Release,
   RestartAlignment, ResumeAlignment, ResumeDrilling, RunDryRun, SelectCategory,
   SelectFile, SelectOutline, SetConfigField, SetJogStep, SpindleControl,
-  StartRegistering, TestSpindle, ToggleAutoConnect,
+  StartRegistering, TestSpindle, ToggleAppPause, ToggleAutoConnect,
 }
 import gleam/float
 import gleam/int
@@ -1087,6 +1087,36 @@ fn defaults_panel(c: Config) -> List(Element(model.Msg)) {
       h.div([a.class("field-grid cols-2")], [
         number_field("drill_feed", "Drill Feed (mm/min)", c.drill_feed),
         number_field("hover", "Dry-run Hover (mm)", c.hover),
+      ]),
+    ]),
+    card("Pause Behaviour", [
+      h.div([a.class("toggle-row")], [
+        h.button(
+          [
+            a.class(case c.app_pause {
+              True -> "switch on"
+              False -> "switch"
+            }),
+            a.attribute("type", "button"),
+            a.attribute("role", "switch"),
+            a.attribute("aria-checked", bool_str(c.app_pause)),
+            a.attribute("aria-label", "In-app pause"),
+            event.on_click(ToggleAppPause),
+          ],
+          [h.span([a.class("knob")], [])],
+        ),
+        h.div([a.class("toggle-text")], [
+          h.span([a.class("title")], [
+            h.text("In-app pause (omit M0; pause/resume on screen)"),
+          ]),
+          h.span([a.class("sub")], [
+            h.text(
+              "Pause the stream in-app at touch-off and each bit change with an "
+              <> "on-screen Resume, instead of the printer's M0 panel stop. Off "
+              <> "keeps M0 (resume on the printer).",
+            ),
+          ]),
+        ]),
       ]),
     ]),
   ]

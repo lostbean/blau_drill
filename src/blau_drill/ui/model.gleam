@@ -287,6 +287,12 @@ pub type Config {
   Config(
     baud: String,
     auto_connect: Bool,
+    /// In-app pause: when on, the streamed program omits the mandatory machine-
+    /// stop `M0` and the app pauses the stream at each bit change / touch-off,
+    /// offering an on-screen Resume (control stays on the screen). Off by default
+    /// — the streamed program keeps `M0` (operator resumes on the printer panel),
+    /// matching any future g-code export. See ADR-0009.
+    app_pause: Bool,
     max_x: String,
     max_y: String,
     max_z: String,
@@ -502,6 +508,8 @@ pub type Msg {
   SelectCategory(SettingsCategory)
   SetConfigField(field: String, value: String)
   ToggleAutoConnect
+  /// Flip the in-app pause flag (omit M0 + on-screen Resume vs keep M0).
+  ToggleAppPause
   ResetDefaults
   ApplyConfig
 }

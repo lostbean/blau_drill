@@ -171,6 +171,22 @@ pub fn gcode_config_carries_drill_mode_test() {
   cfg.mode |> should.equal(config.Drill)
 }
 
+// app_pause defaults False in the model config and coerces through unchanged.
+pub fn gcode_config_app_pause_defaults_false_test() {
+  let cfg = bridge.gcode_config(mock.default_config(), config.DryRun)
+  cfg.app_pause |> should.be_false
+}
+
+pub fn gcode_config_coerces_app_pause_true_test() {
+  let c = model.Config(..mock.default_config(), app_pause: True)
+  bridge.gcode_config(c, config.DryRun).app_pause |> should.be_true
+}
+
+pub fn gcode_config_coerces_app_pause_false_test() {
+  let c = model.Config(..mock.default_config(), app_pause: False)
+  bridge.gcode_config(c, config.Drill).app_pause |> should.be_false
+}
+
 pub fn gcode_config_malformed_field_falls_back_to_default_test() {
   // A non-numeric zdrill falls back to the generator default (-2.5), NOT the
   // config's own value — gcode_config uses config.default() for fallbacks.

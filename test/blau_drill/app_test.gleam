@@ -312,3 +312,92 @@ pub fn dry_run_refused_while_resume_pending_test() {
   let #(m4, _e4) = app.update(m3, model.RunDryRun)
   m4.screen |> should.equal(DryRun)
 }
+
+// ── app_pause: in-app pause modal + ResumeDrilling resumes the stream ──────────
+// SAFETY PROPERTY (ADR-0009): with app_pause on, the drill stream PAUSES at the
+// touch-off / each bit change (a sentinel where M0 would be). The app must raise
+// the bit-change modal AND, on ResumeDrilling, actually CONTINUE the stream
+// (issue ResumeStream) — the app now drives the pause that M0 used to.
+
+// A connected + trusted-aligned drill-ready Model with app_pause ON. Reuses the
+// restore-alignment machinery (a real solved transform), connects + resumes, then
+// runs the dry-run so the job sits in DryRun ready for ConfirmRegistration.
+fn drill_ready_app_pause_model() -> Model {
+  let base = base_model()
+  // Flip app_pause on in BOTH the editable config and the run snapshot.
+  let cfg = model.Config(..base.config, app_pause: True)
+  let base =
+    Model(
+      ..base,
+      config: cfg,
+      applied_config: bridge.gcode_config(cfg, config.DryRun),
+    )
+  let assert Ok(m0) = app.restore_alignment(base, saved_alignment())
+  // The restore snapshot re-reads applied_config from the model's config, so it
+  // already carries app_pause. Connect, resume (trust), then dry-run.
+  let #(m1, _e1) =
+    app.update(m0, model.ControllerEvent(controller.Issue(printer.Connect)))
+  let #(m2, _e2) = app.update(m1, ResumeAlignment)
+  let #(m3, _e3) = app.update(m2, model.RunDryRun)
+  m3
+}
+
+pub fn confirm_with_app_pause_pauses_stream_and_shows_modal_test() {
+  let m = drill_ready_app_pause_model()
+  // Start drilling: the program OPENS with the touch-off sentinel, so the FSM
+  // pauses immediately on stream start (start_stream → StreamPaused).
+  let #(m2, _e) = app.update(m, model.ConfirmRegistration)
+  m2.screen |> should.equal(Drill)
+  // The FSM is genuinely paused (not just streaming through).
+  controller.state(m2.controller)
+  |> printer.is_stream_paused
+  |> should.be_true
+  // The bit-change / resume modal is up so the operator can swap + resume.
+  case m2.bit_change {
+    model.HaveBitChange(_) -> True
+    model.NoBitChange -> False
+  }
+  |> should.be_true
+}
+
+pub fn resume_drilling_continues_the_paused_stream_test() {
+  let m = drill_ready_app_pause_model()
+  let #(m2, _e2) = app.update(m, model.ConfirmRegistration)
+  // Precondition: paused on the touch-off sentinel.
+  controller.state(m2.controller) |> printer.is_stream_paused |> should.be_true
+  // ResumeDrilling clears the modal AND resumes the stream: the FSM leaves the
+  // paused state (back to Streaming — the next real line went out).
+  let #(m3, _e3) = app.update(m2, model.ResumeDrilling)
+  m3.bit_change |> should.equal(NoBitChange)
+  controller.state(m3.controller) |> printer.is_stream_paused |> should.be_false
+  controller.state(m3.controller) |> printer.is_streaming |> should.be_true
+}
+
+// DEFAULT (app_pause OFF): the streamed program keeps M0, the FSM never sees a
+// sentinel, so the stream does NOT enter the paused state on start — it streams.
+// (M0 halts Marlin on real hardware; the FSM streams through it.)
+fn drill_ready_default_model() -> Model {
+  let base = base_model()
+  // app_pause stays False (mock.default_config()); be explicit for clarity.
+  let cfg = model.Config(..base.config, app_pause: False)
+  let base =
+    Model(
+      ..base,
+      config: cfg,
+      applied_config: bridge.gcode_config(cfg, config.DryRun),
+    )
+  let assert Ok(m0) = app.restore_alignment(base, saved_alignment())
+  let #(m1, _e1) =
+    app.update(m0, model.ControllerEvent(controller.Issue(printer.Connect)))
+  let #(m2, _e2) = app.update(m1, ResumeAlignment)
+  let #(m3, _e3) = app.update(m2, model.RunDryRun)
+  m3
+}
+
+pub fn confirm_default_streams_without_pausing_test() {
+  let m = drill_ready_default_model()
+  let #(m2, _e) = app.update(m, model.ConfirmRegistration)
+  // Default path: streaming (M0 in the body), NOT the in-app paused state.
+  controller.state(m2.controller) |> printer.is_stream_paused |> should.be_false
+  controller.state(m2.controller) |> printer.is_streaming |> should.be_true
+}

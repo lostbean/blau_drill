@@ -222,6 +222,11 @@ pub fn printer_state(s: printer.PrinterState) -> model.PrinterState {
     printer.Idle(_, _) -> model.Idle
     printer.Jogging(_, _) -> model.Jogging
     printer.Streaming(_, _) -> model.Streaming
+    // A stream halted at an in-app pause point still maps to the UI's `Streaming`
+    // gate: the run is in flight (motion stays gated, the abort affordance stays
+    // up), the operator just has the on-screen Resume modal. The bit-change modal
+    // (driven off the pause event) is what tells them to swap the bit.
+    printer.StreamPaused(_, _) -> model.Streaming
     printer.Faulted -> model.Faulted
   }
 }
@@ -458,6 +463,9 @@ pub fn gcode_config(c: model.Config, mode: config.Mode) -> GcodeConfig {
     drill_feed: parse_float(c.drill_feed, d.drill_feed),
     spindle_speed: parse_int(c.spindle_speed, d.spindle_speed),
     hover: parse_float(c.hover, d.hover),
+    // A plain Bool toggle (like auto_connect): pass it through to the generator,
+    // which omits M0 + emits the in-app pause sentinel when set.
+    app_pause: c.app_pause,
   )
 }
 

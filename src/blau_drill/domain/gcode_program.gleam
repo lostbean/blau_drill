@@ -33,6 +33,14 @@ type MachineHole {
   MachineHole(tool: ToolId, x: Float, y: Float)
 }
 
+/// The in-band pause sentinel emitted (in place of `M0`) when `cfg.app_pause`
+/// is on. It is NOT a real Marlin command, so the streaming FSM intercepts it,
+/// pauses the stream, and never writes it to the port. It is deliberately a bare
+/// token (no leading `(`/`;`, non-blank), so `stream_lines` KEEPS it through the
+/// sanitize pass — the streamed program carries the pause marker, the FSM
+/// consumes it. See `printer.feed_stream` and ADR-0009.
+pub const app_pause_marker = "M0_APP_PAUSE"
+
 /// The generated program value.
 pub type GcodeProgram {
   GcodeProgram(
@@ -81,7 +89,7 @@ pub fn build(
   let lines =
     list.flatten([
       header(board, order, cfg),
-      preamble(),
+      preamble(cfg),
       body,
       postamble(cfg),
     ])
@@ -187,10 +195,13 @@ fn mode_string(mode: config.Mode) -> String {
 // Preamble — the touch-off block + unit/mode setup.
 // ---------------------------------------------------------------------------
 
-fn preamble() -> List(String) {
+fn preamble(cfg: GcodeConfig) -> List(String) {
   [
     "(MSG, Position drill on the fiducial and touch off.)",
-    "M0      (Jog to fiducial, lower bit until it touches, then resume.)",
+    pause_line(
+      cfg,
+      "M0      (Jog to fiducial, lower bit until it touches, then resume.)",
+    ),
     "G04 P0 ( dwell for no time -- G64 should not smooth over this point )",
     "G92 X0 Y0 Z0",
     "",
@@ -200,6 +211,17 @@ fn preamble() -> List(String) {
     "G90       (Absolute coordinates.)",
     "",
   ]
+}
+
+// A pause point: the real `M0` machine-stop line (DEFAULT, and g-code export),
+// OR the in-app pause sentinel when `app_pause` is on. Either way the program
+// PAUSES here — the bit swap / touch-off opportunity is never skipped, only its
+// mechanism changes (printer panel vs in-app Resume). See ADR-0009.
+fn pause_line(cfg: GcodeConfig, m0_line: String) -> String {
+  case cfg.app_pause {
+    True -> app_pause_marker
+    False -> m0_line
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +258,7 @@ fn tool_block(
         "G04 P1.00000",
         "(MSG, Change tool bit to drill size " <> diameter <> "mm)",
         "M6      (Tool change.)",
-        "M0      (Temporary machine stop.)",
+        pause_line(cfg, "M0      (Temporary machine stop.)"),
       ],
       spindle_on_step(cfg),
       [

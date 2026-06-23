@@ -384,6 +384,83 @@ pub fn tool_change_pauses_test() {
   |> should.equal(6)
 }
 
+// ── app_pause: omit M0, emit the in-app pause sentinel instead (ADR-0009) ─────
+
+// A GcodeConfig with app_pause flipped on. Same tunables as `cfg`, plus the flag.
+fn cfg_app_pause(mode: config.Mode) -> config.GcodeConfig {
+  GcodeConfig(..cfg(mode), app_pause: True)
+}
+
+fn m0_count(lines: List(String)) -> Int {
+  let assert Ok(m0) = regexp.from_string("^M0\\b")
+  list.count(lines, fn(l) { regexp.check(m0, l) })
+}
+
+fn sentinel_count(lines: List(String)) -> Int {
+  list.count(lines, fn(l) { string.trim(l) == gcode_program.app_pause_marker })
+}
+
+// DEFAULT (app_pause off) is byte-identical to today: M0 present, NO sentinel.
+// (The existing M0/M6 count test pins the exact counts; this pins "no sentinel".)
+pub fn app_pause_off_keeps_m0_and_emits_no_sentinel_test() {
+  [Drill, DryRun]
+  |> each(fn(mode) {
+    let p =
+      gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
+    // Touch-off + 5 tool changes = 6 M0; and not a single sentinel.
+    m0_count(p.lines) |> should.equal(6)
+    sentinel_count(p.lines) |> should.equal(0)
+  })
+}
+
+// app_pause ON: every M0 is replaced by the sentinel — zero M0, six sentinels
+// (touch-off + one per bit change), so the bit-swap opportunity is never skipped.
+pub fn app_pause_on_omits_m0_and_emits_sentinel_per_boundary_test() {
+  [Drill, DryRun]
+  |> each(fn(mode) {
+    let p =
+      gcode_program.build(
+        board_from_fixture(),
+        xmirror_alignment(),
+        cfg_app_pause(mode),
+      )
+    m0_count(p.lines) |> should.equal(0)
+    // One pause per former-M0: touch-off (1) + 5 tool changes = 6.
+    sentinel_count(p.lines) |> should.equal(6)
+  })
+}
+
+// The pause count under app_pause exactly matches the M0 count under the default
+// — converting M0 → pause never drops a pause point.
+pub fn app_pause_preserves_every_pause_boundary_test() {
+  let off =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let on =
+    gcode_program.build(
+      board_from_fixture(),
+      xmirror_alignment(),
+      cfg_app_pause(Drill),
+    )
+  sentinel_count(on.lines) |> should.equal(m0_count(off.lines))
+}
+
+// The sentinel SURVIVES sanitize: stream_lines keeps it (it is non-blank and
+// doesn't begin with `(`/`;`), so the FSM can see and intercept it.
+pub fn app_pause_sentinel_survives_stream_lines_test() {
+  let p =
+    gcode_program.build(
+      board_from_fixture(),
+      xmirror_alignment(),
+      cfg_app_pause(Drill),
+    )
+  let streamed = gcode_program.stream_lines(p)
+  // The marker is itself streamable, and all 6 markers reach the streamed view.
+  gcode_program.is_streamable(gcode_program.app_pause_marker) |> should.be_true
+  sentinel_count(streamed) |> should.equal(6)
+  // And NO M0 is in the streamed body.
+  m0_count(streamed) |> should.equal(0)
+}
+
 // Count negative-Z plunges between each `T<n>` header.
 fn per_tool_plunge_counts(lines: List(String)) -> List(Int) {
   let assert Ok(tool_re) = regexp.from_string("^T[1-5]$")

@@ -15,9 +15,10 @@ import blau_drill/control/printer.{
   type Command, type Event, type PrinterState, type Step, Accepted, Busy,
   CancelStream, Connect, Energize, Faulted, Faulting, Halt, Jog, MoveTo,
   NotEnergized, PositionUpdate, Progress, PulseSpindle, Reconnect, Recovered,
-  Refused, Release, Stream, Where, X, Y,
+  Refused, Release, ResumeStream, Stream, StreamPausedAt, Where, X, Y,
 }
 import blau_drill/control/protocol
+import blau_drill/domain/gcode_program
 import gleam/list
 import gleam/string
 import gleeunit
@@ -560,6 +561,180 @@ pub fn energize_is_raw_after_reconnect_test() {
   let recovered = cmd(faulted, Reconnect).state
   let step = cmd(recovered, Energize)
   step.writes |> should.equal(["M17"])
+}
+
+// ── in-app pause / resume (the M0_APP_PAUSE sentinel — ADR-0009) ──────────────
+//
+// When app_pause is on, the streamed program carries `M0_APP_PAUSE` sentinels in
+// place of M0. The FSM must intercept each one: pause the stream (write NOTHING,
+// the sentinel never reaches the port), emit a pause event, and wait for
+// ResumeStream — which sends the NEXT REAL line and re-arms the handshake. Abort
+// (Halt) and cancel (CancelStream) stay reachable from the paused state.
+
+const pause = "M0_APP_PAUSE"
+
+// The sentinel constant in the test matches the generator's exported marker.
+pub fn pause_marker_matches_generator_test() {
+  pause |> should.equal(gcode_program.app_pause_marker)
+}
+
+// A sentinel mid-stream: on the ok that WOULD advance onto it, the FSM pauses —
+// no write goes out, the sentinel is consumed, and a pause event is emitted.
+pub fn stream_pauses_at_sentinel_without_writing_it_test() {
+  let program = ["G90", pause, "G0 X1 Y1", "M400"]
+  let s0 = cmd(idle(), Stream(program))
+  // First line G90 is in flight; ack it → would advance onto the sentinel.
+  let s1 = feed(s0.state, "ok")
+  // PAUSED: nothing written (the sentinel is NOT sent to the port).
+  s1.writes |> should.equal([])
+  s1.state |> printer.state_name |> should.equal("stream_paused")
+  // The progress for the just-confirmed G90 still fires, plus a pause event.
+  has_event(s1.events, fn(e) { e == Progress(1, 4, "G90") }) |> should.be_true
+  has_event(s1.events, fn(e) {
+    case e {
+      StreamPausedAt(_, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+// While paused, inbound lines are informational: no write, no advance, no leak of
+// the sentinel to the port.
+pub fn paused_ignores_inbound_and_sends_nothing_test() {
+  let program = ["G90", pause, "G0 X1 Y1"]
+  let paused = feed(cmd(idle(), Stream(program)).state, "ok").state
+  paused |> printer.state_name |> should.equal("stream_paused")
+  let step = feed(paused, "ok")
+  // Still paused, still nothing written — a spurious ok cannot resume.
+  step.writes |> should.equal([])
+  step.state |> printer.state_name |> should.equal("stream_paused")
+}
+
+// ResumeStream from paused sends the NEXT REAL line (the one after the sentinel)
+// and returns to Streaming — the handshake resumes from there.
+pub fn resume_stream_sends_next_real_line_test() {
+  let program = ["G90", pause, "G0 X1 Y1", "M400"]
+  let paused = feed(cmd(idle(), Stream(program)).state, "ok").state
+  let step = cmd(paused, ResumeStream)
+  // The sentinel is skipped; the next REAL line (G0 X1 Y1) goes out.
+  stripped_writes(step) |> should.equal(["G0 X1 Y1"])
+  step.state |> printer.state_name |> should.equal("streaming")
+  has_event(step.events, fn(e) { e == Accepted(ResumeStream) })
+  |> should.be_true
+}
+
+// End-to-end: a program with one mid-stream sentinel streams every REAL line
+// (the sentinel is NEVER among the writes), pausing once and resuming through.
+pub fn stream_with_sentinel_writes_every_real_line_once_test() {
+  let program = ["G90", pause, "G0 X1 Y1", "M400"]
+  let writes = run_stream_through_pauses(idle(), program)
+  // Exactly the real lines, in order — the sentinel is consumed, never written.
+  writes |> should.equal(["G90", "G0 X1 Y1", "M400"])
+  list.contains(writes, pause) |> should.be_false
+}
+
+// A program that OPENS with the sentinel (the touch-off pause) pauses on START —
+// the first line is never sent; resume sends the real first line.
+pub fn stream_pauses_immediately_when_first_line_is_sentinel_test() {
+  let program = [pause, "G90", "M400"]
+  let step = cmd(idle(), Stream(program))
+  // No write at all on start; straight into paused.
+  step.writes |> should.equal([])
+  step.state |> printer.state_name |> should.equal("stream_paused")
+  has_event(step.events, fn(e) { e == StreamPausedAt(0, 3) }) |> should.be_true
+  // Resume sends the first real line.
+  let step2 = cmd(step.state, ResumeStream)
+  stripped_writes(step2) |> should.equal(["G90"])
+  step2.state |> printer.state_name |> should.equal("streaming")
+}
+
+// SAFETY: Halt (M112) is reachable from the paused state — abort is never lost
+// behind a pause.
+pub fn halt_from_paused_faults_and_sends_m112_test() {
+  let program = ["G90", pause, "G0 X1 Y1"]
+  let paused = feed(cmd(idle(), Stream(program)).state, "ok").state
+  let step = cmd(paused, Halt)
+  step.state |> should.equal(Faulted)
+  step.writes |> should.equal(["M112"])
+  has_event(step.events, fn(e) {
+    case e {
+      Faulting(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+// SAFETY: CancelStream (benign back) is reachable from the paused state — returns
+// to Jogging (motors live), no write, no fault.
+pub fn cancel_from_paused_returns_to_jogging_test() {
+  let program = ["G90", pause, "G0 X1 Y1"]
+  let paused = feed(cmd(jogging(), Stream(program)).state, "ok").state
+  let step = cmd(paused, CancelStream)
+  step.state |> printer.state_name |> should.equal("jogging")
+  step.writes |> should.equal([])
+  has_event(step.events, fn(e) { e == Accepted(CancelStream) })
+  |> should.be_true
+}
+
+// A second Stream while paused is refused (Busy) — a run is already in flight.
+pub fn second_stream_while_paused_is_refused_test() {
+  let program = ["G90", pause, "G0 X1 Y1"]
+  let paused = feed(cmd(idle(), Stream(program)).state, "ok").state
+  let step = cmd(paused, Stream(["G91"]))
+  step.writes |> should.equal([])
+  has_event(step.events, fn(e) { e == Refused(Stream(["G91"]), Busy) })
+  |> should.be_true
+}
+
+// ResumeStream in a non-paused state is a benign no-op: no write, no state change
+// (a stray resume click can never move the head).
+pub fn resume_stream_while_idle_is_noop_test() {
+  let step = cmd(idle(), ResumeStream)
+  step.writes |> should.equal([])
+  step.state |> printer.state_name |> should.equal("idle")
+}
+
+pub fn resume_stream_while_streaming_is_noop_test() {
+  let program = ["G90", "M400"]
+  let s0 = cmd(idle(), Stream(program))
+  let step = cmd(s0.state, ResumeStream)
+  // No extra write; still streaming on the same in-flight line.
+  step.writes |> should.equal([])
+  step.state |> printer.state_name |> should.equal("streaming")
+}
+
+// Two sentinels in one program (touch-off + a bit change): the stream pauses
+// TWICE and resumes through both, writing every real line exactly once.
+pub fn stream_with_two_sentinels_pauses_twice_test() {
+  let program = [pause, "G90", pause, "G0 X1 Y1", "M400"]
+  let writes = run_stream_through_pauses(idle(), program)
+  writes |> should.equal(["G90", "G0 X1 Y1", "M400"])
+}
+
+// Drive a stream to completion, auto-resuming at each pause, collecting every
+// bare line written (the sentinel never appears — it is consumed, never sent).
+fn run_stream_through_pauses(
+  state: PrinterState,
+  program: List(String),
+) -> List(String) {
+  let s0 = printer.command(state, Stream(program))
+  drive_through(s0.state, stripped_writes(s0))
+}
+
+fn drive_through(state: PrinterState, acc: List(String)) -> List(String) {
+  case printer.is_streaming(state), printer.is_stream_paused(state) {
+    True, _ -> {
+      let step = printer.feed(state, "ok")
+      drive_through(step.state, list.append(acc, stripped_writes(step)))
+    }
+    _, True -> {
+      let step = printer.command(state, ResumeStream)
+      drive_through(step.state, list.append(acc, stripped_writes(step)))
+    }
+    False, False -> acc
+  }
 }
 
 // ── stream drivers (drive the pure handshake with synthetic acks) ────────────

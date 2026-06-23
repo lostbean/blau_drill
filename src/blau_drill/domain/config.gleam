@@ -25,6 +25,15 @@ pub type GcodeConfig {
     drill_feed: Float,
     spindle_speed: Int,
     hover: Float,
+    /// In-app pause mode. When `True`, the streamed program OMITS the mandatory
+    /// machine-stop `M0` (touch-off + every bit change) and emits an in-band
+    /// `M0_APP_PAUSE` sentinel in its place. The streaming FSM recognizes that
+    /// sentinel, halts the stream there, and offers an on-screen Resume — so
+    /// control stays on the app instead of the printer's panel. When `False`
+    /// (the default, and any g-code export), `M0` is kept exactly as-is and no
+    /// sentinel is emitted. Either way a PAUSE happens at every bit-change
+    /// boundary — a bit swap is never skipped. See ADR-0009.
+    app_pause: Bool,
   )
 }
 
@@ -43,6 +52,9 @@ pub const default_spindle_speed = 255
 
 pub const default_hover = 0.2
 
+// `M0` is kept by default — the in-app pause workflow is opt-in (see ADR-0009).
+pub const default_app_pause = False
+
 /// The default generator config — the safe `DryRun` fallbacks, before any
 /// operator override.
 pub fn default() -> GcodeConfig {
@@ -54,5 +66,6 @@ pub fn default() -> GcodeConfig {
     drill_feed: default_drill_feed,
     spindle_speed: default_spindle_speed,
     hover: default_hover,
+    app_pause: default_app_pause,
   )
 }

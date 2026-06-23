@@ -37,6 +37,7 @@
 //// entry action, so a de-energized jog cannot be expressed.
 
 import blau_drill/control/protocol
+import blau_drill/domain/gcode_program
 import gleam/list
 import gleam/string
 
@@ -62,6 +63,13 @@ pub type PrinterState {
   Jogging(line_no: Int, pending: Pending)
   /// A G-code program is in flight via the ok-handshake — one line at a time.
   Streaming(line_no: Int, job: StreamJob)
+  /// A stream halted at an in-app pause point (a `M0_APP_PAUSE` sentinel — the
+  /// in-app pause workflow, ADR-0009). NOTHING is in flight: the FSM consumed
+  /// the sentinel (never wrote it to the port) and is waiting for the operator's
+  /// `ResumeStream` to send the next real line and resume the handshake. `job.idx`
+  /// points AT the sentinel; resume sends `job.idx + 1`. `Halt` and
+  /// `CancelStream` stay reachable here (abort is never lost behind a pause).
+  StreamPaused(line_no: Int, job: StreamJob)
   /// Aborted / serial-loss. Loud and reachable from any active state. Only
   /// `Halt` (no-op) and `Reconnect` do anything here.
   Faulted
@@ -107,6 +115,11 @@ pub type Command {
   Where
   /// Stream a G-code program with the ok-handshake. Valid in `Idle`/`Jogging`.
   Stream(lines: List(String))
+  /// Resume a stream halted at an in-app pause point: `StreamPaused -> Streaming`.
+  /// Consumes nothing new — it sends the next REAL line (the one after the
+  /// already-consumed `M0_APP_PAUSE` sentinel) and re-arms the ok-handshake. A
+  /// benign no-op in any non-paused state (so a stray resume can't move the head).
+  ResumeStream
   /// Benign stream cancel: `Streaming -> Idle`. Stops feeding the program (no
   /// further lines go out) and returns to a CONNECTED, non-streaming state
   /// WITHOUT emitting M112 and WITHOUT faulting. This is the graceful counterpart
@@ -148,6 +161,11 @@ pub type Event {
   PositionUpdate(protocol.Position)
   /// A stream finished (all lines ok'd) and the machine returned to `Idle`.
   StreamComplete
+  /// The stream halted at an in-app pause point (a `M0_APP_PAUSE` sentinel). The
+  /// UI surfaces the bit-change / resume modal; the operator's `ResumeStream`
+  /// continues the run. `pending` is the count of lines confirmed so far (the
+  /// sentinel does not count — it is never sent), `total` the program length.
+  StreamPausedAt(pending: Int, total: Int)
   /// The machine entered `Faulted`. `reason` describes why (abort, serial loss).
   Faulting(reason: String)
   /// The machine recovered from a fault to `Idle`.
@@ -265,7 +283,15 @@ pub fn command(state: PrinterState, cmd: Command) -> Step {
     Idle(line_no, _), Stream(lines) -> start_stream(line_no, lines, cmd)
     Jogging(line_no, _), Stream(lines) -> start_stream(line_no, lines, cmd)
     Streaming(_, _), Stream(_) -> refused(state, cmd, Busy)
+    StreamPaused(_, _), Stream(_) -> refused(state, cmd, Busy)
     Faulted, Stream(_) -> refused(state, cmd, WhileFaulted)
+
+    // ── resume an in-app pause (StreamPaused -> Streaming) ───────────────────
+    // Send the next REAL line (the one after the already-consumed sentinel) and
+    // re-arm the handshake. Any non-paused state is a benign no-op (never moves
+    // the head): a stray resume click while idle/jogging/streaming does nothing.
+    StreamPaused(line_no, job), ResumeStream -> resume_stream(line_no, job, cmd)
+    _, ResumeStream -> accepted(state, [], cmd)
 
     // ── cancel stream (benign "go back") — NO write, NO fault ────────────────
     // Stop feeding the program and return to JOGGING (motors stay energized),
@@ -277,6 +303,11 @@ pub fn command(state: PrinterState, cmd: Command) -> Step {
     // to 0 like a fresh connection so a subsequent stream starts cleanly (we
     // stopped mid-handshake, so the in-flight `N` was never `ok`'d).
     Streaming(_, _), CancelStream ->
+      accepted(Jogging(line_no: 0, pending: PendingNone), [], cmd)
+    // A paused stream cancels the same way: drop the remaining program, return to
+    // Jogging (motors live), no write, no fault — the abort/back path is reachable
+    // through a pause exactly as through an active stream.
+    StreamPaused(_, _), CancelStream ->
       accepted(Jogging(line_no: 0, pending: PendingNone), [], cmd)
     // Benign no-op when there is nothing to cancel (already connected, idle/jog).
     Idle(_, _), CancelStream -> accepted(state, [], cmd)
@@ -314,6 +345,10 @@ pub fn feed(state: PrinterState, raw_line: String) -> Step {
   let line = trim(raw_line)
   case state {
     Streaming(line_no, job) -> feed_stream(line_no, job, line)
+
+    // Nothing is in flight while paused (the sentinel was never sent), so an
+    // inbound line is informational: stay paused, write nothing.
+    StreamPaused(_, _) -> Step(state, [], [])
 
     Idle(line_no, PendingWhere) ->
       feed_where(state, line_no, line, fn(n, p) { Idle(line_no: n, pending: p) })
@@ -372,11 +407,23 @@ fn feed_stream(line_no: Int, job: StreamJob, line: String) -> Step {
             StreamComplete,
           ])
         False -> {
-          // Advance and send the next line.
+          // Advance to the next line. If it is the in-app pause sentinel, PAUSE
+          // here instead of sending it: consume the sentinel (idx points AT it,
+          // so resume continues with idx+1) and emit a pause event. The sentinel
+          // is never framed and never written to the port.
           let job2 = StreamJob(..job, idx: next)
           let next_line = line_at(job2.lines, next)
-          let #(payload, n) = protocol.frame(next_line, line_no)
-          Step(Streaming(line_no: n, job: job2), [payload], [progress])
+          case is_pause_sentinel(next_line) {
+            True ->
+              Step(StreamPaused(line_no: line_no, job: job2), [], [
+                progress,
+                StreamPausedAt(pending: next, total: job.total),
+              ])
+            False -> {
+              let #(payload, n) = protocol.frame(next_line, line_no)
+              Step(Streaming(line_no: n, job: job2), [payload], [progress])
+            }
+          }
         }
       }
     }
@@ -416,11 +463,50 @@ fn start_stream(line_no: Int, lines: List(String), cmd: Command) -> Step {
     [] -> accepted(Idle(line_no: line_no, pending: PendingNone), [], cmd)
     [first, ..] -> {
       let job = StreamJob(lines: lines, idx: 0, total: list.length(lines))
-      // Entry action: send the first line.
-      let #(payload, n) = protocol.frame(first, line_no)
-      Step(Streaming(line_no: n, job: job), [payload], [Accepted(cmd)])
+      // Entry action: send the first line — UNLESS it is the in-app pause
+      // sentinel (a program can OPEN with the touch-off pause), in which case
+      // pause immediately and wait for the operator's resume. The sentinel is
+      // consumed (idx 0), never written; resume sends line 1.
+      case is_pause_sentinel(first) {
+        True ->
+          Step(StreamPaused(line_no: line_no, job: job), [], [
+            Accepted(cmd),
+            StreamPausedAt(pending: 0, total: job.total),
+          ])
+        False -> {
+          let #(payload, n) = protocol.frame(first, line_no)
+          Step(Streaming(line_no: n, job: job), [payload], [Accepted(cmd)])
+        }
+      }
     }
   }
+}
+
+/// Resume a paused stream: the sentinel at `job.idx` was already consumed, so we
+/// advance one past it and send that real line — re-arming the handshake. If the
+/// sentinel was the LAST line (no real line follows), the stream is complete.
+fn resume_stream(line_no: Int, job: StreamJob, cmd: Command) -> Step {
+  let next = job.idx + 1
+  case next >= job.total {
+    True ->
+      // The sentinel was the final line: nothing more to send, run is complete.
+      Step(Idle(line_no: line_no, pending: PendingNone), [], [
+        Accepted(cmd),
+        StreamComplete,
+      ])
+    False -> {
+      let job2 = StreamJob(..job, idx: next)
+      let next_line = line_at(job2.lines, next)
+      let #(payload, n) = protocol.frame(next_line, line_no)
+      Step(Streaming(line_no: n, job: job2), [payload], [Accepted(cmd)])
+    }
+  }
+}
+
+/// True when a streamed line is the in-app pause sentinel (`M0_APP_PAUSE`): the
+/// FSM intercepts it (pause, write nothing) rather than sending it to the port.
+fn is_pause_sentinel(line: String) -> Bool {
+  trim(line) == gcode_program.app_pause_marker
 }
 
 fn accepted(state: PrinterState, writes: List(String), cmd: Command) -> Step {
@@ -437,6 +523,7 @@ fn refuse_motion(state: PrinterState, cmd: Command) -> Step {
   case state {
     Idle(_, _) -> refused(state, cmd, NotEnergized)
     Streaming(_, _) -> refused(state, cmd, Busy)
+    StreamPaused(_, _) -> refused(state, cmd, Busy)
     Faulted -> refused(state, cmd, WhileFaulted)
     _ -> refused(state, cmd, NotConnected)
   }
@@ -447,6 +534,7 @@ fn refuse_for_state(state: PrinterState, cmd: Command) -> Step {
   case state {
     Faulted -> refused(state, cmd, WhileFaulted)
     Streaming(_, _) -> refused(state, cmd, Busy)
+    StreamPaused(_, _) -> refused(state, cmd, Busy)
     Disconnected -> refused(state, cmd, NotConnected)
     _ -> refused(state, cmd, NotEnergized)
   }
@@ -467,6 +555,7 @@ fn current_line_no(state: PrinterState) -> Int {
     Idle(n, _) -> n
     Jogging(n, _) -> n
     Streaming(n, _) -> n
+    StreamPaused(n, _) -> n
     _ -> 0
   }
 }
@@ -487,6 +576,7 @@ pub fn state_name(state: PrinterState) -> String {
     Idle(_, _) -> "idle"
     Jogging(_, _) -> "jogging"
     Streaming(_, _) -> "streaming"
+    StreamPaused(_, _) -> "stream_paused"
     Faulted -> "faulted"
   }
 }
@@ -499,11 +589,22 @@ pub fn is_streaming(state: PrinterState) -> Bool {
   }
 }
 
+/// Whether the machine is currently halted at an in-app pause point.
+pub fn is_stream_paused(state: PrinterState) -> Bool {
+  case state {
+    StreamPaused(_, _) -> True
+    _ -> False
+  }
+}
+
 /// Current stream progress as `#(sent, total)`, or `#(0, 0)` when not streaming.
 /// `sent` is the index of the line currently in flight (i.e. confirmed so far).
+/// While paused, `sent` is the count confirmed before the pause sentinel (which
+/// is never sent, so it does not count).
 pub fn stream_progress(state: PrinterState) -> #(Int, Int) {
   case state {
     Streaming(_, job) -> #(job.idx, job.total)
+    StreamPaused(_, job) -> #(job.idx, job.total)
     _ -> #(0, 0)
   }
 }

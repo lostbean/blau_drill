@@ -56,7 +56,7 @@ import blau_drill/ui/model.{
   SelectCategory, SelectFile, SelectOutline, SetConfigField, SetCurrentTarget,
   SetJogStep, Settings, SimBackend, StageAlign, StageDone, StageDrill,
   StageDryRun, StageLoad, StartRegistering, Streaming, Summary, TestSpindle,
-  ToggleAutoConnect,
+  ToggleAppPause, ToggleAutoConnect,
 }
 import blau_drill/ui/sample
 import blau_drill/ui/shell
@@ -351,6 +351,17 @@ fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           config_dirty: True,
         ),
       )
+    ToggleAppPause ->
+      noeff(
+        Model(
+          ..model,
+          config: model.Config(
+            ..model.config,
+            app_pause: !model.config.app_pause,
+          ),
+          config_dirty: True,
+        ),
+      )
     ResetDefaults ->
       noeff(Model(..model, config: mock.default_config(), config_dirty: True))
     ApplyConfig -> apply_config(model)
@@ -437,6 +448,12 @@ fn fold_event(model: Model, ev: printer.Event) -> #(Model, Effect(Msg)) {
     // (the confirm gate is theirs); in drill, the run is done streaming but
     // completion stays an explicit operator step (Mark Complete).
     printer.StreamComplete -> noeff(stream_complete(model))
+
+    // The stream halted at an in-app pause point (app_pause on; a swapped-in
+    // sentinel where an M0 would be). Show the bit-change / resume modal so the
+    // operator swaps the bit and presses Resume (which issues ResumeStream).
+    printer.StreamPausedAt(pending, _total) ->
+      noeff(stream_paused(model, pending))
 
     // The machine faulted (abort or serial loss): fault the job + show banner.
     printer.Faulting(_reason) -> noeff(fault(model))
@@ -1249,9 +1266,15 @@ fn confirm_registration(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 fn resume_drilling(model: Model) -> #(Model, Effect(Msg)) {
-  // Clear the bit-change modal; the background stream keeps animating. Completion
+  // Clear the bit-change modal and RESUME the stream. With app_pause on, the FSM
+  // is genuinely paused at the bit-change sentinel (nothing in flight), so the
+  // app drives the continuation: ResumeStream sends the next real line and
+  // re-arms the handshake. When the printer is NOT paused (the default M0 path,
+  // where the modal is informational and the stream never stops), ResumeStream is
+  // a benign no-op in the pure core — so this is safe in both modes. Completion
   // stays an explicit operator step.
-  noeff(Model(..model, bit_change: NoBitChange))
+  let m = Model(..model, bit_change: NoBitChange)
+  issue(m, printer.ResumeStream)
 }
 
 fn complete(model: Model) -> #(Model, Effect(Msg)) {
@@ -1436,6 +1459,77 @@ fn count_holes(lines: List(String)) -> Int {
     string.starts_with(l, "G0 X")
     && !string.contains(l, "bit-exchange position")
   })
+}
+
+// Fold an in-app pause into the model: raise the bit-change / resume modal so the
+// operator swaps the bit before continuing. `pending` is the count of confirmed
+// lines at the pause point; the upcoming tool is the LAST `T<n>` token in that
+// confirmed prefix (the touch-off pause at pending 0 has none yet → the first
+// tool). The streamed program is rebuilt the same way `apply_progress` does, so
+// the prefix indexes the same list the handshake confirmed.
+fn stream_paused(model: Model, pending: Int) -> Model {
+  let diameter = case model.job {
+    HaveJob(j) -> {
+      let program = current_program(model, j)
+      let confirmed = list.take(program, pending)
+      let tool = upcoming_tool(confirmed, program, pending)
+      tool_diameter(j.board, tool)
+    }
+    NoJob -> 0.0
+  }
+  Model(..model, bit_change: HaveBitChange(BitChange(diameter: diameter)))
+}
+
+// The tool whose bit the operator should mount at this pause point: the most
+// recent `T<n>` token in the confirmed prefix. The touch-off pause (nothing
+// confirmed, or no tool token yet) reports the FIRST tool token of the whole
+// program — that's the bit to load before the first block runs.
+fn upcoming_tool(
+  confirmed: List(String),
+  program: List(String),
+  pending: Int,
+) -> String {
+  case last_tool_token(confirmed) {
+    Ok(t) -> t
+    Error(_) ->
+      case pending == 0 {
+        True ->
+          case first_tool_token(program) {
+            Ok(t) -> t
+            Error(_) -> "T1"
+          }
+        False -> "T1"
+      }
+  }
+}
+
+// A bare `T<n>` tool token line (the change block emits the tool id on its own
+// line, e.g. "T1"). Distinct from `M6`/`G0` lines: it is exactly `T` followed by
+// an integer with nothing else, so `int.parse` of the suffix succeeds.
+fn is_tool_token(line: String) -> Bool {
+  let t = string.trim(line)
+  case string.starts_with(t, "T") {
+    True ->
+      case int.parse(string.drop_start(t, 1)) {
+        Ok(_) -> True
+        Error(_) -> False
+      }
+    False -> False
+  }
+}
+
+fn first_tool_token(lines: List(String)) -> Result(String, Nil) {
+  case list.filter(lines, is_tool_token) {
+    [t, ..] -> Ok(string.trim(t))
+    [] -> Error(Nil)
+  }
+}
+
+fn last_tool_token(lines: List(String)) -> Result(String, Nil) {
+  case list.filter(lines, is_tool_token) |> list.reverse {
+    [t, ..] -> Ok(string.trim(t))
+    [] -> Error(Nil)
+  }
 }
 
 fn stream_complete(model: Model) -> Model {
