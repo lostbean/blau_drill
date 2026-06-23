@@ -313,6 +313,20 @@ pub fn dry_run_refused_while_resume_pending_test() {
   m4.screen |> should.equal(DryRun)
 }
 
+// REPRODUCTION: Connect → Energize must land the UI in Jogging (motors live), so
+// jog/capture unlock. Pins the "motor enable not working" report at the app+FSM
+// layer (the layer the browser MCP can't currently reach).
+pub fn connect_then_energize_reaches_jogging_test() {
+  let #(m1, _) =
+    app.update(
+      base_model(),
+      model.ControllerEvent(controller.Issue(printer.Connect)),
+    )
+  m1.printer |> should.equal(Idle)
+  let #(m2, _) = app.update(m1, model.Energize)
+  m2.printer |> should.equal(Jogging)
+}
+
 // ── app_pause: in-app pause modal + ResumeDrilling resumes the stream ──────────
 // SAFETY PROPERTY (ADR-0009): with app_pause on, the drill stream PAUSES at the
 // touch-off / each bit change (a sentinel where M0 would be). The app must raise
