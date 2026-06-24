@@ -1,6 +1,8 @@
 # 2. Alignment is a fitted affine transform, not a G92 ritual
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by ADR-0010 — alignment also fits a Z surface
+  plane from per-fiducial Z; it is 2.5D. The XY affine + residual gate below are
+  unchanged.)
 - **Date:** 2026-06-18
 
 ## Context

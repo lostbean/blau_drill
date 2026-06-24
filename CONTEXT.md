@@ -91,14 +91,20 @@ not a flag on Alignment.
 
 ### Alignment
 
-A **solved** affine `Transform2D` plus its `residuals`. Constructible **only**
-via the smart constructor `Alignment.fit/1`, and only from ≥3 non-collinear
-correspondences; otherwise the result is `{:error, :too_few}` (caller keeps the
-`PendingAlignment`) or `{:error, :degenerate}` (collinear/coincident points).
-There is no public constructor.
+A **solved** value: an affine `Transform2D` for XY, a **Z surface plane** for
+depth, plus its `residuals`. It is **2.5D** (ADR-0010): each Correspondence
+carries `machine_z` (read from `M114` when the operator jogs the bit onto the pad),
+and `Alignment.fit/1` solves both the 2×3 XY affine AND a least-squares tilted
+plane `z = a·bx + b·by + c` over the captured Z's — so drill depth references the
+real per-hole surface (tilt/bend corrected), not one global touch-off. Constructible
+**only** via `Alignment.fit/1`, and only from ≥3 non-collinear correspondences;
+otherwise `{:error, :too_few}` (caller keeps the `PendingAlignment`) or
+`{:error, :degenerate}`. The trust gate stays the **XY** residual. No public
+constructor.
 _Avoid:_ the word **"calibration"** — Alignment is a per-board fitted transform,
-solved fresh each session, not a stored calibration. Also avoid "the G92" — the
-fiducial `G92` is a streaming implementation detail, not the domain alignment.
+solved fresh each session, not a stored calibration. There is **no `G92`** in the
+run anymore (ADR-0010 removed the touch-off): the affine owns XY and the plane owns
+surface Z, so don't describe a "fiducial G92" or origin reset.
 
 ### Transform2D
 
