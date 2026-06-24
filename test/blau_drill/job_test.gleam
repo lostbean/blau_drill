@@ -28,28 +28,28 @@ fn job() -> Job {
 // The exact back-side X-mirror correspondence set (3 non-collinear -> ~0 res).
 fn exact_corrs() -> List(Correspondence) {
   [
-    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0)),
-    Correspondence(board: #(1.0, 0.0), machine: #(-1.0, 0.0)),
-    Correspondence(board: #(0.0, 1.0), machine: #(0.0, 1.0)),
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 0.0),
+    Correspondence(board: #(1.0, 0.0), machine: #(-1.0, 0.0), machine_z: 0.0),
+    Correspondence(board: #(0.0, 1.0), machine: #(0.0, 1.0), machine_z: 0.0),
   ]
 }
 
 // Collinear (all on y=0) -> degenerate fit.
 fn collinear_corrs() -> List(Correspondence) {
   [
-    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0)),
-    Correspondence(board: #(1.0, 0.0), machine: #(-1.0, 0.0)),
-    Correspondence(board: #(2.0, 0.0), machine: #(-2.0, 0.0)),
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 0.0),
+    Correspondence(board: #(1.0, 0.0), machine: #(-1.0, 0.0), machine_z: 0.0),
+    Correspondence(board: #(2.0, 0.0), machine: #(-2.0, 0.0), machine_z: 0.0),
   ]
 }
 
 // Four-point near-identity with a +0.4 Y nudge -> residuals.max ~ 0.1.
 fn misfit_corrs() -> List(Correspondence) {
   [
-    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0)),
-    Correspondence(board: #(1.0, 0.0), machine: #(1.0, 0.0)),
-    Correspondence(board: #(0.0, 1.0), machine: #(0.0, 1.0)),
-    Correspondence(board: #(1.0, 1.0), machine: #(1.0, 1.4)),
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 0.0),
+    Correspondence(board: #(1.0, 0.0), machine: #(1.0, 0.0), machine_z: 0.0),
+    Correspondence(board: #(0.0, 1.0), machine: #(0.0, 1.0), machine_z: 0.0),
+    Correspondence(board: #(1.0, 1.0), machine: #(1.0, 1.4), machine_z: 0.0),
   ]
 }
 
@@ -90,11 +90,13 @@ pub fn start_registering_test() {
 
 pub fn capture_accumulates_test() {
   let assert Ok(j) = job.transition(job(), StartRegistering)
-  let c1 = Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0))
+  let c1 =
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 0.0)
   let assert Ok(j) = job.transition(j, Capture(c1))
   j.state |> should.equal(Registering)
   pending_alignment.count(j.pending) |> should.equal(1)
-  let c2 = Correspondence(board: #(1.0, 0.0), machine: #(-1.0, 0.0))
+  let c2 =
+    Correspondence(board: #(1.0, 0.0), machine: #(-1.0, 0.0), machine_z: 0.0)
   let assert Ok(j) = job.transition(j, Capture(c2))
   pending_alignment.count(j.pending) |> should.equal(2)
   j.pending.captured |> should.equal([c1, c2])

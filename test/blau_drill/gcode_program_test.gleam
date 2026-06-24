@@ -35,7 +35,7 @@ fn xmirror_alignment() -> Alignment {
   let corrs =
     list.map([#(0.0, 0.0), #(1.0, 0.0), #(0.0, 1.0)], fn(b) {
       let #(bx, by) = b
-      Correspondence(board: b, machine: #(float.negate(bx), by))
+      Correspondence(board: b, machine: #(float.negate(bx), by), machine_z: 0.0)
     })
   let assert Ok(al) = alignment.fit(corrs)
   al
@@ -305,7 +305,11 @@ fn example_alignments() -> List(Alignment) {
       let src = Transform2D(a: a, b: 0.0, c: 0.0, d: d, tx: tx, ty: ty)
       let corrs =
         list.map([#(0.0, 0.0), #(1.0, 0.0), #(0.0, 1.0)], fn(b) {
-          Correspondence(board: b, machine: transform2d_apply(src, b))
+          Correspondence(
+            board: b,
+            machine: transform2d_apply(src, b),
+            machine_z: 0.0,
+          )
         })
       let assert Ok(al) = alignment.fit(corrs)
       al

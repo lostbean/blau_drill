@@ -78,7 +78,7 @@ pub fn job_legal_path_test() {
   let bm = parse_sample()
   let corrs =
     bridge.feature_candidates(bm)
-    |> list.map(fn(p) { Correspondence(board: p, machine: p) })
+    |> list.map(fn(p) { Correspondence(board: p, machine: p, machine_z: 0.0) })
 
   let j0 = job.new(bm)
   let assert Ok(j1) = job.transition(j0, job.StartRegistering)
@@ -119,7 +119,7 @@ fn build_drill_program() -> gcode_program.GcodeProgram {
   let bm = parse_sample()
   let corrs =
     bridge.feature_candidates(bm)
-    |> list.map(fn(p) { Correspondence(board: p, machine: p) })
+    |> list.map(fn(p) { Correspondence(board: p, machine: p, machine_z: 0.0) })
   let assert Ok(al) = alignment.fit(corrs)
   let cfg = config.GcodeConfig(..config.default(), mode: config.Drill)
   gcode_program.build(bm, al, cfg)

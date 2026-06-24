@@ -30,10 +30,26 @@ pub type Residuals {
   Residuals(rms: Float, max: Float)
 }
 
-/// A solved alignment: a fitted `Transform2D` plus its residuals.
-/// Only `fit/1` constructs this value.
+/// A fitted board **surface plane** in the BOARD frame: `z = a*bx + b*by + c`.
+///
+/// Captured during 2.5D alignment, where the bit is jogged DOWN onto each
+/// fiducial pad so the machine Z at each capture is known. The plane absorbs
+/// board tilt/bend so per-hole drill depth can reference the local surface
+/// height (a later chunk). A flat board parallel to the bed is `a = b = 0`,
+/// `c = the common Z`.
+pub type ZPlane {
+  ZPlane(a: Float, b: Float, c: Float)
+}
+
+/// The fitted surface height at board point `#(bx, by)`: `a*bx + b*by + c`.
+pub fn surface_z(plane: ZPlane, bx: Float, by: Float) -> Float {
+  plane.a *. bx +. plane.b *. by +. plane.c
+}
+
+/// A solved alignment: a fitted `Transform2D`, a fitted board surface
+/// `z_plane`, plus its (XY) residuals. Only `fit/1` constructs this value.
 pub type Alignment {
-  Alignment(transform: Transform2D, residuals: Residuals)
+  Alignment(transform: Transform2D, z_plane: ZPlane, residuals: Residuals)
 }
 
 /// A fit failure.
@@ -75,7 +91,7 @@ fn fit_nonempty(
   // Center the board points on their centroid before forming the normal
   // equations, then fold the centroid shift back into the translation.
   let #(cx, cy) = board_centroid(correspondences)
-  let #(ata, atmx, atmy) = normal_equations(correspondences, cx, cy)
+  let #(ata, atmx, atmy, atmz) = normal_equations(correspondences, cx, cy)
 
   case solve3(ata, atmx) {
     Error(Degenerate) -> Error(Degenerate)
@@ -88,9 +104,16 @@ fn fit_nonempty(
       let tx = tx_c -. { a *. cx +. b *. cy }
       let ty = ty_c -. { c *. cx +. d *. cy }
 
+      // The Z surface plane shares the SAME AtA (same centered board sums); only
+      // the RHS differs (sums over machine Z). Solve it with the same solver and
+      // fold the centroid shift back into the constant term exactly like tx/ty.
+      let assert Ok(#(za, zb, zc_c)) = solve3(ata, atmz)
+      let zc = zc_c -. { za *. cx +. zb *. cy }
+
       let transform = Transform2D(a: a, b: b, c: c, d: d, tx: tx, ty: ty)
       Ok(Alignment(
         transform: transform,
+        z_plane: ZPlane(a: za, b: zb, c: zc),
         residuals: residuals(transform, correspondences),
       ))
     }
@@ -114,19 +137,23 @@ fn board_centroid(correspondences: List(Correspondence)) -> #(Float, Float) {
   #(sx /. n, sy /. n)
 }
 
-// Build AtA (symmetric 3x3) and the right-hand sides Atmx, Atmy, where each row
-// of A is `[bx - cx, by - cy, 1]`. Accumulated in a single pass.
+// Build AtA (symmetric 3x3) and the right-hand sides Atmx, Atmy, Atmz, where
+// each row of A is `[bx - cx, by - cy, 1]`. Atmx/Atmy drive the XY affine; Atmz
+// drives the Z surface plane (sums over machine Z) and shares the same AtA.
+// Accumulated in a single pass.
 fn normal_equations(
   correspondences: List(Correspondence),
   cx: Float,
   cy: Float,
-) -> #(Ata, Rhs, Rhs) {
+) -> #(Ata, Rhs, Rhs, Rhs) {
   let init = #(
     // AtA upper triangle: s_xx, s_xy, s_x, s_yy, s_y, n
     #(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
     // Atmx: t_xmx, t_ymx, t_mx
     #(0.0, 0.0, 0.0),
     // Atmy: t_xmy, t_ymy, t_my
+    #(0.0, 0.0, 0.0),
+    // Atmz: t_xmz, t_ymz, t_mz
     #(0.0, 0.0, 0.0),
   )
 
@@ -135,8 +162,13 @@ fn normal_equations(
       #(s_xx, s_xy, s_x, s_yy, s_y, n),
       #(t_xmx, t_ymx, t_mx),
       #(t_xmy, t_ymy, t_my),
+      #(t_xmz, t_ymz, t_mz),
     ) = acc
-    let Correspondence(board: #(raw_bx, raw_by), machine: #(mx, my)) = corr
+    let Correspondence(
+      board: #(raw_bx, raw_by),
+      machine: #(mx, my),
+      machine_z: mz,
+    ) = corr
     let bx = raw_bx -. cx
     let by = raw_by -. cy
 
@@ -151,6 +183,7 @@ fn normal_equations(
       ),
       #(t_xmx +. bx *. mx, t_ymx +. by *. mx, t_mx +. mx),
       #(t_xmy +. bx *. my, t_ymy +. by *. my, t_my +. my),
+      #(t_xmz +. bx *. mz, t_ymz +. by *. mz, t_mz +. mz),
     )
   })
 }
@@ -233,7 +266,7 @@ pub fn point_errors(
   correspondences: List(Correspondence),
 ) -> List(Float) {
   list.map(correspondences, fn(corr) {
-    let Correspondence(board: board, machine: #(mx, my)) = corr
+    let Correspondence(board: board, machine: #(mx, my), ..) = corr
     let #(px, py) = transform2d.apply(transform, board)
     let dx = px -. mx
     let dy = py -. my

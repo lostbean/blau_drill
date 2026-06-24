@@ -47,7 +47,8 @@ pub fn default_const_values_test() {
 // ── correspondence ───────────────────────────────────────────────────────────
 
 pub fn correspondence_field_access_test() {
-  let c = Correspondence(board: #(1.0, 2.0), machine: #(3.0, 4.0))
+  let c =
+    Correspondence(board: #(1.0, 2.0), machine: #(3.0, 4.0), machine_z: 0.0)
   c.board |> should.equal(#(1.0, 2.0))
   c.machine |> should.equal(#(3.0, 4.0))
 }
@@ -61,16 +62,21 @@ pub fn new_pending_is_empty_test() {
 pub fn add_increments_count_test() {
   let p =
     pending_alignment.new()
-    |> pending_alignment.add(
-      Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0)),
-    )
+    |> pending_alignment.add(Correspondence(
+      board: #(0.0, 0.0),
+      machine: #(0.0, 0.0),
+      machine_z: 0.0,
+    ))
   pending_alignment.count(p) |> should.equal(1)
 }
 
 pub fn count_after_n_adds_is_n_test() {
-  let c1 = Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0))
-  let c2 = Correspondence(board: #(1.0, 1.0), machine: #(1.0, 1.0))
-  let c3 = Correspondence(board: #(2.0, 2.0), machine: #(2.0, 2.0))
+  let c1 =
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 0.0)
+  let c2 =
+    Correspondence(board: #(1.0, 1.0), machine: #(1.0, 1.0), machine_z: 0.0)
+  let c3 =
+    Correspondence(board: #(2.0, 2.0), machine: #(2.0, 2.0), machine_z: 0.0)
   let p =
     pending_alignment.new()
     |> pending_alignment.add(c1)
@@ -81,9 +87,12 @@ pub fn count_after_n_adds_is_n_test() {
 
 pub fn add_preserves_append_order_test() {
   // The list is append-only: the captured list reads in insertion order.
-  let c1 = Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0))
-  let c2 = Correspondence(board: #(1.0, 1.0), machine: #(1.0, 1.0))
-  let c3 = Correspondence(board: #(2.0, 2.0), machine: #(2.0, 2.0))
+  let c1 =
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 0.0)
+  let c2 =
+    Correspondence(board: #(1.0, 1.0), machine: #(1.0, 1.0), machine_z: 0.0)
+  let c3 =
+    Correspondence(board: #(2.0, 2.0), machine: #(2.0, 2.0), machine_z: 0.0)
   let p =
     pending_alignment.new()
     |> pending_alignment.add(c1)

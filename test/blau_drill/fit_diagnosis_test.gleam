@@ -21,9 +21,9 @@ fn approx(a: Float, b: Float) -> Bool {
 pub fn point_errors_zero_for_exact_fit_test() {
   // Identity-recoverable correspondences (board == machine) → ~0 error each.
   let cs = [
-    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0)),
-    Correspondence(board: #(10.0, 0.0), machine: #(10.0, 0.0)),
-    Correspondence(board: #(0.0, 10.0), machine: #(0.0, 10.0)),
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 0.0),
+    Correspondence(board: #(10.0, 0.0), machine: #(10.0, 0.0), machine_z: 0.0),
+    Correspondence(board: #(0.0, 10.0), machine: #(0.0, 10.0), machine_z: 0.0),
   ]
   let assert Ok(al) = alignment.fit(cs)
   let errs = alignment.point_errors(al.transform, cs)
@@ -35,11 +35,11 @@ pub fn point_errors_in_capture_order_test() {
   // Four points where one (index 2) is deliberately displaced so the fit can't
   // satisfy it: its residual should be the largest, and the list stays ordered.
   let cs = [
-    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0)),
-    Correspondence(board: #(10.0, 0.0), machine: #(10.0, 0.0)),
-    Correspondence(board: #(0.0, 10.0), machine: #(5.0, 13.0)),
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 0.0),
+    Correspondence(board: #(10.0, 0.0), machine: #(10.0, 0.0), machine_z: 0.0),
+    Correspondence(board: #(0.0, 10.0), machine: #(5.0, 13.0), machine_z: 0.0),
     // displaced
-    Correspondence(board: #(10.0, 10.0), machine: #(10.0, 10.0)),
+    Correspondence(board: #(10.0, 10.0), machine: #(10.0, 10.0), machine_z: 0.0),
   ]
   let assert Ok(al) = alignment.fit(cs)
   let errs = alignment.point_errors(al.transform, cs)

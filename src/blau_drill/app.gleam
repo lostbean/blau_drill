@@ -695,7 +695,9 @@ pub fn restore_alignment(
       let j2 =
         list.fold(saved.captures, j1, fn(j, pair) {
           let #(board, machine) = pair
-          let corr = Correspondence(board: board, machine: machine)
+          // TODO(chunk 2): real M114 Z (persisted captures gain a Z field).
+          let corr =
+            Correspondence(board: board, machine: machine, machine_z: 0.0)
           case job.transition(j, job.Capture(corr)) {
             Ok(jj) -> jj
             Error(_) -> j
@@ -900,7 +902,13 @@ fn capture(model: Model) -> #(Model, Effect(Msg)) {
                 True -> noeff(model)
                 False -> {
                   let machine = #(model.head.x, model.head.y)
-                  let corr = Correspondence(board: #(bx, by), machine: machine)
+                  // TODO(chunk 2): real M114 Z (capture the bit-down height).
+                  let corr =
+                    Correspondence(
+                      board: #(bx, by),
+                      machine: machine,
+                      machine_z: 0.0,
+                    )
                   let j2 = case job.transition(j, job.Capture(corr)) {
                     Ok(jj) -> jj
                     Error(_) -> j
