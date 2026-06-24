@@ -171,10 +171,10 @@ pub fn gcode_config_carries_drill_mode_test() {
   cfg.mode |> should.equal(config.Drill)
 }
 
-// app_pause defaults False in the model config and coerces through unchanged.
-pub fn gcode_config_app_pause_defaults_false_test() {
+// app_pause defaults True in the model config and coerces through unchanged.
+pub fn gcode_config_app_pause_defaults_true_test() {
   let cfg = bridge.gcode_config(mock.default_config(), config.DryRun)
-  cfg.app_pause |> should.be_false
+  cfg.app_pause |> should.be_true
 }
 
 pub fn gcode_config_coerces_app_pause_true_test() {

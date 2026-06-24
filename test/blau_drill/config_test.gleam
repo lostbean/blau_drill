@@ -25,11 +25,13 @@ pub fn default_fields_match_consts_test() {
   d.app_pause |> should.equal(config.default_app_pause)
 }
 
-// app_pause defaults OFF: M0 is kept by default (ADR-0009 — the in-app pause
-// workflow is opt-in; any g-code export keeps the mandatory machine stop).
-pub fn default_app_pause_is_false_test() {
-  config.default().app_pause |> should.be_false
-  config.default_app_pause |> should.be_false
+// app_pause defaults ON (ADR-0009): the in-app pause workflow IS the default —
+// the operator drives the run from the screen, so M0 (which blocks on the
+// printer's own panel and stalls a screen-driven run at 0) is omitted and the app
+// pauses/resumes on screen. A future g-code EXPORT still keeps M0.
+pub fn default_app_pause_is_true_test() {
+  config.default().app_pause |> should.be_true
+  config.default_app_pause |> should.be_true
 }
 
 pub fn default_const_values_test() {

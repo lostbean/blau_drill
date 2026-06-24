@@ -1225,19 +1225,18 @@ fn confirm_registration(model: Model) -> #(Model, Effect(Msg)) {
             config.GcodeConfig(..model.applied_config, mode: config.Drill)
           let program = gcode_program.build(j.board, al, cfg)
           let total = list.length(j.board.holes)
-          // Bit-change pause: with >1 tool, surface the SECOND tool's diameter as
-          // the representative per-tool M0 pause modal (one pause that holds
-          // completion until acknowledged).
+          // No pre-set modal: the in-app pause is now DRIVEN by the stream FSM,
+          // which raises the touch-off pause (StreamPausedAt pending=0) the moment
+          // the run starts and a bit-change pause at each tool boundary. Starting
+          // with a bit-change modal already up would be wrong (it precedes the
+          // touch-off). `bit_label` is the first tool for the telemetry readout.
           let #(bit_change, bit_label, changes) = case program.tool_order {
-            [_first, second, ..] -> {
-              let dia = tool_diameter(j.board, second)
-              #(
-                HaveBitChange(BitChange(diameter: dia)),
-                fmt_mm(tool_diameter(j.board, first_tool(program.tool_order)))
-                  <> "mm",
-                int.max(list.length(program.tool_order) - 1, 0),
-              )
-            }
+            [_first, ..] -> #(
+              NoBitChange,
+              fmt_mm(tool_diameter(j.board, first_tool(program.tool_order)))
+                <> "mm",
+              int.max(list.length(program.tool_order) - 1, 0),
+            )
             _ -> #(NoBitChange, "—", 0)
           }
           let m =
@@ -1477,7 +1476,14 @@ fn stream_paused(model: Model, pending: Int) -> Model {
     }
     NoJob -> 0.0
   }
-  Model(..model, bit_change: HaveBitChange(BitChange(diameter: diameter)))
+  // `pending == 0` is the START-OF-RUN touch-off (nothing confirmed yet): the
+  // operator jogs to the fiducial and zeroes the bit — no bit to swap. Every
+  // later pause is a per-tool bit change.
+  let kind = case pending {
+    0 -> model.TouchOff(diameter: diameter)
+    _ -> model.BitChangePause(diameter: diameter)
+  }
+  Model(..model, bit_change: HaveBitChange(BitChange(diameter:, kind:)))
 }
 
 // The tool whose bit the operator should mount at this pause point: the most

@@ -52,8 +52,12 @@ pub const default_spindle_speed = 255
 
 pub const default_hover = 0.2
 
-// `M0` is kept by default — the in-app pause workflow is opt-in (see ADR-0009).
-pub const default_app_pause = False
+// The in-app pause workflow is the DEFAULT (ADR-0009): the operator drives the
+// run from the screen, so `M0` (which blocks on the printer's own panel) is
+// omitted and the app pauses/resumes the stream on screen. A streamed `M0` would
+// stall the run at 0 with no on-screen prompt. A future g-code EXPORT still keeps
+// `M0` (a standalone file has no app to drive it).
+pub const default_app_pause = True
 
 /// The default generator config — the safe `DryRun` fallbacks, before any
 /// operator override.

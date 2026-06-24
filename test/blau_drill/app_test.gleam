@@ -356,19 +356,25 @@ fn drill_ready_app_pause_model() -> Model {
   m3
 }
 
-pub fn confirm_with_app_pause_pauses_stream_and_shows_modal_test() {
+// With app_pause ON (now the DEFAULT), starting a run streams a program that OPENS
+// with the touch-off sentinel, so the FSM pauses IMMEDIATELY on stream start and
+// the app raises the touch-off modal — the operator jogs to the surface and
+// resumes. `drill_ready_app_pause_model` ends with RunDryRun, so the dry-run is
+// already at that first pause: assert it there (this is the exact "stuck at 0
+// with no pop" regression, now turned into an explicit on-screen pause).
+pub fn app_pause_pauses_at_touch_off_and_shows_modal_test() {
   let m = drill_ready_app_pause_model()
-  // Start drilling: the program OPENS with the touch-off sentinel, so the FSM
-  // pauses immediately on stream start (start_stream → StreamPaused).
-  let #(m2, _e) = app.update(m, model.ConfirmRegistration)
-  m2.screen |> should.equal(Drill)
-  // The FSM is genuinely paused (not just streaming through).
-  controller.state(m2.controller)
-  |> printer.is_stream_paused
-  |> should.be_true
-  // The bit-change / resume modal is up so the operator can swap + resume.
-  case m2.bit_change {
-    model.HaveBitChange(_) -> True
+  m.screen |> should.equal(DryRun)
+  // The FSM is genuinely paused on the touch-off sentinel (not streaming through).
+  controller.state(m.controller) |> printer.is_stream_paused |> should.be_true
+  // The touch-off modal is up so the operator can zero the bit and resume.
+  case m.bit_change {
+    model.HaveBitChange(bc) ->
+      case bc.kind {
+        // The FIRST pause is the touch-off, not a bit change.
+        model.TouchOff(_) -> True
+        model.BitChangePause(_) -> False
+      }
     model.NoBitChange -> False
   }
   |> should.be_true
@@ -376,15 +382,14 @@ pub fn confirm_with_app_pause_pauses_stream_and_shows_modal_test() {
 
 pub fn resume_drilling_continues_the_paused_stream_test() {
   let m = drill_ready_app_pause_model()
-  let #(m2, _e2) = app.update(m, model.ConfirmRegistration)
-  // Precondition: paused on the touch-off sentinel.
-  controller.state(m2.controller) |> printer.is_stream_paused |> should.be_true
+  // Precondition: paused on the touch-off sentinel (from RunDryRun).
+  controller.state(m.controller) |> printer.is_stream_paused |> should.be_true
   // ResumeDrilling clears the modal AND resumes the stream: the FSM leaves the
   // paused state (back to Streaming — the next real line went out).
-  let #(m3, _e3) = app.update(m2, model.ResumeDrilling)
-  m3.bit_change |> should.equal(NoBitChange)
-  controller.state(m3.controller) |> printer.is_stream_paused |> should.be_false
-  controller.state(m3.controller) |> printer.is_streaming |> should.be_true
+  let #(m2, _e2) = app.update(m, model.ResumeDrilling)
+  m2.bit_change |> should.equal(NoBitChange)
+  controller.state(m2.controller) |> printer.is_stream_paused |> should.be_false
+  controller.state(m2.controller) |> printer.is_streaming |> should.be_true
 }
 
 // DEFAULT (app_pause OFF): the streamed program keeps M0, the FSM never sees a

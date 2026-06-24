@@ -247,11 +247,24 @@ pub type ProgressOpt {
   HaveProgress(Progress)
 }
 
-// ── Bit-change pause + completion summary ───────────────────────────────────
+// ── Stream pause (touch-off / bit change) + completion summary ──────────────
 
-/// A per-tool M0 bit-change pause (Stage 4 modal).
+/// What an in-app stream pause is FOR. The touch-off pause (the FIRST pause, at
+/// the start of a run) asks the operator to jog the bit to the surface and zero
+/// it — there is no bit to swap; a bit-change pause asks them to swap to a given
+/// drill size. Both resume via `ResumeDrilling`, but they read very differently.
+pub type PauseKind {
+  /// Start-of-run touch-off: jog to the fiducial, lower the bit until it touches,
+  /// zero, then resume. `diameter` is the FIRST tool's size (informational).
+  TouchOff(diameter: Float)
+  /// A per-tool bit change: swap to `diameter` mm, then resume.
+  BitChangePause(diameter: Float)
+}
+
+/// An in-app stream pause (Stage 3/4 modal). `kind` says whether it is the
+/// start-of-run touch-off or a per-tool bit change so the modal reads correctly.
 pub type BitChange {
-  BitChange(diameter: Float)
+  BitChange(diameter: Float, kind: PauseKind)
 }
 
 pub type BitChangeOpt {

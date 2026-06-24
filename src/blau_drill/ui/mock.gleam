@@ -111,7 +111,7 @@ pub fn default_config() -> Config {
   Config(
     baud: "115200",
     auto_connect: False,
-    app_pause: False,
+    app_pause: True,
     max_x: "300.00",
     max_y: "200.00",
     max_z: "50.00",

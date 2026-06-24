@@ -791,37 +791,60 @@ fn complete_button(model: Model) -> Element(model.Msg) {
 fn bit_change_modal(model: Model) -> Element(model.Msg) {
   case model.bit_change {
     model.HaveBitChange(bc) ->
-      h.div([a.class("modal-scrim")], [
-        h.div([a.class("modal")], [
-          h.span([a.class("modal-icon"), a.attribute("aria-hidden", "true")], [
-            h.text("⚠"),
-          ]),
-          h.h3([], [h.text("Bit Change Required")]),
-          h.p([a.class("modal-paused")], [h.text("System Paused")]),
-          h.p([a.class("modal-body")], [
-            h.text("Swap to "),
-            h.strong([], [h.text(fmt_step(bc.diameter) <> "mm")]),
-            h.text(" bit to continue."),
-          ]),
-          h.p([a.class("modal-warn")], [
-            h.text(
-              "Warning: do not move the board substrate during the change — "
+      case bc.kind {
+        // Start-of-run touch-off: jog to the fiducial, lower the bit until it
+        // touches the surface, zero — then resume to begin the run. No bit swap.
+        model.TouchOff(_) ->
+          pause_modal(
+            "◎",
+            "Touch Off to Start",
+            "Jog the bit to the fiducial and lower it until it just touches the "
+              <> "copper, then resume to begin.",
+            "The bit is hovering — set Z zero at the surface before starting.",
+            "▶ Resume — Start Run",
+          )
+        // Per-tool bit change: swap to the named size, then resume.
+        model.BitChangePause(diameter) ->
+          pause_modal(
+            "⚠",
+            "Bit Change Required",
+            "Swap to a " <> fmt_step(diameter) <> "mm bit to continue.",
+            "Warning: do not move the board substrate during the change — "
               <> "alignment will be lost.",
-            ),
-          ]),
-          h.button(
-            [
-              a.class("btn btn-primary btn-block btn-lg"),
-              a.style("margin-top", "1.25rem"),
-              a.attribute("type", "button"),
-              event.on_click(ResumeDrilling),
-            ],
-            [h.text("▶ Resume Drilling")],
-          ),
-        ]),
-      ])
+            "▶ Resume Drilling",
+          )
+      }
     model.NoBitChange -> element.none()
   }
+}
+
+fn pause_modal(
+  icon: String,
+  title: String,
+  body: String,
+  warn: String,
+  button: String,
+) -> Element(model.Msg) {
+  h.div([a.class("modal-scrim")], [
+    h.div([a.class("modal")], [
+      h.span([a.class("modal-icon"), a.attribute("aria-hidden", "true")], [
+        h.text(icon),
+      ]),
+      h.h3([], [h.text(title)]),
+      h.p([a.class("modal-paused")], [h.text("System Paused")]),
+      h.p([a.class("modal-body")], [h.text(body)]),
+      h.p([a.class("modal-warn")], [h.text(warn)]),
+      h.button(
+        [
+          a.class("btn btn-primary btn-block btn-lg"),
+          a.style("margin-top", "1.25rem"),
+          a.attribute("type", "button"),
+          event.on_click(ResumeDrilling),
+        ],
+        [h.text(button)],
+      ),
+    ]),
+  ])
 }
 
 // ── Stage 5: Completion ───────────────────────────────────────────────────────

@@ -46,8 +46,10 @@ fn board_from_fixture() -> BoardModel {
   b
 }
 
+// The M0-path baseline: app_pause OFF explicitly. The default is now ON (ADR-0009),
+// so this helper pins the "keeps M0" export form; `cfg_app_pause` is the ON form.
 fn cfg(mode: config.Mode) -> config.GcodeConfig {
-  GcodeConfig(..config.default(), mode: mode)
+  GcodeConfig(..config.default(), mode: mode, app_pause: False)
 }
 
 // Parse an `X..`/`Y..`/`Z..` value out of a move line, if present.
