@@ -225,7 +225,11 @@ pub fn clear_session_board() -> Nil {
 pub type AlignmentSave {
   AlignmentSave(
     transform: Transform2D,
-    captures: List(#(Point, Point)),
+    /// Each capture is `#(board_xy, machine_xy, machine_z)` — the board feature
+    /// point, the head XY recorded for it, and the machine Z the bit was jogged
+    /// down to onto the pad (2.5D alignment). The Z feeds the restored surface
+    /// plane fit.
+    captures: List(#(Point, Point, Float)),
     side: model.BoardSide,
     quality: Int,
     residual_max: Float,
@@ -253,14 +257,15 @@ pub fn clear_alignment() -> Nil {
 }
 
 /// PURE serialize of the alignment slice — newline-delimited `key=value` lines,
-/// floats via `float.to_string`, captures as `bx,by,mx,my` quads joined by `;`.
+/// floats via `float.to_string`, captures as `bx,by,mx,my,mz` quintuples joined
+/// by `;` (the trailing `mz` is the captured machine Z for the surface plane).
 /// Separated from the FFI so it is unit-testable without real localStorage.
 pub fn encode_alignment(a: AlignmentSave) -> String {
   let t = a.transform
   let captures =
     a.captures
-    |> list.map(fn(pair) {
-      let #(#(bx, by), #(mx, my)) = pair
+    |> list.map(fn(triple) {
+      let #(#(bx, by), #(mx, my), mz) = triple
       float.to_string(bx)
       <> ","
       <> float.to_string(by)
@@ -268,6 +273,8 @@ pub fn encode_alignment(a: AlignmentSave) -> String {
       <> float.to_string(mx)
       <> ","
       <> float.to_string(my)
+      <> ","
+      <> float.to_string(mz)
     })
     |> string.join(";")
   [
@@ -322,9 +329,12 @@ pub fn decode_alignment(blob: String) -> Result(AlignmentSave, Nil) {
   ))
 }
 
-// Parse the `;`-joined `bx,by,mx,my` capture quads. An empty string yields the
-// empty list; any malformed quad fails the whole parse (→ no restore).
-fn parse_captures(s: String) -> Result(List(#(Point, Point)), Nil) {
+// Parse the `;`-joined `bx,by,mx,my,mz` capture quintuples. An empty string
+// yields the empty list; any malformed entry fails the whole parse (→ no
+// restore). BACKWARD-COMPAT: a legacy 4-number entry (`bx,by,mx,my`, no Z, as
+// pre-2.5D blobs hold it) decodes with `machine_z = 0.0` so an existing
+// operator's persisted alignment still loads.
+fn parse_captures(s: String) -> Result(List(#(Point, Point, Float)), Nil) {
   case s {
     "" -> Ok([])
     _ ->
@@ -334,14 +344,23 @@ fn parse_captures(s: String) -> Result(List(#(Point, Point)), Nil) {
   }
 }
 
-fn parse_capture(quad: String) -> Result(#(Point, Point), Nil) {
-  case string.split(quad, ",") {
+fn parse_capture(entry: String) -> Result(#(Point, Point, Float), Nil) {
+  case string.split(entry, ",") {
+    [bx, by, mx, my, mz] -> {
+      use bx <- result.try(float.parse(bx))
+      use by <- result.try(float.parse(by))
+      use mx <- result.try(float.parse(mx))
+      use my <- result.try(float.parse(my))
+      use mz <- result.try(float.parse(mz))
+      Ok(#(#(bx, by), #(mx, my), mz))
+    }
+    // Legacy (pre-2.5D) capture: no Z → default machine_z to 0.0.
     [bx, by, mx, my] -> {
       use bx <- result.try(float.parse(bx))
       use by <- result.try(float.parse(by))
       use mx <- result.try(float.parse(mx))
       use my <- result.try(float.parse(my))
-      Ok(#(#(bx, by), #(mx, my)))
+      Ok(#(#(bx, by), #(mx, my), 0.0))
     }
     _ -> Error(Nil)
   }

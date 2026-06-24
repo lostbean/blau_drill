@@ -242,7 +242,9 @@ pub fn board_to_machine_inverse_no_captures_errors_test() {
 // One capture ⇒ pure translation. With board == machine the offset is 0, so a
 // board point maps to itself; inverting recovers it.
 pub fn board_to_machine_one_capture_identity_test() {
-  let caps = [model.Capture(board: #(0.0, 0.0), machine: #(0.0, 0.0))]
+  let caps = [
+    model.Capture(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 0.0),
+  ]
   let assert Ok(m) =
     bridge.board_to_machine(model.NoTransform, caps, #(5.0, 7.0))
   point_close(m, #(5.0, 7.0)) |> should.be_true
@@ -251,7 +253,9 @@ pub fn board_to_machine_one_capture_identity_test() {
 pub fn board_to_machine_one_capture_translation_test() {
   // board₁ = (10, 10), machine₁ = (12, 8) ⇒ offset (board-machine) = (-2, +2).
   // machine = board - (board₁ - machine₁) = board - (-2, +2) = board + (2, -2).
-  let caps = [model.Capture(board: #(10.0, 10.0), machine: #(12.0, 8.0))]
+  let caps = [
+    model.Capture(board: #(10.0, 10.0), machine: #(12.0, 8.0), machine_z: 0.0),
+  ]
   let assert Ok(m) =
     bridge.board_to_machine(model.NoTransform, caps, #(20.0, 20.0))
   point_close(m, #(22.0, 18.0)) |> should.be_true
@@ -261,8 +265,8 @@ pub fn board_to_machine_forward_then_inverse_identity_test() {
   // Two captures where board == machine ⇒ similarity is the identity. Mapping a
   // board point forward then back recovers it (within epsilon).
   let caps = [
-    model.Capture(board: #(0.0, 0.0), machine: #(0.0, 0.0)),
-    model.Capture(board: #(10.0, 0.0), machine: #(10.0, 0.0)),
+    model.Capture(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 0.0),
+    model.Capture(board: #(10.0, 0.0), machine: #(10.0, 0.0), machine_z: 0.0),
   ]
   let assert Ok(m) =
     bridge.board_to_machine(model.NoTransform, caps, #(3.0, 4.0))
@@ -274,8 +278,8 @@ pub fn board_to_machine_forward_then_inverse_identity_test() {
 pub fn board_to_machine_two_captures_pure_translation_test() {
   // A pure (10, -5) translation captured twice: board point + (10, -5) = machine.
   let caps = [
-    model.Capture(board: #(0.0, 0.0), machine: #(10.0, -5.0)),
-    model.Capture(board: #(4.0, 0.0), machine: #(14.0, -5.0)),
+    model.Capture(board: #(0.0, 0.0), machine: #(10.0, -5.0), machine_z: 0.0),
+    model.Capture(board: #(4.0, 0.0), machine: #(14.0, -5.0), machine_z: 0.0),
   ]
   let assert Ok(m) =
     bridge.board_to_machine(model.NoTransform, caps, #(2.0, 3.0))
@@ -286,7 +290,9 @@ pub fn board_to_machine_inverse_one_capture_translation_test() {
   // 1 capture inverse: board ≈ machine + (board₁ − machine₁).
   // board₁=(10,10), machine₁=(12,8) ⇒ (board₁-machine₁)=(-2,+2).
   // head at (22, 18) ⇒ board = (22,18)+(-2,2) = (20, 20).
-  let caps = [model.Capture(board: #(10.0, 10.0), machine: #(12.0, 8.0))]
+  let caps = [
+    model.Capture(board: #(10.0, 10.0), machine: #(12.0, 8.0), machine_z: 0.0),
+  ]
   let assert Ok(b) =
     bridge.board_to_machine_inverse(caps, model.Head(22.0, 18.0, 0.0))
   point_close(b, #(20.0, 20.0)) |> should.be_true

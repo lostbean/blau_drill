@@ -28,9 +28,14 @@ import blau_drill/ui/model.{
 }
 import blau_drill/ui/sample
 import blau_drill/ui/storage.{type AlignmentSave, AlignmentSave}
+import gleam/float
 import gleam/list
 import gleam/option.{None, Some}
 import gleeunit/should
+
+fn approx(a: Float, b: Float) -> Bool {
+  float.absolute_value(a -. b) <. 1.0e-9
+}
 
 // ── Settings: always safe ────────────────────────────────────────────────────
 
@@ -233,14 +238,23 @@ fn base_model() -> Model {
 // Three identity board↔machine captures from the board's first candidates (a
 // perfect identity fit — well within the 0.1mm gate), as a persisted slice would
 // hold them. The transform field is irrelevant to the replay (the captures are
-// re-fitted), so an identity transform is stored.
+// re-fitted), so an identity transform is stored. Each capture carries a DISTINCT
+// non-flat machine Z so a restore proves the Z survives into the surface plane
+// fit (2.5D alignment).
 fn saved_alignment() -> AlignmentSave {
   let base = base_model()
   let assert HaveBoard(b) = base.board
   let pts = list.take(b.candidates, 3)
+  let zs = [-1.0, -1.2, -1.4]
+  let captures =
+    list.zip(pts, zs)
+    |> list.map(fn(pz) {
+      let #(p, z) = pz
+      #(p, p, z)
+    })
   AlignmentSave(
     transform: Transform2D(a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0),
-    captures: list.map(pts, fn(p) { #(p, p) }),
+    captures: captures,
     side: Front,
     quality: 100,
     residual_max: 0.0,
@@ -311,6 +325,49 @@ pub fn dry_run_refused_while_resume_pending_test() {
   let #(m3, _e3) = app.update(m2, ResumeAlignment)
   let #(m4, _e4) = app.update(m3, model.RunDryRun)
   m4.screen |> should.equal(DryRun)
+}
+
+// ── 2.5D: a live capture records the head Z as the correspondence machine_z ────
+// The bit-down height the operator jogged to (model.head.z) IS the surface Z. A
+// CaptureFiducial driven through the real capture path must carry that Z into the
+// model's Capture (and thus the correspondence feeding the plane fit), not 0.0.
+pub fn live_capture_records_head_z_test() {
+  // Connect + energize (→ Jogging, motors live) then start registering.
+  let #(m1, _) =
+    app.update(
+      base_model(),
+      model.ControllerEvent(controller.Issue(printer.Connect)),
+    )
+  let #(m2, _) = app.update(m1, model.Energize)
+  m2.printer |> should.equal(Jogging)
+  let #(m3, _) = app.update(m2, model.StartRegistering)
+  // Jog the head down to a known bit-down height on the pad: head.z = -1.5.
+  let m4 = Model(..m3, head: Head(m3.head.x, m3.head.y, -1.5))
+  // Capture the current target.
+  let #(m5, _) = app.update(m4, model.CaptureFiducial)
+  // Exactly one capture, and its machine_z is the head Z (-1.5), not 0.0.
+  case m5.captures {
+    [c] -> approx(c.machine_z, -1.5) |> should.be_true
+    _ -> should.fail()
+  }
+}
+
+// ── 2.5D: a restore threads the persisted Z into the re-fitted captures ────────
+// The saved slice carries distinct non-flat Z per capture; restore_alignment
+// re-fits them. Prove the Z survives the round trip into the model captures (the
+// plane-correctness itself is chunk-1-tested).
+pub fn restore_threads_persisted_z_into_captures_test() {
+  let assert Ok(m) = app.restore_alignment(base_model(), saved_alignment())
+  // The persisted Zs (-1.0, -1.2, -1.4) come back on the restored captures, in
+  // order — not all-zero (which would mean the Z was dropped on restore).
+  case m.captures {
+    [c0, c1, c2] -> {
+      approx(c0.machine_z, -1.0) |> should.be_true
+      approx(c1.machine_z, -1.2) |> should.be_true
+      approx(c2.machine_z, -1.4) |> should.be_true
+    }
+    _ -> should.fail()
+  }
 }
 
 // REPRODUCTION: Connect → Energize must land the UI in Jogging (motors live), so

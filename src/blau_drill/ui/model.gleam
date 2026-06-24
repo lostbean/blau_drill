@@ -332,9 +332,11 @@ pub type BackendKind {
 
 /// The captured board <-> machine pairs accumulated during registration, in
 /// capture order. Phase 4 feeds these to `alignment.fit`. Each entry pairs the
-/// board candidate point with the machine head XY recorded when it was captured.
+/// board candidate point with the machine head XY recorded when it was captured,
+/// plus the machine Z (`machine_z`) the bit was jogged down to onto the pad —
+/// the surface height that feeds the fitted board Z plane (2.5D alignment).
 pub type Capture {
-  Capture(board: Point, machine: Point)
+  Capture(board: Point, machine: Point, machine_z: Float)
 }
 
 /// The solved transform once an alignment is fitted (board -> machine), or

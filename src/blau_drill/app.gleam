@@ -265,7 +265,9 @@ fn persist_effect(model: Model) -> Effect(Msg) {
     HaveTransform(t) ->
       storage.save_alignment(storage.AlignmentSave(
         transform: t,
-        captures: list.map(model.captures, fn(c) { #(c.board, c.machine) }),
+        captures: list.map(model.captures, fn(c) {
+          #(c.board, c.machine, c.machine_z)
+        }),
         side: model.board_side,
         quality: model.quality,
         residual_max: model.residual_max,
@@ -693,11 +695,12 @@ pub fn restore_alignment(
       // Parsed → Registering, then replay each saved capture, then Fit.
       use j1 <- result.try(transition_ok(j0, job.StartRegistering))
       let j2 =
-        list.fold(saved.captures, j1, fn(j, pair) {
-          let #(board, machine) = pair
-          // TODO(chunk 2): real M114 Z (persisted captures gain a Z field).
+        list.fold(saved.captures, j1, fn(j, triple) {
+          let #(board, machine, machine_z) = triple
+          // Restore the persisted machine Z so the re-fit reconstructs the same
+          // board surface plane (2.5D alignment).
           let corr =
-            Correspondence(board: board, machine: machine, machine_z: 0.0)
+            Correspondence(board: board, machine: machine, machine_z: machine_z)
           case job.transition(j, job.Capture(corr)) {
             Ok(jj) -> jj
             Error(_) -> j
@@ -720,8 +723,8 @@ pub fn restore_alignment(
           let captured = restore_fiducials(m.board, saved.captures)
           let captures =
             list.map(saved.captures, fn(p) {
-              let #(b, mc) = p
-              Capture(board: b, machine: mc)
+              let #(b, mc, mz) = p
+              Capture(board: b, machine: mc, machine_z: mz)
             })
           Ok(
             Model(
@@ -764,12 +767,12 @@ fn transition_ok(j: job.Job, event: job.Event) -> Result(job.Job, Nil) {
 // canvas draws the restored captures as completed (green) markers.
 fn restore_fiducials(
   board: model.BoardOpt,
-  captures: List(#(transform2d.Point, transform2d.Point)),
+  captures: List(#(transform2d.Point, transform2d.Point, Float)),
 ) -> List(model.Fiducial) {
   case board {
     HaveBoard(b) ->
-      list.map(captures, fn(pair) {
-        let #(#(bx, by), _machine) = pair
+      list.map(captures, fn(triple) {
+        let #(#(bx, by), _machine, _machine_z) = triple
         let idx = nearest_candidate_index(b.candidates, bx, by)
         Fiducial(bx, by, idx, Captured)
       })
@@ -902,12 +905,16 @@ fn capture(model: Model) -> #(Model, Effect(Msg)) {
                 True -> noeff(model)
                 False -> {
                   let machine = #(model.head.x, model.head.y)
-                  // TODO(chunk 2): real M114 Z (capture the bit-down height).
+                  // The live M114 head Z is the bit-down height the operator
+                  // jogged to on the pad — exactly the surface Z the plane fit
+                  // wants. Carry it into both the correspondence and the model
+                  // capture (2.5D alignment).
+                  let machine_z = model.head.z
                   let corr =
                     Correspondence(
                       board: #(bx, by),
                       machine: machine,
-                      machine_z: 0.0,
+                      machine_z: machine_z,
                     )
                   let j2 = case job.transition(j, job.Capture(corr)) {
                     Ok(jj) -> jj
@@ -919,7 +926,11 @@ fn capture(model: Model) -> #(Model, Effect(Msg)) {
                     ])
                   let captures =
                     list.append(model.captures, [
-                      Capture(board: #(bx, by), machine: machine),
+                      Capture(
+                        board: #(bx, by),
+                        machine: machine,
+                        machine_z: machine_z,
+                      ),
                     ])
                   let next = next_uncaptured(board.candidates, captured)
                   noeff(
