@@ -790,30 +790,18 @@ fn complete_button(model: Model) -> Element(model.Msg) {
 
 fn bit_change_modal(model: Model) -> Element(model.Msg) {
   case model.bit_change {
+    // Per-tool bit change: swap to the named size, then resume. The very first
+    // pause is also a bit change (mount the first tool's bit) — ADR-0010 removed
+    // the start-of-run touch-off, so there is no longer a distinct modal for it.
     model.HaveBitChange(bc) ->
-      case bc.kind {
-        // Start-of-run touch-off: jog to the fiducial, lower the bit until it
-        // touches the surface, zero — then resume to begin the run. No bit swap.
-        model.TouchOff(_) ->
-          pause_modal(
-            "◎",
-            "Touch Off to Start",
-            "Jog the bit to the fiducial and lower it until it just touches the "
-              <> "copper, then resume to begin.",
-            "The bit is hovering — set Z zero at the surface before starting.",
-            "▶ Resume — Start Run",
-          )
-        // Per-tool bit change: swap to the named size, then resume.
-        model.BitChangePause(diameter) ->
-          pause_modal(
-            "⚠",
-            "Bit Change Required",
-            "Swap to a " <> fmt_step(diameter) <> "mm bit to continue.",
-            "Warning: do not move the board substrate during the change — "
-              <> "alignment will be lost.",
-            "▶ Resume Drilling",
-          )
-      }
+      pause_modal(
+        "⚠",
+        "Bit Change Required",
+        "Swap to a " <> fmt_step(bc.diameter) <> "mm bit to continue.",
+        "Warning: do not move the board substrate during the change — "
+          <> "alignment will be lost.",
+        "▶ Resume Drilling",
+      )
     model.NoBitChange -> element.none()
   }
 }

@@ -384,10 +384,11 @@ pub fn tool_change_pauses_test() {
   list.filter(p.lines, fn(l) { regexp.check(m6, l) })
   |> list.length
   |> should.equal(5)
-  // Touch-off M0 + 5 tool-change M0 = 6.
+  // ADR-0010: no touch-off M0. Exactly 5 tool-change M0 (one per tool block; the
+  // first is the first bit's change, not a touch-off).
   list.filter(p.lines, fn(l) { regexp.check(m0, l) })
   |> list.length
-  |> should.equal(6)
+  |> should.equal(5)
 }
 
 // ── app_pause: omit M0, emit the in-app pause sentinel instead (ADR-0009) ─────
@@ -413,14 +414,15 @@ pub fn app_pause_off_keeps_m0_and_emits_no_sentinel_test() {
   |> each(fn(mode) {
     let p =
       gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
-    // Touch-off + 5 tool changes = 6 M0; and not a single sentinel.
-    m0_count(p.lines) |> should.equal(6)
+    // ADR-0010: no touch-off. 5 tool-change M0; and not a single sentinel.
+    m0_count(p.lines) |> should.equal(5)
     sentinel_count(p.lines) |> should.equal(0)
   })
 }
 
-// app_pause ON: every M0 is replaced by the sentinel — zero M0, six sentinels
-// (touch-off + one per bit change), so the bit-swap opportunity is never skipped.
+// app_pause ON: every M0 is replaced by the sentinel — zero M0, five sentinels
+// (one per bit change; ADR-0010 removed the touch-off), so the bit-swap
+// opportunity is never skipped.
 pub fn app_pause_on_omits_m0_and_emits_sentinel_per_boundary_test() {
   [Drill, DryRun]
   |> each(fn(mode) {
@@ -431,8 +433,8 @@ pub fn app_pause_on_omits_m0_and_emits_sentinel_per_boundary_test() {
         cfg_app_pause(mode),
       )
     m0_count(p.lines) |> should.equal(0)
-    // One pause per former-M0: touch-off (1) + 5 tool changes = 6.
-    sentinel_count(p.lines) |> should.equal(6)
+    // One pause per former-M0: 5 tool changes (no touch-off).
+    sentinel_count(p.lines) |> should.equal(5)
   })
 }
 
@@ -460,9 +462,9 @@ pub fn app_pause_sentinel_survives_stream_lines_test() {
       cfg_app_pause(Drill),
     )
   let streamed = gcode_program.stream_lines(p)
-  // The marker is itself streamable, and all 6 markers reach the streamed view.
+  // The marker is itself streamable, and all 5 markers reach the streamed view.
   gcode_program.is_streamable(gcode_program.app_pause_marker) |> should.be_true
-  sentinel_count(streamed) |> should.equal(6)
+  sentinel_count(streamed) |> should.equal(5)
   // And NO M0 is in the streamed body.
   m0_count(streamed) |> should.equal(0)
 }
@@ -632,15 +634,146 @@ pub fn drill_zdepths_test() {
   { zchange_count >= 5 } |> should.be_true
 }
 
-pub fn preamble_touchoff_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  let core = list.map(p.lines, semantic_core)
-  list.contains(core, "G92 X0 Y0 Z0") |> should.be_true
-  list.contains(core, "G94") |> should.be_true
-  list.contains(core, "G21") |> should.be_true
-  list.contains(core, "G91.1") |> should.be_true
-  list.contains(core, "G90") |> should.be_true
+// ── Plane-relative Z (ADR-0010) ───────────────────────────────────────────────
+//
+// Each per-hole Z line is `surface_z(board_xy) + offset`, where the offset is
+// from config (zdrill in Drill, hover in DryRun). A flat plane reproduces the old
+// flat-Z output; a TILTED plane drills the right depth at every hole.
+
+// Fit an Alignment with an IDENTITY-ish XY transform but a chosen surface plane,
+// captured from explicit per-fiducial machine Z. The three board anchors
+// (0,0)/(1,0)/(0,1) with machine Z (z00, z10, z01) determine the plane:
+//   c = z00, a = z10 - z00, b = z01 - z00.
+fn alignment_with_plane(z00: Float, z10: Float, z01: Float) -> Alignment {
+  let corrs = [
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: z00),
+    Correspondence(board: #(1.0, 0.0), machine: #(1.0, 0.0), machine_z: z10),
+    Correspondence(board: #(0.0, 1.0), machine: #(0.0, 1.0), machine_z: z01),
+  ]
+  let assert Ok(al) = alignment.fit(corrs)
+  al
+}
+
+// A board with two single-tool holes at distinct board XY, so each gets a
+// distinct surface Z under a tilted plane.
+fn two_hole_board() -> BoardModel {
+  make_board([#(10.0, 0.0, "T1"), #(20.0, 0.0, "T1")])
+}
+
+// FLAT plane (c = 2.0, a = b = 0): every drill Z == 2.0 + zdrill, regardless of
+// hole position.
+pub fn flat_plane_drill_z_is_constant_test() {
+  let al = alignment_with_plane(2.0, 2.0, 2.0)
+  let p = gcode_program.build(two_hole_board(), al, cfg(Drill))
+  let plunge_zs =
+    p.lines
+    |> list.filter(plunge_line)
+    |> list.map(fn(l) {
+      let assert Some(z) = parse_z_of_g1(l)
+      z
+    })
+  list.length(plunge_zs) |> should.equal(2)
+  list.all(plunge_zs, fn(z) {
+    float.absolute_value(z -. { 2.0 +. zdrill }) <. z_tol
+  })
+  |> should.be_true
+}
+
+// TILTED plane (z = bx, i.e. a = 1, b = 0, c = 0): two holes at board X 10 and 20
+// get DIFFERENT drill Z, each == surface_z(hole) + zdrill (10 - 2.5 = 7.5 and
+// 20 - 2.5 = 17.5).
+pub fn tilted_plane_drill_z_varies_per_hole_test() {
+  let al = alignment_with_plane(0.0, 1.0, 0.0)
+  let p = gcode_program.build(two_hole_board(), al, cfg(Drill))
+  let plunge_zs =
+    p.lines
+    |> list.filter(fn(l) {
+      // a plunge here is the FIRST G1 Z after each XY rapid; with a tilt the
+      // value is positive, so `plunge_line` (z < 0) won't match. Match the G1 Z
+      // immediately following a hole's XY move via parse_z_of_g1 on the cut feed.
+      case parse_z_of_g1(l) {
+        Some(_) -> True
+        None -> False
+      }
+    })
+    |> list.map(fn(l) {
+      let assert Some(z) = parse_z_of_g1(l)
+      z
+    })
+  // Two holes -> drill Z 7.5 and 17.5 (in board file order), plus the per-hole
+  // retracts are G1 Z too — so filter to just the plunge depths (those that are
+  // NOT the travel/safe height). The safe height here is max_surface + zsafe =
+  // 20 + 5 = 25. Plunges are surface + zdrill.
+  let drill_zs = list.filter(plunge_zs, fn(z) { z <. 25.0 -. z_tol })
+  // Expect exactly the two plunge depths.
+  contains_close(drill_zs, 7.5) |> should.be_true
+  contains_close(drill_zs, 17.5) |> should.be_true
+  // The two depths are DISTINCT — proof the plane tilt reaches the Z lines.
+  case drill_zs {
+    [a, b, ..] -> { float.absolute_value(a -. b) >. 1.0 } |> should.be_true
+    _ -> should.fail()
+  }
+}
+
+// Dry-run on a tilted plane hovers ABOVE the local surface: Z == surface + hover.
+pub fn tilted_plane_dry_run_hovers_above_surface_test() {
+  let al = alignment_with_plane(0.0, 1.0, 0.0)
+  let p = gcode_program.build(two_hole_board(), al, cfg(DryRun))
+  // hover default is 0.2: surfaces 10 and 20 -> hover lines at 10.2 and 20.2.
+  let hover_lines =
+    list.filter(p.lines, fn(l) { string.contains(l, "dry-run hover") })
+  list.length(hover_lines) |> should.equal(2)
+  let hover_zs =
+    list.map(hover_lines, fn(l) {
+      let assert Some(z) = parse_axis(l, "Z")
+      z
+    })
+  contains_close(hover_zs, 10.2) |> should.be_true
+  contains_close(hover_zs, 20.2) |> should.be_true
+}
+
+// The travel/safe Z under a tilted plane is the program-wide ceiling
+// (max surface + zsafe), so XY only ever traverses above EVERY hole's surface —
+// the safety invariant holds even when the surface is high.
+pub fn tilted_plane_xy_safe_holds_test() {
+  let al = alignment_with_plane(0.0, 1.0, 0.0)
+  [Drill, DryRun]
+  |> each(fn(mode) {
+    let p = gcode_program.build(two_hole_board(), al, cfg(mode))
+    // safe ceiling = max surface (20) + zsafe (5) = 25; the invariant checker
+    // (which already tolerates any Z >= zsafe) passes because every XY rapid is
+    // reached only after a retract to that ceiling.
+    xy_only_when_safe(p) |> should.be_true
+  })
+  // And the post-swap return-to-cut height is the SHARED ceiling (25.0), proving
+  // travel uses max_surface + zsafe, not bare zsafe, under a tilt. The first such
+  // line is the tool block's "G0 Z<safe>" right after the spindle step.
+  let p = gcode_program.build(two_hole_board(), al, cfg(Drill))
+  let assert Ok(re) = regexp.from_string("^G0 Z25\\.00000\\b")
+  { list.filter(p.lines, fn(l) { regexp.check(re, l) }) |> list.length >= 1 }
+  |> should.be_true
+}
+
+// ADR-0010: the preamble is unit/mode setup ONLY. No start-of-run touch-off and
+// no `G92` origin reset — the fitted surface plane is the Z datum and the affine
+// owns XY, so per-hole Z is plane-relative absolute machine Z.
+pub fn preamble_no_touchoff_no_g92_test() {
+  [Drill, DryRun]
+  |> each(fn(mode) {
+    let p =
+      gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
+    let core = list.map(p.lines, semantic_core)
+    // No origin reset.
+    list.contains(core, "G92 X0 Y0 Z0") |> should.be_false
+    list.any(p.lines, fn(l) { string.contains(l, "G92") }) |> should.be_false
+    // No touch-off prompt anywhere.
+    list.any(p.lines, fn(l) { string.contains(l, "touch") }) |> should.be_false
+    // Unit/mode setup still present.
+    list.contains(core, "G94") |> should.be_true
+    list.contains(core, "G21") |> should.be_true
+    list.contains(core, "G91.1") |> should.be_true
+    list.contains(core, "G90") |> should.be_true
+  })
 }
 
 pub fn postamble_homes_and_ends_test() {
@@ -861,6 +994,11 @@ fn each(xs: List(a), f: fn(a) -> b) -> Nil {
 
 fn count_eq(xs: List(String), target: String) -> Int {
   xs |> list.filter(fn(x) { x == target }) |> list.length
+}
+
+// True if `xs` has a value within z_tol of `target`.
+fn contains_close(xs: List(Float), target: Float) -> Bool {
+  list.any(xs, fn(x) { float.absolute_value(x -. target) <. z_tol })
 }
 
 fn board_model_dict_new() -> dict.Dict(String, Float) {

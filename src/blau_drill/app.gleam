@@ -1482,9 +1482,9 @@ fn count_holes(lines: List(String)) -> Int {
 // Fold an in-app pause into the model: raise the bit-change / resume modal so the
 // operator swaps the bit before continuing. `pending` is the count of confirmed
 // lines at the pause point; the upcoming tool is the LAST `T<n>` token in that
-// confirmed prefix (the touch-off pause at pending 0 has none yet → the first
-// tool). The streamed program is rebuilt the same way `apply_progress` does, so
-// the prefix indexes the same list the handshake confirmed.
+// confirmed prefix (the first pause at pending 0 has none yet → the FIRST tool's
+// bit change). The streamed program is rebuilt the same way `apply_progress`
+// does, so the prefix indexes the same list the handshake confirmed.
 fn stream_paused(model: Model, pending: Int) -> Model {
   let diameter = case model.job {
     HaveJob(j) -> {
@@ -1495,18 +1495,14 @@ fn stream_paused(model: Model, pending: Int) -> Model {
     }
     NoJob -> 0.0
   }
-  // `pending == 0` is the START-OF-RUN touch-off (nothing confirmed yet): the
-  // operator jogs to the fiducial and zeroes the bit — no bit to swap. Every
-  // later pause is a per-tool bit change.
-  let kind = case pending {
-    0 -> model.TouchOff(diameter: diameter)
-    _ -> model.BitChangePause(diameter: diameter)
-  }
-  Model(..model, bit_change: HaveBitChange(BitChange(diameter:, kind:)))
+  // Every pause is a bit change now (ADR-0010 removed the touch-off). The FIRST
+  // pause (`pending == 0`, nothing confirmed) is the first tool's bit change:
+  // mount its bit before the run begins; `diameter` is that tool's size.
+  Model(..model, bit_change: HaveBitChange(BitChange(diameter:)))
 }
 
 // The tool whose bit the operator should mount at this pause point: the most
-// recent `T<n>` token in the confirmed prefix. The touch-off pause (nothing
+// recent `T<n>` token in the confirmed prefix. The first pause (nothing
 // confirmed, or no tool token yet) reports the FIRST tool token of the whole
 // program — that's the bit to load before the first block runs.
 fn upcoming_tool(

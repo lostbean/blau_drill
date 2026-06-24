@@ -413,33 +413,50 @@ fn drill_ready_app_pause_model() -> Model {
   m3
 }
 
-// With app_pause ON (now the DEFAULT), starting a run streams a program that OPENS
-// with the touch-off sentinel, so the FSM pauses IMMEDIATELY on stream start and
-// the app raises the touch-off modal — the operator jogs to the surface and
-// resumes. `drill_ready_app_pause_model` ends with RunDryRun, so the dry-run is
-// already at that first pause: assert it there (this is the exact "stuck at 0
-// with no pop" regression, now turned into an explicit on-screen pause).
-pub fn app_pause_pauses_at_touch_off_and_shows_modal_test() {
-  let m = drill_ready_app_pause_model()
-  m.screen |> should.equal(DryRun)
-  // The FSM is genuinely paused on the touch-off sentinel (not streaming through).
-  controller.state(m.controller) |> printer.is_stream_paused |> should.be_true
-  // The touch-off modal is up so the operator can zero the bit and resume.
-  case m.bit_change {
-    model.HaveBitChange(bc) ->
-      case bc.kind {
-        // The FIRST pause is the touch-off, not a bit change.
-        model.TouchOff(_) -> True
-        model.BitChangePause(_) -> False
+// Pump simulator `ok` acks through the app until the FSM hits its first in-app
+// pause (or `fuel` runs out). ADR-0010 removed the touch-off, so the program no
+// longer OPENS with a sentinel: streaming first flows through the unit/mode
+// preamble and the opening of the first tool block, then pauses at the first
+// bit-change sentinel. This drives the stream to that point the way the live read
+// loop would.
+fn pump_to_pause(m: Model, fuel: Int) -> Model {
+  case fuel <= 0 {
+    True -> m
+    False ->
+      case printer.is_stream_paused(controller.state(m.controller)) {
+        True -> m
+        False -> {
+          let #(m2, _e) =
+            app.update(m, model.ControllerEvent(controller.Inbound("ok")))
+          pump_to_pause(m2, fuel - 1)
+        }
       }
+  }
+}
+
+// With app_pause ON (now the DEFAULT), starting a run streams a program whose
+// FIRST pause is the first tool block's bit-change sentinel (ADR-0010 removed the
+// touch-off — the fitted surface plane is the Z datum). Driving the handshake
+// forward, the FSM pauses there and the app raises the bit-change modal: the
+// operator mounts the first tool's bit and resumes. (This is the exact "stuck at
+// 0 with no pop" regression, now an explicit on-screen bit-change pause.)
+pub fn app_pause_pauses_at_first_bit_change_and_shows_modal_test() {
+  let m0 = drill_ready_app_pause_model()
+  m0.screen |> should.equal(DryRun)
+  let m = pump_to_pause(m0, 100)
+  // The FSM is genuinely paused on the first sentinel (not streaming through).
+  controller.state(m.controller) |> printer.is_stream_paused |> should.be_true
+  // The bit-change modal is up so the operator can mount the first bit and resume.
+  case m.bit_change {
+    model.HaveBitChange(_) -> True
     model.NoBitChange -> False
   }
   |> should.be_true
 }
 
 pub fn resume_drilling_continues_the_paused_stream_test() {
-  let m = drill_ready_app_pause_model()
-  // Precondition: paused on the touch-off sentinel (from RunDryRun).
+  let m = pump_to_pause(drill_ready_app_pause_model(), 100)
+  // Precondition: paused on the first bit-change sentinel.
   controller.state(m.controller) |> printer.is_stream_paused |> should.be_true
   // ResumeDrilling clears the modal AND resumes the stream: the FSM leaves the
   // paused state (back to Streaming — the next real line went out).

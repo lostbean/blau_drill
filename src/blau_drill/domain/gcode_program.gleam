@@ -28,9 +28,12 @@ import gleam/string
 pub type BboxMachine =
   #(Float, Float, Float, Float)
 
-/// A drilled hole already projected into machine space.
+/// A drilled hole already projected into machine space, carrying the fitted
+/// surface Z at its BOARD location. `surface_z` is `alignment.surface_z` of the
+/// hole's board coords (the plane is board-frame) — every per-hole Z line is
+/// computed relative to it, so a tilted board drills the right depth everywhere.
 type MachineHole {
-  MachineHole(tool: ToolId, x: Float, y: Float)
+  MachineHole(tool: ToolId, x: Float, y: Float, surface_z: Float)
 }
 
 /// The in-band pause sentinel emitted (in place of `M0`) when `cfg.app_pause`
@@ -67,7 +70,10 @@ pub fn build(
   let machine_holes =
     list.map(board.holes, fn(hole) {
       let #(mx, my) = transform2d.apply(transform, #(hole.x, hole.y))
-      MachineHole(tool: hole.tool, x: mx, y: my)
+      // The surface plane is BOARD-frame, so evaluate it at the hole's board
+      // coords (NOT the machine projection). Every per-hole Z references this.
+      let sz = alignment.surface_z(alignment.z_plane, hole.x, hole.y)
+      MachineHole(tool: hole.tool, x: mx, y: my, surface_z: sz)
     })
 
   let by_tool = group_by_tool(machine_holes)
@@ -77,13 +83,22 @@ pub fn build(
   // block — so every bit swap happens at a consistent, board-centered location.
   let centroid = centroid_machine(machine_holes)
 
+  // The program-wide travel/safe Z. With a tilted surface plane each hole's
+  // local "safe" is `surface_z + zsafe`; a SINGLE travel height that clears
+  // EVERY hole — `max(surface_z) + zsafe` — keeps the XY-safe invariant trivial
+  // (one constant Z, always above every hole's surface by at least zsafe), so an
+  // XY rapid can never traverse where the bit could strike the board. Per-hole
+  // plunge/retract still reference their OWN surface_z; only inter-hole travel
+  // uses this shared ceiling.
+  let safe_z = travel_safe_z(machine_holes, cfg)
+
   let body =
     list.flat_map(order, fn(tool) {
       let holes = case dict.get(by_tool, tool) {
         Ok(hs) -> hs
         Error(_) -> []
       }
-      tool_block(tool, holes, board.tools, cfg, centroid)
+      tool_block(tool, holes, board.tools, cfg, centroid, safe_z)
     })
 
   let lines =
@@ -192,19 +207,18 @@ fn mode_string(mode: config.Mode) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Preamble — the touch-off block + unit/mode setup.
+// Preamble — unit/mode setup ONLY.
+//
+// ADR-0010: the alignment affine owns XY and the fitted surface plane owns Z, so
+// the plane IS the surface datum — there is no start-of-run touch-off and no
+// `G92` origin reset. Per-hole Z is computed plane-relative in absolute machine
+// coordinates. The first in-app pause is therefore the FIRST tool's bit change,
+// emitted by the first tool block (not a touch-off here).
 // ---------------------------------------------------------------------------
 
-fn preamble(cfg: GcodeConfig) -> List(String) {
+fn preamble(_cfg: GcodeConfig) -> List(String) {
   [
-    "(MSG, Position drill on the fiducial and touch off.)",
-    pause_line(
-      cfg,
-      "M0      (Jog to fiducial, lower bit until it touches, then resume.)",
-    ),
     "G04 P0 ( dwell for no time -- G64 should not smooth over this point )",
-    "G92 X0 Y0 Z0",
-    "",
     "G94       (Millimeters per minute feed rate.)",
     "G21       (Units == Millimeters.)",
     "G91.1     (Incremental arc distance mode.)",
@@ -237,6 +251,7 @@ fn tool_block(
   tools: board_model.ToolTable,
   cfg: GcodeConfig,
   centroid: #(Float, Float),
+  safe_z: Float,
 ) -> List(String) {
   let diameter = fmt_diameter(tool_diameter(tools, tool))
   let #(cx, cy) = centroid
@@ -262,14 +277,20 @@ fn tool_block(
       ],
       spindle_on_step(cfg),
       [
-        "G0 Z" <> fmt5(cfg.zsafe),
+        // Return to the program-wide travel/safe Z after the swap (NOT absolute
+        // zsafe): with a tilted plane the safe height is surface-relative, and
+        // this single ceiling clears every hole.
+        "G0 Z" <> fmt5(safe_z),
         "G04 P1.00000",
         "",
         "G1 F" <> fmt5(cfg.drill_feed),
       ],
     ])
 
-  list.append(change, list.flat_map(holes, fn(h) { drill_hole(h, cfg) }))
+  list.append(
+    change,
+    list.flat_map(holes, fn(h) { drill_hole(h, cfg, safe_z) }),
+  )
 }
 
 // The spindle arm/disarm step. In Drill, emit M3 S<speed> ON THE SAME LINE
@@ -292,32 +313,41 @@ fn spindle_on_step(cfg: GcodeConfig) -> List(String) {
 // then plunge, then ALWAYS retract to zsafe.
 // ---------------------------------------------------------------------------
 
-fn drill_hole(hole: MachineHole, cfg: GcodeConfig) -> List(String) {
-  safe_move(cfg, hole.x, hole.y, fn() { [plunge_line(cfg)] })
+fn drill_hole(
+  hole: MachineHole,
+  cfg: GcodeConfig,
+  safe_z: Float,
+) -> List(String) {
+  safe_move(safe_z, hole.x, hole.y, fn() { [plunge_line(hole, cfg)] })
 }
 
-// Travel to (x, y) at a safe Z, run `body` (the plunge), then retract to zsafe.
+// Travel to (x, y) at the program-wide travel/safe Z, run `body` (the plunge),
+// then retract back to that same safe Z. XY is only ever commanded at safe_z, so
+// invariant 1 holds: the bit can never traverse XY where it could strike the
+// board.
 fn safe_move(
-  cfg: GcodeConfig,
+  safe_z: Float,
   x: Float,
   y: Float,
   body: fn() -> List(String),
 ) -> List(String) {
-  list.flatten([[fmt_xy_rapid(x, y)], body(), [retract(cfg)]])
+  list.flatten([[fmt_xy_rapid(x, y)], body(), [retract(safe_z)]])
 }
 
-fn retract(cfg: GcodeConfig) -> String {
-  fmt_g1_z(cfg.zsafe)
+fn retract(safe_z: Float) -> String {
+  fmt_g1_z(safe_z)
 }
 
-// The plunge line. In Drill -> `G1 Z-2.50000`. In DryRun -> the positive hover
-// with the annotation, so a negative Z is unrepresentable in dry-run.
-fn plunge_line(cfg: GcodeConfig) -> String {
+// The plunge line, PLANE-RELATIVE: the target Z is the hole's local surface plus
+// the config offset. In Drill -> `G1 Z<surface + zdrill>` (zdrill negative). In
+// DryRun -> `G1 Z<surface + hover>` (hover positive), so a negative Z is
+// unrepresentable in dry-run as long as surface + hover >= 0.
+fn plunge_line(hole: MachineHole, cfg: GcodeConfig) -> String {
   case cfg.mode {
-    Drill -> fmt_g1_z(cfg.zdrill)
+    Drill -> fmt_g1_z(hole.surface_z +. cfg.zdrill)
     DryRun ->
       "G1 Z"
-      <> fmt5(cfg.hover)
+      <> fmt5(hole.surface_z +. cfg.hover)
       <> "  ( dry-run hover, was Z"
       <> fmt5(cfg.zdrill)
       <> " )"
@@ -355,6 +385,17 @@ fn postamble(cfg: GcodeConfig) -> List(String) {
 // bit-exchange position. Empty list -> #(0.0, 0.0).
 // ---------------------------------------------------------------------------
 
+// The program-wide travel/safe Z: the HIGHEST hole surface plus zsafe, so a
+// single travel height clears every hole by at least zsafe. Empty list -> just
+// zsafe (the flat-bed default). This is the only Z used for inter-hole XY rapids
+// and the post-swap return-to-cut height; per-hole plunge/retract reference each
+// hole's own surface_z.
+fn travel_safe_z(holes: List(MachineHole), cfg: GcodeConfig) -> Float {
+  let max_surface =
+    list.fold(holes, 0.0, fn(acc, h) { float.max(acc, h.surface_z) })
+  max_surface +. cfg.zsafe
+}
+
 fn centroid_machine(holes: List(MachineHole)) -> #(Float, Float) {
   case holes {
     [] -> #(0.0, 0.0)
@@ -374,7 +415,9 @@ fn centroid_machine(holes: List(MachineHole)) -> #(Float, Float) {
 // the private `MachineHole` type: takes raw machine-space #(x, y) points.
 pub fn centroid_of_points(points: List(#(Float, Float))) -> #(Float, Float) {
   centroid_machine(
-    list.map(points, fn(p) { MachineHole(tool: "", x: p.0, y: p.1) }),
+    list.map(points, fn(p) {
+      MachineHole(tool: "", x: p.0, y: p.1, surface_z: 0.0)
+    }),
   )
 }
 
