@@ -20,7 +20,8 @@
 ////     DryRun             --ConfirmRegistration-->  Drilling       (the ONLY path to drilling)
 ////     Drilling           --Complete-->             Done
 ////     Drilling           --SerialLoss(reason)-->   Faulted
-////     Faulted            --Reconnect-->            Aligned
+////     Faulted            --Reconnect-->            Parsed         (re-register; no trusted transform survives a fault)
+////     {Registering|Aligned|AlignmentRejected|DryRun} --Deenergize--> Parsed (ADR-0011: de-energize discards the alignment)
 ////
 //// A `Fit(tol)` whose fit *fails* — `TooFew` (< 3 points) or `Degenerate`
 //// (collinear/coincident board points) — does **not** transition: the job stays
@@ -59,6 +60,13 @@ pub type Event {
   /// UI gates it behind a deliberate confirm.
   OverrideAlignment
   RestartAlignment
+  /// ADR-0011: the motors de-energized (operator Release, fault, serial loss, or
+  /// disconnect). Position/alignment is valid ONLY while motors stay continuously
+  /// energized, so ANY de-energize invalidates it: from an alignment-bearing state
+  /// this discards the alignment and drops back to a clean `Parsed` slate. From
+  /// `Parsed`/`Drilling`/`Done`/`Faulted` there is nothing to lose, so it is a
+  /// benign no-op success (callers don't have to special-case it).
+  Deenergize
   RunDryRun
   RedoAlignment
   ConfirmRegistration
@@ -76,6 +84,7 @@ pub type EventName {
   RecaptureE
   OverrideAlignmentE
   RestartAlignmentE
+  DeenergizeE
   RunDryRunE
   RedoAlignmentE
   ConfirmRegistrationE
@@ -201,6 +210,15 @@ pub fn transition(job: Job, event: Event) -> Result(Job, TransitionError) {
     Aligned, RestartAlignment -> Ok(restart(job))
     AlignmentRejected, RestartAlignment -> Ok(restart(job))
 
+    // {registering | aligned | alignment_rejected | dry_run} -> parsed :
+    // ADR-0011 — a de-energize (Release / fault / serial loss / disconnect)
+    // invalidates the alignment, since position is valid only while the motors
+    // stay continuously energized. Discard everything and drop to a clean Parsed.
+    Registering, Deenergize -> Ok(deenergized(job))
+    Aligned, Deenergize -> Ok(deenergized(job))
+    AlignmentRejected, Deenergize -> Ok(deenergized(job))
+    DryRun, Deenergize -> Ok(deenergized(job))
+
     // aligned -> dry_run : run the mandatory dry-run rehearsal
     Aligned, RunDryRun -> Ok(Job(..job, state: DryRun))
 
@@ -216,8 +234,23 @@ pub fn transition(job: Job, event: Event) -> Result(Job, TransitionError) {
     // drilling -> faulted : serial loss
     Drilling, SerialLoss(_reason) -> Ok(Job(..job, state: Faulted))
 
-    // faulted -> aligned : reconnect & resume from the solved alignment
-    Faulted, Reconnect -> Ok(Job(..job, state: Aligned))
+    // faulted -> parsed : ADR-0011 — a fault is a de-energize / trust loss, so
+    // NO trusted transform survives it. Reconnect re-registers from a clean slate.
+    Faulted, Reconnect ->
+      Ok(
+        Job(
+          ..job,
+          state: Parsed,
+          pending: pending_alignment.new(),
+          alignment: None,
+          residuals: None,
+        ),
+      )
+
+    // Deenergize from a non-alignment state (Parsed/Drilling/Done/Faulted): there
+    // is nothing to invalidate, so it is a benign no-op success (so callers can
+    // fire it unconditionally on any de-energize without special-casing state).
+    _, Deenergize -> Ok(job)
 
     // Catch-all: illegal sequencing is a typed error, never a crash.
     _, _ -> Error(IllegalTransition)
@@ -234,16 +267,35 @@ fn restart(job: Job) -> Job {
   )
 }
 
+// ADR-0011: a de-energize clean-slate. Like `restart`, but lands in `Parsed`
+// (not `Registering`) — a de-energize invalidates the whole alignment, so the
+// operator must explicitly re-start registration (energize → StartRegistering),
+// it does not silently resume a capture session.
+fn deenergized(job: Job) -> Job {
+  Job(
+    ..job,
+    state: Parsed,
+    pending: pending_alignment.new(),
+    alignment: None,
+    residuals: None,
+  )
+}
+
 /// The event *names* that are legal from `job`'s current state. A UI uses this
 /// to enable exactly the right buttons. The no-shortcut invariant surfaces here
 /// too: `ConfirmRegistrationE` is never in the list while merely `Aligned`.
 pub fn legal_events(job: Job) -> List(EventName) {
   case job.state {
     Parsed -> [StartRegisteringE]
-    Registering -> [CaptureE, FitE, RestartAlignmentE]
-    AlignmentRejected -> [RecaptureE, OverrideAlignmentE, RestartAlignmentE]
-    Aligned -> [RunDryRunE, RestartAlignmentE]
-    DryRun -> [RedoAlignmentE, ConfirmRegistrationE]
+    Registering -> [CaptureE, FitE, RestartAlignmentE, DeenergizeE]
+    AlignmentRejected -> [
+      RecaptureE,
+      OverrideAlignmentE,
+      RestartAlignmentE,
+      DeenergizeE,
+    ]
+    Aligned -> [RunDryRunE, RestartAlignmentE, DeenergizeE]
+    DryRun -> [RedoAlignmentE, ConfirmRegistrationE, DeenergizeE]
     Drilling -> [CompleteE, SerialLossE]
     Faulted -> [ReconnectE]
     Done -> []

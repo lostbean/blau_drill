@@ -12,12 +12,13 @@ import blau_drill/domain/job
 import blau_drill/ui/board_canvas.{type CanvasData, CanvasData}
 import blau_drill/ui/mock
 import blau_drill/ui/model.{
-  type Config, type Model, type SettingsCategory, ApplyConfig, CaptureFiducial,
-  ConfirmRegistration, Connection, Defaults, Energize, Fit, Jog, Jogging,
-  MotionLimits, NewBoard, ParseBoard, Recapture, RedoAlignment, Release,
-  RestartAlignment, ResumeAlignment, ResumeDrilling, RunDryRun, SelectCategory,
-  SelectFile, SelectOutline, SetConfigField, SetJogStep, SpindleControl,
-  StartRegistering, TestSpindle, ToggleAppPause, ToggleAutoConnect,
+  type Config, type Model, type SettingsCategory, ApplyConfig, CancelRelease,
+  CaptureFiducial, ConfirmRegistration, ConfirmReleaseMotors, Connection,
+  Defaults, Energize, Fit, Jog, Jogging, MotionLimits, NewBoard, ParseBoard,
+  Recapture, RedoAlignment, Release, RestartAlignment, ResumeAlignment,
+  ResumeDrilling, RunDryRun, SelectCategory, SelectFile, SelectOutline,
+  SetConfigField, SetJogStep, SpindleControl, StartRegistering, TestSpindle,
+  ToggleAppPause, ToggleAutoConnect,
 }
 import gleam/float
 import gleam/int
@@ -275,6 +276,7 @@ pub fn align(model: Model) -> Element(model.Msg) {
         ]),
       ]),
       resume_panel(model),
+      release_confirm_panel(model),
       motors_panel(motors_online),
       jog_panel(model, motors_online),
       h.button(
@@ -387,6 +389,51 @@ fn resume_panel(model: Model) -> Element(model.Msg) {
         ),
       ])
     }
+  }
+}
+
+// ADR-0011 anti-surprise confirm: a VOLUNTARY "Disable Motors" that would discard
+// a non-trivial alignment shows this gate first. De-energizing invalidates the
+// alignment (position is valid only while motors stay energized), so the operator
+// confirms the destructive reset before it happens — or cancels and keeps the
+// alignment. Shown only while `release_confirm` is set.
+fn release_confirm_panel(model: Model) -> Element(model.Msg) {
+  case model.release_confirm {
+    False -> element.none()
+    True ->
+      h.div([a.class("panel panel-warn")], [
+        h.div([a.class("panel-head")], [
+          h.span([a.class("panel-head-label")], [
+            h.text("Disable motors — resets alignment"),
+          ]),
+          h.span([a.class("badge offline blink")], [h.text("CONFIRM")]),
+        ]),
+        h.p([a.class("panel-hint")], [
+          h.text(
+            "De-energizing the motors resets the alignment — the captured "
+            <> "fiducials and fit will be discarded, and you'll re-register. "
+            <> "Continue?",
+          ),
+        ]),
+        h.button(
+          [
+            a.class("btn btn-primary btn-block"),
+            a.style("margin-top", "0.75rem"),
+            a.attribute("type", "button"),
+            event.on_click(ConfirmReleaseMotors),
+          ],
+          [h.text("Disable & reset")],
+        ),
+        h.button(
+          [
+            a.class("btn btn-outline btn-block"),
+            a.style("margin-top", "0.5rem"),
+            a.attribute("type", "button"),
+            event.on_click(CancelRelease),
+          ],
+          [h.text("Cancel")],
+        ),
+      ])
   }
 }
 

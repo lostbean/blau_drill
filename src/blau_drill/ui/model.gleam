@@ -419,6 +419,15 @@ pub type Model {
     /// promotes the restored alignment to `ConfAligned`. False in every other
     /// case (a fresh fit, a reset, or no persisted alignment).
     resume_pending: Bool,
+    /// ADR-0011: a confirm gate for an EXPLICIT operator Release that would
+    /// discard a non-trivial alignment. De-energizing invalidates the alignment
+    /// (position is valid only while motors stay energized), so a voluntary
+    /// Release that has alignment to lose raises this gate first (the Align stage
+    /// shows a "De-energizing resets the alignment — continue?" panel) instead of
+    /// releasing immediately. `ConfirmReleaseMotors` performs the release + reset;
+    /// `CancelRelease` clears it. Involuntary de-energize (fault / serial loss /
+    /// disconnect) bypasses the gate and resets directly. False by default.
+    release_confirm: Bool,
   )
 }
 
@@ -469,7 +478,16 @@ pub type Msg {
 
   // Stage 2 — alignment
   Energize
+  /// Operator-initiated "Disable Motors". ADR-0011: if a non-trivial alignment
+  /// would be discarded by the de-energize, this opens a confirm gate
+  /// (`release_confirm`) rather than releasing immediately; otherwise it releases
+  /// (and resets) directly.
   Release
+  /// Confirm a destructive Release: actually de-energize the motors AND reset the
+  /// alignment (the trust boundary). Clears the confirm gate.
+  ConfirmReleaseMotors
+  /// Dismiss the Release confirm gate without de-energizing (alignment kept).
+  CancelRelease
   SetJogStep(Float)
   Jog(axis: String, sign: Float)
   TestSpindle

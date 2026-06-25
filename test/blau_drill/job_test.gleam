@@ -4,10 +4,11 @@ import blau_drill/domain/board_model.{type BoardModel}
 import blau_drill/domain/correspondence.{type Correspondence, Correspondence}
 import blau_drill/domain/job.{
   type Job, Aligned, AlignmentRejected, Capture, Complete, ConfirmRegistration,
-  ConfirmRegistrationE, Done, Drilling, DryRun, Faulted, Fit, FitDegenerate,
-  FitTooFew, IllegalTransition, OverrideAlignment, OverrideAlignmentE, Parsed,
-  Recapture, Reconnect, RedoAlignment, Registering, RestartAlignment, RunDryRun,
-  RunDryRunE, SerialLoss, StartRegistering, StartRegisteringE,
+  ConfirmRegistrationE, Deenergize, DeenergizeE, Done, Drilling, DryRun, Faulted,
+  Fit, FitDegenerate, FitTooFew, IllegalTransition, OverrideAlignment,
+  OverrideAlignmentE, Parsed, Recapture, Reconnect, RedoAlignment, Registering,
+  RestartAlignment, RunDryRun, RunDryRunE, SerialLoss, StartRegistering,
+  StartRegisteringE,
 }
 import blau_drill/domain/pending_alignment
 import gleam/list
@@ -333,21 +334,95 @@ pub fn drilling_serial_loss_to_faulted_test() {
   j.state |> should.equal(Faulted)
 }
 
-// --- faulted -> aligned -----------------------------------------------------
+// --- faulted -> parsed (ADR-0011) -------------------------------------------
 
 fn faulted_job() -> Job {
   let assert Ok(j) = job.transition(drilling_job(), SerialLoss("disconnect"))
   j
 }
 
-pub fn faulted_reconnect_to_aligned_test() {
+// ADR-0011: a fault is a de-energize / trust loss, so NO trusted transform may
+// survive it — recovery re-registers from scratch. Reconnect now lands in Parsed
+// with the alignment + residuals cleared and the pending slate empty.
+pub fn faulted_reconnect_to_parsed_clears_alignment_test() {
   let assert Ok(j) = job.transition(faulted_job(), Reconnect)
-  j.state |> should.equal(Aligned)
-  // The solved alignment survives the fault.
-  case j.alignment {
-    Some(_) -> Nil
-    None -> should.fail()
-  }
+  j.state |> should.equal(Parsed)
+  j.alignment |> should.equal(None)
+  j.residuals |> should.equal(None)
+  pending_alignment.count(j.pending) |> should.equal(0)
+}
+
+// --- deenergize (ADR-0011): any de-energize resets the alignment slate -------
+// THE INVARIANT: position/alignment is valid only while motors stay continuously
+// energized. A `Deenergize` from any alignment-bearing state discards the
+// alignment and drops the job back to a clean `Parsed` slate.
+
+pub fn deenergize_from_registering_resets_to_parsed_test() {
+  let j = register_with(job(), exact_corrs())
+  j.state |> should.equal(Registering)
+  let assert Ok(d) = job.transition(j, Deenergize)
+  d.state |> should.equal(Parsed)
+  d.alignment |> should.equal(None)
+  d.residuals |> should.equal(None)
+  pending_alignment.count(d.pending) |> should.equal(0)
+}
+
+pub fn deenergize_from_aligned_resets_to_parsed_test() {
+  let j = register_with(job(), exact_corrs())
+  let assert Ok(aligned) = job.transition(j, Fit(0.1))
+  aligned.state |> should.equal(Aligned)
+  let assert Ok(d) = job.transition(aligned, Deenergize)
+  d.state |> should.equal(Parsed)
+  d.alignment |> should.equal(None)
+  d.residuals |> should.equal(None)
+  pending_alignment.count(d.pending) |> should.equal(0)
+}
+
+pub fn deenergize_from_rejected_resets_to_parsed_test() {
+  let j = register_with(job(), misfit_corrs())
+  let assert Ok(rejected) = job.transition(j, Fit(0.05))
+  rejected.state |> should.equal(AlignmentRejected)
+  let assert Ok(d) = job.transition(rejected, Deenergize)
+  d.state |> should.equal(Parsed)
+  d.alignment |> should.equal(None)
+  d.residuals |> should.equal(None)
+  pending_alignment.count(d.pending) |> should.equal(0)
+}
+
+pub fn deenergize_from_dry_run_resets_to_parsed_test() {
+  let d0 = dry_run_job()
+  d0.state |> should.equal(DryRun)
+  let assert Ok(d) = job.transition(d0, Deenergize)
+  d.state |> should.equal(Parsed)
+  d.alignment |> should.equal(None)
+  d.residuals |> should.equal(None)
+  pending_alignment.count(d.pending) |> should.equal(0)
+}
+
+// From Parsed there is nothing to lose: Deenergize is a benign no-op success.
+pub fn deenergize_from_parsed_is_noop_test() {
+  let j = job()
+  let assert Ok(d) = job.transition(j, Deenergize)
+  d.state |> should.equal(Parsed)
+  d.alignment |> should.equal(None)
+}
+
+// Deenergize is benign from the non-alignment terminal/run states too.
+pub fn deenergize_from_drilling_is_noop_test() {
+  let d = drilling_job()
+  let assert Ok(j) = job.transition(d, Deenergize)
+  j.state |> should.equal(Drilling)
+}
+
+pub fn deenergize_legal_in_alignment_states_test() {
+  let reg = register_with(job(), exact_corrs())
+  job.can(reg, DeenergizeE) |> should.be_true
+
+  let assert Ok(aligned) = job.transition(reg, Fit(0.1))
+  job.can(aligned, DeenergizeE) |> should.be_true
+
+  let dry = dry_run_job()
+  job.can(dry, DeenergizeE) |> should.be_true
 }
 
 pub fn faulted_accepts_no_other_event_test() {
@@ -413,7 +488,7 @@ pub fn legal_events_lists_succeeding_events_test() {
   let aligned0 = register_with(job(), exact_corrs())
   let assert Ok(aligned) = job.transition(aligned0, Fit(0.1))
   job.legal_events(aligned)
-  |> should.equal([RunDryRunE, job.RestartAlignmentE])
+  |> should.equal([RunDryRunE, job.RestartAlignmentE, DeenergizeE])
   list.contains(job.legal_events(aligned), ConfirmRegistrationE)
   |> should.be_false
 }

@@ -42,21 +42,22 @@ import blau_drill/ui/bridge
 import blau_drill/ui/mock
 import blau_drill/ui/model.{
   type BackendKind, type Head, type Model, type Msg, Align, ApplyConfig,
-  BitChange, Capture, Captured, Complete, ConfAligned, ConfEstimate, ConfNone,
-  ConfRough, ConfirmRegistration, ConnectDevice, Connection, ControllerEvent,
-  DisconnectDevice, Disconnected, Done, Drill, DrillMode, DrlPicked, DryRun,
-  DryRunMode, Energize, Faulted, Fiducial, Fit, GoToSession, GoToSettings,
-  HaveBitChange, HaveBoard, HaveBoardModel, HaveDiagnostic, HaveFitDiag,
-  HaveHeadPos, HaveJob, HaveProgress, HaveSummary, HaveTransform, Head, HoleDone,
-  Jog, Jogging, JumpTo, Load, LoadSample, Model, NavStage, NewBoard, NoBitChange,
-  NoBoard, NoBoardModel, NoDiagnostic, NoFitDiag, NoHeadPos, NoJob, NoProgress,
-  NoSummary, NoTransform, OutlinePicked, ParseBoard, Progress, RealBackend,
-  Recapture, Reconnect, RedoAlignment, Release, ResetDefaults, ResetView,
-  RestartAlignment, ResumeAlignment, ResumeDrilling, RunDryRun, SelectBackend,
-  SelectCategory, SelectFile, SelectOutline, SetConfigField, SetCurrentTarget,
-  SetJogStep, Settings, SimBackend, StageAlign, StageDone, StageDrill,
-  StageDryRun, StageLoad, StartRegistering, Streaming, Summary, TestSpindle,
-  ToggleAppPause, ToggleAutoConnect,
+  BitChange, CancelRelease, Capture, Captured, Complete, ConfAligned,
+  ConfEstimate, ConfNone, ConfRough, ConfirmRegistration, ConfirmReleaseMotors,
+  ConnectDevice, Connection, ControllerEvent, DisconnectDevice, Disconnected,
+  Done, Drill, DrillMode, DrlPicked, DryRun, DryRunMode, Energize, Faulted,
+  Fiducial, Fit, GoToSession, GoToSettings, HaveBitChange, HaveBoard,
+  HaveBoardModel, HaveDiagnostic, HaveFitDiag, HaveHeadPos, HaveJob,
+  HaveProgress, HaveSummary, HaveTransform, Head, HoleDone, Jog, Jogging, JumpTo,
+  Load, LoadSample, Model, NavStage, NewBoard, NoBitChange, NoBoard,
+  NoBoardModel, NoDiagnostic, NoFitDiag, NoHeadPos, NoJob, NoProgress, NoSummary,
+  NoTransform, OutlinePicked, ParseBoard, Progress, RealBackend, Recapture,
+  Reconnect, RedoAlignment, Release, ResetDefaults, ResetView, RestartAlignment,
+  ResumeAlignment, ResumeDrilling, RunDryRun, SelectBackend, SelectCategory,
+  SelectFile, SelectOutline, SetConfigField, SetCurrentTarget, SetJogStep,
+  Settings, SimBackend, StageAlign, StageDone, StageDrill, StageDryRun,
+  StageLoad, StartRegistering, Streaming, Summary, TestSpindle, ToggleAppPause,
+  ToggleAutoConnect,
 }
 import blau_drill/ui/sample
 import blau_drill/ui/shell
@@ -137,6 +138,7 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       bit_changes_seen: 0,
       board_side: model.Front,
       resume_pending: False,
+      release_confirm: False,
     )
   // Re-parse the restored board (deterministic; no hardware). If the stored DRL
   // is empty or fails to parse, `parse_board` leaves the model board-less.
@@ -305,7 +307,9 @@ fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 
     // Stage 2 — alignment
     Energize -> issue(model, printer.Energize)
-    Release -> issue(model, printer.Release)
+    Release -> release(model)
+    ConfirmReleaseMotors -> confirm_release(model)
+    CancelRelease -> noeff(Model(..model, release_confirm: False))
     SetJogStep(step) -> noeff(Model(..model, jog_step: step))
     Jog(axis, sign) -> jog(model, axis, sign)
     TestSpindle -> test_spindle(model)
@@ -640,14 +644,17 @@ fn connect_device(model: Model) -> #(Model, Effect(Msg)) {
 
 fn disconnect_device(model: Model) -> #(Model, Effect(Msg)) {
   let #(ctrl, eff) = controller.disconnect(model.controller)
-  #(
-    Model(
-      ..model,
-      controller: ctrl,
-      printer: bridge.printer_state(controller.state(ctrl)),
-    ),
-    effect.map(eff, ControllerEvent),
-  )
+  // ADR-0011: a disconnect de-energizes the motors, so it invalidates the
+  // alignment (involuntary → no confirm). Reset it in lockstep with the job FSM.
+  let m =
+    deenergize_reset(
+      Model(
+        ..model,
+        controller: ctrl,
+        printer: bridge.printer_state(controller.state(ctrl)),
+      ),
+    )
+  #(m, effect.map(eff, ControllerEvent))
 }
 
 fn start_registering(model: Model) -> #(Model, Effect(Msg)) {
@@ -1326,16 +1333,27 @@ fn abort(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 fn fault(model: Model) -> Model {
-  // The job faults only if it is mid-drill (SerialLoss is legal from Drilling).
+  // A fault is an involuntary de-energize / trust loss (ADR-0011): the alignment
+  // can no longer be trusted from ANY state, so clear it in lockstep with the job.
+  //   * mid-drill: SerialLoss is legal from Drilling → job goes Faulted (the
+  //     fault BANNER, driven off the controller's `printer == Faulted`, is
+  //     preserved either way), and we also clear the alignment slate.
+  //   * any alignment state (Registering/Aligned/AlignmentRejected/DryRun): route
+  //     the job reset through `Deenergize` (→ Parsed, alignment discarded).
+  // Either path also clears the model alignment/position fields via
+  // `deenergize_reset` below, so a later move can't act on a stale transform.
   let job2 = case model.job {
     HaveJob(j) ->
       case job.transition(j, job.SerialLoss("abort")) {
+        // Mid-drill fault: keep the Faulted job (Reconnect re-registers).
         Ok(jj) -> HaveJob(jj)
-        Error(_) -> HaveJob(j)
+        // Not mid-drill: de-energize-reset the job (alignment states → Parsed;
+        // benign no-op elsewhere) so the alignment never survives the fault.
+        Error(_) -> job_advance(model.job, job.Deenergize)
       }
     NoJob -> NoJob
   }
-  Model(..model, job: job2, bit_change: NoBitChange)
+  deenergize_reset_fields(Model(..model, job: job2, bit_change: NoBitChange))
 }
 
 fn reconnect(model: Model) -> #(Model, Effect(Msg)) {
@@ -1396,6 +1414,89 @@ fn new_board(model: Model) -> #(Model, Effect(Msg)) {
       board_side: model.Front,
       resume_pending: False,
     ),
+  )
+}
+
+// ── de-energize trust boundary (ADR-0011) ────────────────────────────────────
+
+// Operator-initiated "Disable Motors". THE INVARIANT (ADR-0011): position /
+// alignment is valid ONLY while the motors stay continuously energized, so a
+// de-energize invalidates the alignment. A VOLUNTARY release that would discard a
+// non-trivial alignment is anti-surprise: raise a confirm gate first instead of
+// silently throwing the alignment away. With nothing to lose, release directly.
+fn release(model: Model) -> #(Model, Effect(Msg)) {
+  case is_energized(model) && has_alignment(model) {
+    True -> noeff(Model(..model, release_confirm: True))
+    False -> release_now(model)
+  }
+}
+
+// Confirm a destructive release: actually de-energize AND reset the alignment.
+fn confirm_release(model: Model) -> #(Model, Effect(Msg)) {
+  release_now(Model(..model, release_confirm: False))
+}
+
+// Issue the real motor release, then reset the alignment in lockstep (the
+// de-energize trust boundary). Used by both the direct path and the confirmed one.
+fn release_now(model: Model) -> #(Model, Effect(Msg)) {
+  let #(m, eff) = issue(model, printer.Release)
+  #(deenergize_reset(m), eff)
+}
+
+// PURE: whether there is a non-trivial alignment that a de-energize would discard
+// (so a voluntary Release must confirm first). True once registration has captured
+// anything OR a transform/fiducials are present.
+fn has_alignment(model: Model) -> Bool {
+  let job_has = case model.job {
+    HaveJob(j) ->
+      case j.state {
+        // Parsed: not registering yet. Registering and beyond: captures exist.
+        job.Parsed -> False
+        job.Registering -> True
+        job.Aligned -> True
+        job.AlignmentRejected -> True
+        job.DryRun -> True
+        job.Drilling -> True
+        job.Done -> True
+        job.Faulted -> True
+      }
+    NoJob -> False
+  }
+  let transform_has = case model.transform {
+    HaveTransform(_) -> True
+    NoTransform -> False
+  }
+  job_has || transform_has || model.captured != [] || model.captures != []
+}
+
+fn is_energized(model: Model) -> Bool {
+  model.printer == Jogging
+}
+
+// Drive a de-energize through the job FSM AND clear the model alignment/position
+// fields together, so a motors-off gap can never leave a stale alignment behind.
+fn deenergize_reset(model: Model) -> Model {
+  deenergize_reset_fields(
+    Model(..model, job: job_advance(model.job, job.Deenergize)),
+  )
+}
+
+// Clear the model alignment/position fields to their `init`/empty values (the job
+// transition is handled by the caller). Mirrors what `init` / `new_board` set.
+fn deenergize_reset_fields(model: Model) -> Model {
+  Model(
+    ..model,
+    transform: NoTransform,
+    captures: [],
+    captured: [],
+    head_confidence: ConfNone,
+    head_pos: NoHeadPos,
+    quality: -1,
+    fit_diag: NoFitDiag,
+    current_target: 0,
+    alignment_rejected: False,
+    resume_pending: False,
+    release_confirm: False,
   )
 }
 

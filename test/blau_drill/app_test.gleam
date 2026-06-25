@@ -20,11 +20,12 @@ import blau_drill/domain/transform2d.{Transform2D}
 import blau_drill/ui/bridge
 import blau_drill/ui/mock
 import blau_drill/ui/model.{
-  type Model, Align, BBox, Board, ConfAligned, ConfNone, ConfRough, Connection,
-  Disconnected, Done, Drill, DryRun, Faulted, Front, HaveBoard, HaveBoardModel,
-  HaveJob, HaveTransform, Head, Idle, Jogging, Load, Model, NoBitChange, NoBoard,
-  NoDiagnostic, NoFitDiag, NoHeadPos, NoProgress, NoSummary, NoTransform,
-  ResumeAlignment, Settings, Streaming,
+  type Model, Align, BBox, Board, CancelRelease, ConfAligned, ConfNone,
+  ConfRough, ConfirmReleaseMotors, Connection, Disconnected, Done, Drill, DryRun,
+  Faulted, Front, HaveBoard, HaveBoardModel, HaveJob, HaveTransform, Head, Idle,
+  Jogging, Load, Model, NoBitChange, NoBoard, NoDiagnostic, NoFitDiag, NoHeadPos,
+  NoProgress, NoSummary, NoTransform, Release, ResumeAlignment, Settings,
+  Streaming,
 }
 import blau_drill/ui/sample
 import blau_drill/ui/storage.{type AlignmentSave, AlignmentSave}
@@ -232,6 +233,7 @@ fn base_model() -> Model {
     bit_changes_seen: 0,
     board_side: Front,
     resume_pending: False,
+    release_confirm: False,
   )
 }
 
@@ -497,4 +499,107 @@ pub fn confirm_default_streams_without_pausing_test() {
   // Default path: streaming (M0 in the body), NOT the in-app paused state.
   controller.state(m2.controller) |> printer.is_stream_paused |> should.be_false
   controller.state(m2.controller) |> printer.is_streaming |> should.be_true
+}
+
+// ── ADR-0011: de-energize structurally resets the alignment ───────────────────
+// THE INVARIANT: position/alignment is valid ONLY while motors stay continuously
+// energized. ANY de-energize — operator Release, fault, serial loss, disconnect —
+// invalidates it, in lockstep across the job FSM and the model.
+
+// An aligned + energized (Jogging) Model: restore a real solved transform, connect,
+// resume (trust), then energize so the motors are live. The job sits in Aligned and
+// the model carries transform/captures/captured.
+fn aligned_jogging_model() -> Model {
+  let assert Ok(m0) = app.restore_alignment(base_model(), saved_alignment())
+  let #(m1, _e1) =
+    app.update(m0, model.ControllerEvent(controller.Issue(printer.Connect)))
+  let #(m2, _e2) = app.update(m1, ResumeAlignment)
+  let #(m3, _e3) = app.update(m2, model.Energize)
+  m3
+}
+
+fn job_state(m: Model) -> job.State {
+  let assert HaveJob(j) = m.job
+  j.state
+}
+
+// An explicit Release while aligned + energized must NOT immediately reset — it
+// raises the confirm gate first (anti-surprise: a destructive de-energize is
+// confirmed). The alignment is still intact at this point.
+pub fn release_while_aligned_sets_confirm_does_not_reset_test() {
+  let m = aligned_jogging_model()
+  m.printer |> should.equal(Jogging)
+  job_state(m) |> should.equal(job.Aligned)
+  let #(m2, _e) = app.update(m, Release)
+  // The confirm gate is up; nothing has been released or reset yet.
+  m2.release_confirm |> should.be_true
+  m2.printer |> should.equal(Jogging)
+  job_state(m2) |> should.equal(job.Aligned)
+  case m2.transform {
+    HaveTransform(_) -> True
+    NoTransform -> False
+  }
+  |> should.be_true
+}
+
+// The confirmed release actually de-energizes AND resets the alignment in lockstep:
+// model fields cleared, job back to Parsed, confirm flag cleared.
+pub fn confirm_release_resets_alignment_test() {
+  let m = aligned_jogging_model()
+  let #(m1, _e1) = app.update(m, Release)
+  m1.release_confirm |> should.be_true
+  let #(m2, _e2) = app.update(m1, ConfirmReleaseMotors)
+  m2.release_confirm |> should.be_false
+  m2.transform |> should.equal(NoTransform)
+  m2.captures |> should.equal([])
+  m2.captured |> should.equal([])
+  m2.head_confidence |> should.equal(ConfNone)
+  m2.head_pos |> should.equal(NoHeadPos)
+  m2.quality |> should.equal(-1)
+  m2.current_target |> should.equal(0)
+  job_state(m2) |> should.equal(job.Parsed)
+}
+
+// CancelRelease aborts the gate: nothing released, nothing reset.
+pub fn cancel_release_keeps_alignment_test() {
+  let m = aligned_jogging_model()
+  let #(m1, _e1) = app.update(m, Release)
+  m1.release_confirm |> should.be_true
+  let #(m2, _e2) = app.update(m1, CancelRelease)
+  m2.release_confirm |> should.be_false
+  job_state(m2) |> should.equal(job.Aligned)
+  case m2.transform {
+    HaveTransform(_) -> True
+    NoTransform -> False
+  }
+  |> should.be_true
+}
+
+// With NOTHING captured (nothing to lose), Release de-energizes DIRECTLY — no
+// confirm gate. Connect + energize, no registration: the job is in Parsed.
+pub fn release_with_no_alignment_releases_directly_test() {
+  let #(m1, _e1) =
+    app.update(
+      base_model(),
+      model.ControllerEvent(controller.Issue(printer.Connect)),
+    )
+  let #(m2, _e2) = app.update(m1, model.Energize)
+  m2.printer |> should.equal(Jogging)
+  job_state(m2) |> should.equal(job.Parsed)
+  let #(m3, _e3) = app.update(m2, Release)
+  // No confirm needed; the motors released directly.
+  m3.release_confirm |> should.be_false
+  m3.printer |> should.equal(Idle)
+}
+
+// Disconnect is INVOLUNTARY (no confirm) and resets the alignment directly.
+pub fn disconnect_resets_alignment_test() {
+  let m = aligned_jogging_model()
+  job_state(m) |> should.equal(job.Aligned)
+  let #(m2, _e) = app.update(m, model.DisconnectDevice)
+  m2.transform |> should.equal(NoTransform)
+  m2.captures |> should.equal([])
+  m2.captured |> should.equal([])
+  m2.head_confidence |> should.equal(ConfNone)
+  job_state(m2) |> should.equal(job.Parsed)
 }
