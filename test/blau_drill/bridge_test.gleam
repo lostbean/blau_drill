@@ -3,7 +3,6 @@
 //// parsed board, the control FSM, and the operator config into what the views
 //// render and what a run consumes.
 
-import blau_drill/control/printer
 import blau_drill/domain/board_model
 import blau_drill/domain/config
 import blau_drill/ui/bridge
@@ -71,34 +70,13 @@ pub fn feature_candidates_enough_to_fit_test() {
   { list.length(cs) >= 3 } |> should.be_true
 }
 
-// ── printer_state ────────────────────────────────────────────────────────────
-
-pub fn printer_state_disconnected_test() {
-  bridge.printer_state(printer.Disconnected) |> should.equal(model.Disconnected)
-}
-
-pub fn printer_state_idle_test() {
-  bridge.printer_state(printer.Idle(line_no: 0, pending: printer.PendingNone))
-  |> should.equal(model.Idle)
-}
-
-pub fn printer_state_jogging_test() {
-  bridge.printer_state(printer.Jogging(
-    line_no: 3,
-    pending: printer.PendingWhere,
-  ))
-  |> should.equal(model.Jogging)
-}
-
-pub fn printer_state_streaming_test() {
-  let job = printer.StreamJob(lines: ["G0 X1"], idx: 0, total: 1)
-  bridge.printer_state(printer.Streaming(line_no: 1, job: job))
-  |> should.equal(model.Streaming)
-}
-
-pub fn printer_state_faulted_test() {
-  bridge.printer_state(printer.Faulted) |> should.equal(model.Faulted)
-}
+// NOTE (ADR-0012): the `bridge.printer_state` mapping and the lossy 5-case
+// `model.PrinterState` mirror it produced are DELETED. The `Session` now nests
+// the REAL `printer.PrinterState` (6 cases, payloads) with no copy, so there is
+// nothing to map and nothing to drift — the old `printer_state_*` pins are gone
+// because the concept they guarded no longer exists. `session_test` proves the
+// nesting (and `is_jogging`/`is_streaming` gate predicates read off the real
+// state directly).
 
 // ── parse_error_message ──────────────────────────────────────────────────────
 

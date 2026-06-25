@@ -15,10 +15,11 @@
 ////     to trust its projected board position. Phase 4 reads this from the
 ////     `control` layer (M114 over Web Serial) and the alignment solver; here it
 ////     is a static mock that the demo nudges with the jog buttons.
-////   * `printer: PrinterState` — the connection FSM (Disconnected/Idle/Jogging/
-////     Streaming/Faulted) mirrored from `control/transport`. The motion gates
-////     (jog/spindle enabled only in `Jogging`) read off this. Phase 4 swaps the
-////     mock transitions for real `control` effects.
+////   * the wire state — the connection FSM — is owned by the controller (the
+////     real `printer.PrinterState`) and projected through the `Session`
+////     (`ui/session`). The motion gates (jog/spindle enabled only in `Jogging`)
+////     read the REAL nested state via `session.is_jogging` etc. — there is no
+////     stored UI mirror (ADR-0012 deleted it).
 ////   * `progress: ProgressOpt` — live stream progress (sent/total holes, current
 ////     tool). Phase 4 folds real per-`ok` events from `control` here.
 ////   * `captured` / `current_target` / `quality` — alignment capture state.
@@ -55,6 +56,20 @@ pub type Screen {
   Settings
   /// The serial communications log — every TX/RX line + connection notes.
   Log
+}
+
+/// Side routes, orthogonal to the linear five-stage lifecycle. The `Session`
+/// projection (`ui/session.screen`) consults the overlay FIRST, so opening
+/// Settings / Log never clobbers the underlying lifecycle stage. Defined here
+/// (not in `ui/session`) so the `Model` can store an `overlay` field without a
+/// `model → session` import cycle (`session` imports `model`).
+pub type Overlay {
+  /// No side route open — the lifecycle stage shows.
+  NoOverlay
+  /// The printer-configuration screen is open.
+  SettingsOpen
+  /// The serial communications log is open.
+  LogOpen
 }
 
 // ── Serial comms log ─────────────────────────────────────────────────────────
@@ -104,23 +119,6 @@ pub type BoardSide {
   Front
   /// Back (copper) up — working geometry X-mirrored to match the flipped board.
   Back
-}
-
-// ── Connection / motion state machine (mirrors control/transport) ───────────
-
-/// The printer connection mode. Motion (jog / move / spindle) is structurally
-/// gated behind `Jogging` (motors energized) — the energize-before-jog
-/// invariant enforced by the control state machine.
-pub type PrinterState {
-  Disconnected
-  /// Connected, motors NOT energized. Jog/move/spindle refused here.
-  Idle
-  /// Motors energized (M17). Motion allowed.
-  Jogging
-  /// A G-code program is streaming (dry-run or drill).
-  Streaming
-  /// Halted / serial-loss. Loud, reachable from any motion stage.
-  Faulted
 }
 
 // ── Board / holes / fiducials ───────────────────────────────────────────────
@@ -337,10 +335,13 @@ pub type Config {
 // ── Phase 4 backing values (real control + domain) ──────────────────────────
 
 /// Which transport the operator picked. `SimBackend` works with no hardware;
-/// `RealBackend` is the Web Serial port (Chromium-only, user-gesture connect).
+/// `RealBackend` is the Web Serial port (Chromium-only, user-gesture connect);
+/// `EmuBackend` is the FAITHFUL in-app Marlin emulator (hardware-free, models
+/// the real wire protocol + motion queue + envelope — ADR-0013).
 pub type BackendKind {
   SimBackend
   RealBackend
+  EmuBackend
 }
 
 /// The captured board <-> machine pairs accumulated during registration, in
@@ -364,8 +365,11 @@ pub type TransformOpt {
 
 pub type Model {
   Model(
-    screen: Screen,
-    printer: PrinterState,
+    /// Which side route (Settings / Log) is open, orthogonal to the lifecycle
+    /// stage. The current SCREEN is no longer stored — it is DERIVED from the
+    /// `Session` (`ui/session.screen(of(job, board, wire), overlay)`), so a
+    /// handler can never assert a screen the machines contradict (ADR-0012).
+    overlay: Overlay,
     board: BoardOpt,
     diagnostic: DiagnosticOpt,
     /// Whether a .drl file has been "selected" in the picker (Stage 1, pre-parse).

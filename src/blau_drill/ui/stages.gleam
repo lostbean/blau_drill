@@ -8,18 +8,20 @@
 ////   * Confirm-registration (the only path to drilling) is a hazard-striped
 ////     two-step gate routed through dry-run.
 
+import blau_drill/control/controller
 import blau_drill/domain/job
 import blau_drill/ui/board_canvas.{type CanvasData, CanvasData}
 import blau_drill/ui/mock
 import blau_drill/ui/model.{
   type Config, type Model, type SettingsCategory, ApplyConfig, CancelRelease,
   CaptureFiducial, ConfirmRegistration, ConfirmReleaseMotors, Connection,
-  Defaults, Energize, Fit, Jog, Jogging, MotionLimits, NewBoard, ParseBoard,
-  Recapture, RedoAlignment, Release, RestartAlignment, ResumeDrilling, RunDryRun,
+  Defaults, Energize, Fit, Jog, MotionLimits, NewBoard, ParseBoard, Recapture,
+  RedoAlignment, Release, RestartAlignment, ResumeDrilling, RunDryRun,
   SelectCategory, SelectFile, SelectOutline, SetConfigField, SetJogStep,
   SpindleControl, StartRegistering, TestSpindle, ToggleAppPause,
   ToggleAutoConnect,
 }
+import blau_drill/ui/session
 import gleam/float
 import gleam/int
 import gleam/list
@@ -28,6 +30,18 @@ import lustre/element.{type Element}
 import lustre/element/html as h
 import lustre/element/svg
 import lustre/event
+
+// ── Session-derived reads (ADR-0012) ─────────────────────────────────────────
+// The screen + wire state are projected from the `Session` (job + the
+// controller's REAL `printer.PrinterState`), not stored on the model.
+
+fn sess(model: Model) -> session.Session {
+  session.of(model.job, model.board, controller.state(model.controller))
+}
+
+fn screen_of(model: Model) -> model.Screen {
+  session.screen(sess(model), model.overlay)
+}
 
 // ── canvas data assembly (the Phase-4 seam for board/head/fiducials) ─────────
 
@@ -53,7 +67,7 @@ fn canvas_data(model: Model) -> CanvasData {
     head: model.head,
     head_pos: model.head_pos,
     head_confidence: model.head_confidence,
-    stage: model.screen,
+    stage: screen_of(model),
     zoom: model.zoom,
     point_residuals: point_residuals,
     worst_index: worst_index,
@@ -97,7 +111,7 @@ fn load_loaded(model: Model) -> Element(model.Msg) {
         [
           a.class("btn btn-primary btn-lg"),
           a.attribute("type", "button"),
-          a.disabled(model.printer == model.Disconnected),
+          a.disabled(session.is_disconnected(sess(model))),
           event.on_click(StartRegistering),
         ],
         [h.text("Proceed to Align →")],
@@ -261,7 +275,7 @@ fn diagnostic_bar(model: Model) -> Element(model.Msg) {
 // ── Stage 2: Physical Alignment ──────────────────────────────────────────────
 
 pub fn align(model: Model) -> Element(model.Msg) {
-  let motors_online = model.printer == Jogging
+  let motors_online = session.is_jogging(sess(model))
   h.div([a.class("stage-cols")], [
     h.div([a.class("canvas-frame")], [board_canvas.view(canvas_data(model))]),
     h.aside([a.class("aside aside-360")], [

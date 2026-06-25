@@ -44,22 +44,21 @@ import blau_drill/ui/model.{
   type BackendKind, type Head, type Model, type Msg, Align, ApplyConfig,
   BitChange, CancelRelease, Capture, Captured, Complete, ConfAligned,
   ConfEstimate, ConfNone, ConfRough, ConfirmRegistration, ConfirmReleaseMotors,
-  ConnectDevice, Connection, ControllerEvent, DisconnectDevice, Disconnected,
-  Done, Drill, DrillMode, DrlPicked, DryRun, DryRunMode, Energize, Faulted,
-  Fiducial, Fit, GoToSession, GoToSettings, HaveBitChange, HaveBoard,
-  HaveBoardModel, HaveDiagnostic, HaveFitDiag, HaveHeadPos, HaveJob,
-  HaveProgress, HaveSummary, HaveTransform, Head, HoleDone, Jog, Jogging, JumpTo,
-  Load, LoadSample, Model, NavStage, NewBoard, NoBitChange, NoBoard,
-  NoBoardModel, NoDiagnostic, NoFitDiag, NoHeadPos, NoJob, NoProgress, NoSummary,
-  NoTransform, OutlinePicked, ParseBoard, Progress, RealBackend, Recapture,
-  Reconnect, RedoAlignment, Release, ResetDefaults, ResetView, RestartAlignment,
-  ResumeDrilling, RunDryRun, SelectBackend, SelectCategory, SelectFile,
-  SelectOutline, SetConfigField, SetCurrentTarget, SetJogStep, Settings,
-  SimBackend, StageAlign, StageDone, StageDrill, StageDryRun, StageLoad,
-  StartRegistering, Streaming, Summary, TestSpindle, ToggleAppPause,
-  ToggleAutoConnect,
+  ConnectDevice, Connection, ControllerEvent, DisconnectDevice, Done, Drill,
+  DrillMode, DrlPicked, DryRun, DryRunMode, EmuBackend, Energize, Fiducial, Fit,
+  GoToSession, GoToSettings, HaveBitChange, HaveBoard, HaveBoardModel,
+  HaveDiagnostic, HaveFitDiag, HaveHeadPos, HaveJob, HaveProgress, HaveSummary,
+  HaveTransform, Head, HoleDone, Jog, JumpTo, Load, LoadSample, Model, NavStage,
+  NewBoard, NoBitChange, NoBoard, NoBoardModel, NoDiagnostic, NoFitDiag,
+  NoHeadPos, NoJob, NoOverlay, NoProgress, NoSummary, NoTransform, OutlinePicked,
+  ParseBoard, Progress, RealBackend, Recapture, Reconnect, RedoAlignment,
+  Release, ResetDefaults, ResetView, RestartAlignment, ResumeDrilling, RunDryRun,
+  SelectBackend, SelectCategory, SelectFile, SelectOutline, SetConfigField,
+  SetCurrentTarget, SetJogStep, Settings, SimBackend, StartRegistering, Summary,
+  TestSpindle, ToggleAppPause, ToggleAutoConnect,
 }
 import blau_drill/ui/sample
+import blau_drill/ui/session
 import blau_drill/ui/shell
 import blau_drill/ui/stages
 import blau_drill/ui/storage
@@ -96,8 +95,7 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
   let session = storage.load_session(1.0, 1.0)
   let m =
     Model(
-      screen: Load,
-      printer: Disconnected,
+      overlay: NoOverlay,
       board: NoBoard,
       diagnostic: NoDiagnostic,
       file_selected: session.drl != "",
@@ -147,7 +145,12 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
   }
   // Apply the URL-hash stage, CAPPED to a safe restore target: never restore
   // into a connection/alignment-dependent stage (DryRun/Drill/Done), and never
-  // into Align without a board. Anything else collapses to Load.
+  // into Align without a board. Anything else collapses to Load. The screen is
+  // DERIVED from the job (ADR-0012), so restoring a stage = putting the real
+  // machine into the matching state, not setting a screen field:
+  //   * Align    → advance the job Parsed → Registering (re-register, blank slate)
+  //   * Settings → open the Settings overlay
+  //   * anything else (incl. Load) → leave the job in Parsed → derives to Load
   let m = case restore_screen(m) {
     // Restoring into Align is a BLANK SLATE (ADR-0011): alignment/position is
     // valid only while the motors stay continuously energized, and a page refresh
@@ -159,7 +162,8 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       let #(m2, _) = start_registering(m)
       m2
     }
-    screen -> Model(..m, screen: screen)
+    Settings -> Model(..m, overlay: model.SettingsOpen)
+    _ -> m
   }
   // Auto-reconnect: if enabled and the real Web Serial backend is selected, try
   // to re-open a previously-authorized port WITHOUT a picker. A benign "no
@@ -210,10 +214,11 @@ pub fn restore_target(
   }
 }
 
-fn backend_for(kind: BackendKind) -> backend.Backend {
+pub fn backend_for(kind: BackendKind) -> backend.Backend {
   case kind {
     SimBackend -> transport.simulator()
     RealBackend -> transport.web_serial()
+    EmuBackend -> transport.emulator()
   }
 }
 
@@ -248,22 +253,44 @@ fn persist_effect(model: Model) -> Effect(Msg) {
   // ADR-0011: alignment/position is NEVER persisted — it is valid only while the
   // motors stay continuously energized, and a refresh is a new runtime that
   // invalidates it. localStorage holds CONFIG + board-source + UI prefs only.
-  storage.save_screen(model.screen)
+  // The screen is DERIVED (ADR-0012), so persist the projection, not a field.
+  storage.save_screen(current_screen(model))
   Nil
+}
+
+// ── the Session: the single source of truth for stage + wire + screen ─────────
+
+/// The current `Session` (ADR-0012), DERIVED from the app's real machines: the
+/// `job` FSM (stage), the controller's REAL `printer.PrinterState` (wire), and
+/// the parsed board. Recomputed on demand rather than stored, so it can never be
+/// a second authority that drifts — it is a pure projection of the machines the
+/// handlers already own. The wire is the controller's state (the ONE printer),
+/// so the Session always reflects the genuine wire after the controller advances.
+fn current_session(model: Model) -> session.Session {
+  session.of(model.job, model.board, controller.state(model.controller))
+}
+
+/// The current screen, PROJECTED from the Session + overlay. There is no stored
+/// screen field a handler could set to contradict the machines (ADR-0012).
+fn current_screen(model: Model) -> model.Screen {
+  session.screen(current_session(model), model.overlay)
 }
 
 fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
-    // navigation. Going back/forward must NEVER disconnect or clear the
-    // alignment (transform/captures/job are left untouched below) — the machine
-    // hasn't physically moved. The one hazard is leaving a dry-run stream
-    // mid-flight, so any nav that changes the session screen first cancels an
-    // in-flight stream GRACEFULLY (→ Idle, still connected), never via Halt.
-    GoToSettings -> noeff(Model(..model, screen: Settings))
-    GoToSession -> nav_to(model, resting_screen(model))
-    model.GoToLog -> noeff(Model(..model, screen: model.Log))
+    // navigation. The lifecycle SCREEN is derived from the job (ADR-0012), so
+    // nav only opens/closes a side-route OVERLAY — it never moves the lifecycle
+    // (the job is the authority) and never disconnects or clears the alignment
+    // (the machine hasn't physically moved). Returning to the session (closing an
+    // overlay) cancels any in-flight dry-run stream GRACEFULLY (→ Jogging, still
+    // connected), never via Halt.
+    GoToSettings -> noeff(Model(..model, overlay: model.SettingsOpen))
+    GoToSession -> close_overlay(model)
+    model.GoToLog -> noeff(Model(..model, overlay: model.LogOpen))
     model.ClearLog -> noeff(Model(..model, comms_log: []))
-    NavStage(stage) -> nav_to(model, stage_screen(stage))
+    // The stepper nav is not interactive (no clickable nodes); keep the Msg
+    // compiling by closing any overlay (the lifecycle stays job-driven).
+    NavStage(_) -> close_overlay(model)
 
     // Stage 1 — load & connect
     SelectFile -> #(model, pick_drl_effect())
@@ -353,23 +380,24 @@ fn noeff(model: Model) -> #(Model, Effect(Msg)) {
   #(model, effect.none())
 }
 
-// Navigate to `screen`, but first cancel any in-flight dry-run stream GRACEFULLY
-// (CancelStream → Idle, still connected) so we never leave a zombie stream on the
-// controller. Crucially this does NOT touch transform/captures/job, so the
-// alignment survives the navigation — only the screen changes (and the stream,
-// if any, stops cleanly without faulting/disconnecting).
-fn nav_to(model: Model, screen: model.Screen) -> #(Model, Effect(Msg)) {
+// Close any side-route overlay (return to the lifecycle screen), first cancelling
+// an in-flight dry-run stream GRACEFULLY (CancelStream → Jogging, still connected)
+// so we never leave a zombie stream on the controller. Crucially this does NOT
+// touch transform/captures/job, so the alignment survives — only the overlay
+// closes (and the stream, if any, stops cleanly without faulting/disconnecting).
+fn close_overlay(model: Model) -> #(Model, Effect(Msg)) {
   let #(model, eff) = cancel_active_stream(model)
-  #(Model(..model, screen: screen), eff)
+  #(Model(..model, overlay: NoOverlay), eff)
 }
 
-// If a stream is currently in flight, issue a benign CancelStream (→ Idle, stays
-// connected, no M112, no fault). Otherwise a no-op. This is the single place
-// "leaving an active stream via navigation" is handled gracefully.
+// If a stream is currently in flight, issue a benign CancelStream (→ Jogging,
+// stays connected, no M112, no fault). Otherwise a no-op. This is the single
+// place "leaving an active stream via navigation" is handled gracefully. Reads
+// the REAL wire state off the Session (ADR-0012).
 fn cancel_active_stream(model: Model) -> #(Model, Effect(Msg)) {
-  case model.printer {
-    Streaming -> issue(model, printer.CancelStream)
-    _ -> noeff(model)
+  case session.is_streaming(current_session(model)) {
+    True -> issue(model, printer.CancelStream)
+    False -> noeff(model)
   }
 }
 
@@ -380,6 +408,47 @@ fn issue(model: Model, cmd: printer.Command) -> #(Model, Effect(Msg)) {
   apply_controller(model, controller.Issue(cmd))
 }
 
+/// Run a STAGE-FLOW action (ADR-0012): build the current `Session`, apply
+/// `action` via `session.transition`, and on success store the next job
+/// (`model.job` stays in lockstep with the Session's nested job — ONE job) plus
+/// any `extra` model updates, then execute the returned `Plan` (the ordered
+/// `List(printer.Command)`) through the controller IN ORDER. A `Rejected`
+/// transition writes NOTHING — the model is returned unchanged (the safety
+/// invariant: never a half-applied cross-machine move).
+fn flow(
+  model: Model,
+  action: session.Action,
+  extra: fn(Model) -> Model,
+) -> #(Model, Effect(Msg)) {
+  case session.transition(current_session(model), action) {
+    Ok(#(next, plan)) -> {
+      // The Session's nested job is the advanced stage; mirror it onto model.job.
+      let m = extra(Model(..model, job: session.job_opt(next)))
+      run_plan(m, plan)
+    }
+    // Refused: nothing is written, nothing is issued.
+    Error(_) -> noeff(model)
+  }
+}
+
+/// Execute a `Plan` — the ordered `List(printer.Command)` a Session transition
+/// returned — through the controller, IN ORDER. Each command is applied
+/// sequentially (the model from one feeds the next), so the STATE ordering that
+/// matters (e.g. CancelStream BEFORE Stream, so the drill is not refused `Busy`)
+/// is guaranteed. Each command's own framed writes already go out in a single
+/// ordered controller effect; the per-command effects are combined without
+/// reordering any order-dependent write burst.
+fn run_plan(
+  model: Model,
+  plan: List(printer.Command),
+) -> #(Model, Effect(Msg)) {
+  list.fold(plan, #(model, effect.none()), fn(acc, cmd) {
+    let #(m, eff) = acc
+    let #(m2, eff2) = issue(m, cmd)
+    #(m2, effect.batch([eff, eff2]))
+  })
+}
+
 /// Route a `ControllerMsg` through `controller.update`, store the next
 /// controller, map its printer state into the UI gates, fold its events into the
 /// model, and lift its effect into the UI Msg space.
@@ -388,11 +457,13 @@ fn apply_controller(
   cmsg: controller.ControllerMsg,
 ) -> #(Model, Effect(Msg)) {
   let out = controller.update(model.controller, cmsg)
+  // The controller owns the ONE real `printer.PrinterState`; storing it here is
+  // gone (ADR-0012). The Session reads it back via `controller.state` on demand,
+  // so the wire is reflected with no second copy that could drift.
   let m1 =
     Model(
       ..model,
       controller: out.controller,
-      printer: bridge.printer_state(controller.state(out.controller)),
       comms_log: append_log(model.comms_log, out.log),
     )
   let #(m2, ev_effects) = fold_events(m1, out.events)
@@ -653,14 +724,8 @@ fn disconnect_device(model: Model) -> #(Model, Effect(Msg)) {
   let #(ctrl, eff) = controller.disconnect(model.controller)
   // ADR-0011: a disconnect de-energizes the motors, so it invalidates the
   // alignment (involuntary → no confirm). Reset it in lockstep with the job FSM.
-  let m =
-    deenergize_reset(
-      Model(
-        ..model,
-        controller: ctrl,
-        printer: bridge.printer_state(controller.state(ctrl)),
-      ),
-    )
+  // The wire state lives on the controller now (ADR-0012), so just store it.
+  let m = deenergize_reset(Model(..model, controller: ctrl))
   #(m, effect.map(eff, ControllerEvent))
 }
 
@@ -671,7 +736,6 @@ fn start_registering(model: Model) -> #(Model, Effect(Msg)) {
   noeff(
     Model(
       ..model,
-      screen: Align,
       job: job2,
       applied_config: bridge.gcode_config(model.config, config.DryRun),
       captured: [],
@@ -689,9 +753,10 @@ fn start_registering(model: Model) -> #(Model, Effect(Msg)) {
 // ── Stage 2: alignment ───────────────────────────────────────────────────────
 
 fn jog(model: Model, axis: String, sign: Float) -> #(Model, Effect(Msg)) {
-  // Gate off the REAL printer state — the pure core also refuses if not Jogging,
-  // writing nothing, but we avoid even issuing when not energized.
-  case model.printer == Jogging {
+  // Gate off the REAL printer state (the Session's nested wire) — the pure core
+  // also refuses if not Jogging, writing nothing, but we avoid even issuing when
+  // not energized.
+  case session.is_jogging(current_session(model)) {
     False -> noeff(model)
     True -> {
       let mm = sign *. model.jog_step
@@ -713,7 +778,7 @@ fn jog(model: Model, axis: String, sign: Float) -> #(Model, Effect(Msg)) {
 // preceding motion effect's writes have been performed.
 
 fn test_spindle(model: Model) -> #(Model, Effect(Msg)) {
-  case model.printer == Jogging {
+  case session.is_jogging(current_session(model)) {
     False -> noeff(model)
     True -> {
       let #(on, off) = bridge.spindle_commands(model.config)
@@ -756,7 +821,9 @@ pub fn target_candidate(
 // transform available (solved → estimate → none). Disabled until at least one
 // capture (or a fit) exists.
 fn jump_to(model: Model, point: #(Float, Float)) -> #(Model, Effect(Msg)) {
-  case model.screen == Align && model.printer == Jogging {
+  case
+    current_screen(model) == Align && session.is_jogging(current_session(model))
+  {
     False -> noeff(model)
     True ->
       case bridge.board_to_machine(model.transform, model.captures, point) {
@@ -781,7 +848,7 @@ fn jump_to(model: Model, point: #(Float, Float)) -> #(Model, Effect(Msg)) {
 // Capture the current target candidate paired with the live head XY. Requires
 // motors energized (so a real M114 has been read) and the job in Registering.
 fn capture(model: Model) -> #(Model, Effect(Msg)) {
-  case model.printer == Jogging, model.job, model.board {
+  case session.is_jogging(current_session(model)), model.job, model.board {
     True, HaveJob(j), HaveBoard(board) ->
       case can_capture(j) {
         False -> noeff(model)
@@ -1021,29 +1088,30 @@ fn restart_alignment(model: Model) -> #(Model, Effect(Msg)) {
 // ── Stage 3/4: dry-run + drilling (streaming) ────────────────────────────────
 
 fn run_dry_run(model: Model) -> #(Model, Effect(Msg)) {
-  // Only legal from Aligned with a solved transform; the job FSM gates it.
+  // Only legal from Aligned with a solved transform; the Session (delegating to
+  // the job FSM) gates it. Build the dry-run program, route the move through
+  // `session.transition(RunDryRun(lines))`, and execute the returned Plan
+  // (`[Stream(dry_run)]`) in ONE ordered effect (ADR-0012).
   case model.job {
     HaveJob(j) ->
       case job.can(j, job.RunDryRunE), j.alignment {
         True, Some(al) -> {
-          let j2 = job_advance(model.job, job.RunDryRun)
           let cfg =
             config.GcodeConfig(..model.applied_config, mode: config.DryRun)
           let program = gcode_program.build(j.board, al, cfg)
+          let lines = gcode_program.stream_lines(program)
           let total = list.length(j.board.holes)
-          let m =
+          flow(model, session.RunDryRun(lines), fn(m) {
             Model(
-              ..model,
-              screen: DryRun,
-              job: j2,
-              board: reset_hole_status(model.board),
+              ..m,
+              board: reset_hole_status(m.board),
               progress: HaveProgress(Progress(
                 drilled: 0,
                 total: total,
                 mode: DryRunMode,
               )),
             )
-          issue(m, printer.Stream(gcode_program.stream_lines(program)))
+          })
         }
         _, _ -> noeff(model)
       }
@@ -1052,59 +1120,57 @@ fn run_dry_run(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 fn redo_alignment(model: Model) -> #(Model, Effect(Msg)) {
-  // Going BACK from the dry-run: if a dry-run stream is still in flight, stop it
-  // GRACEFULLY (CancelStream → Idle, stay connected) — NOT an emergency Halt
-  // (M112, which would fault/disconnect). The machine hasn't moved, so the
-  // captured fiducials + fitted transform stay valid; we only roll the job back
-  // DryRun → Aligned and return to the Align screen. transform/captures are
-  // untouched here, so the operator can re-proceed without re-aligning.
-  let #(model, eff) = cancel_active_stream(model)
-  let job2 = job_advance(model.job, job.RedoAlignment)
-  #(Model(..model, job: job2, screen: Align, progress: NoProgress), eff)
+  // Going BACK from the dry-run (Rehearsing → Aligning). The Session transition
+  // returns `Plan[CancelStream]`, which stops the in-flight dry-run stream
+  // GRACEFULLY (→ Jogging, stay connected) — NOT an emergency Halt. The machine
+  // hasn't moved, so the captured fiducials + fitted transform stay valid; the
+  // job rolls DryRun → Aligned and the screen derives back to Align.
+  flow(model, session.RedoAlignment, fn(m) { Model(..m, progress: NoProgress) })
 }
 
 fn confirm_registration(model: Model) -> #(Model, Effect(Msg)) {
+  // THE BUG FIX (ADR-0012). DryRun → Drilling is ONE Session transition that
+  // returns `Plan[CancelStream, Stream(drill)]` — the cancel of the IN-FLIGHT
+  // dry-run stream precedes the drill stream IN THE SAME ORDERED EFFECT, so the
+  // drill can never be refused `Busy` (the old three un-atomic writes did, leaving
+  // the UI on Drill / 0% with the dry-run still running). `Drilling` is
+  // constructible ONLY by this transition.
   case model.job {
     HaveJob(j) ->
       case job.can(j, job.ConfirmRegistrationE), j.alignment {
         True, Some(al) -> {
-          let j2 = job_advance(model.job, job.ConfirmRegistration)
           let cfg =
             config.GcodeConfig(..model.applied_config, mode: config.Drill)
           let program = gcode_program.build(j.board, al, cfg)
+          let drill_lines = gcode_program.stream_lines(program)
           let total = list.length(j.board.holes)
-          // No pre-set modal: the in-app pause is now DRIVEN by the stream FSM,
-          // which raises the touch-off pause (StreamPausedAt pending=0) the moment
-          // the run starts and a bit-change pause at each tool boundary. Starting
-          // with a bit-change modal already up would be wrong (it precedes the
-          // touch-off). `bit_label` is the first tool for the telemetry readout.
-          let #(bit_change, bit_label, changes) = case program.tool_order {
+          // No pre-set modal: the in-app pause is DRIVEN by the stream FSM, which
+          // raises the bit-change pause at each tool boundary. `bit_label` is the
+          // first tool for the telemetry readout.
+          let #(bit_label, changes) = case program.tool_order {
             [_first, ..] -> #(
-              NoBitChange,
               fmt_mm(tool_diameter(j.board, first_tool(program.tool_order)))
                 <> "mm",
               int.max(list.length(program.tool_order) - 1, 0),
             )
-            _ -> #(NoBitChange, "—", 0)
+            _ -> #("—", 0)
           }
-          let m =
+          flow(model, session.ConfirmRegistration(drill_lines), fn(m) {
             Model(
-              ..model,
-              screen: Drill,
-              job: j2,
-              board: reset_hole_status(model.board),
+              ..m,
+              board: reset_hole_status(m.board),
               progress: HaveProgress(Progress(
                 drilled: 0,
                 total: total,
                 mode: DrillMode,
               )),
-              bit_change: bit_change,
+              bit_change: NoBitChange,
               bit_changes_seen: changes,
               telemetry_bit: bit_label,
               telemetry_spindle: spindle_label(model.config),
               telemetry_eta: "—",
             )
-          issue(m, printer.Stream(gcode_program.stream_lines(program)))
+          })
         }
         _, _ -> noeff(model)
       }
@@ -1125,33 +1191,39 @@ fn resume_drilling(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 fn complete(model: Model) -> #(Model, Effect(Msg)) {
-  let job2 = job_advance(model.job, job.Complete)
+  // Drilling → Completed (the screen derives to Done). Plan is empty.
   let total = case model.board {
     HaveBoard(b) -> list.length(b.holes)
     NoBoard -> 0
   }
   // Total time = the full-run estimate (all holes), same per-hole model as ETA.
   let total_time = fmt_mmss(per_hole_seconds(model) *. int.to_float(total))
-  noeff(
+  flow(model, session.MarkComplete, fn(m) {
     Model(
-      ..model,
-      screen: Done,
-      job: job2,
+      ..m,
       summary: HaveSummary(Summary(
         total_holes: total,
         total_time: total_time,
-        bit_changes: model.bit_changes_seen,
+        bit_changes: m.bit_changes_seen,
       )),
-    ),
-  )
+    )
+  })
 }
 
 // ── fault / recover / new board ──────────────────────────────────────────────
 
 fn abort(model: Model) -> #(Model, Effect(Msg)) {
-  // Emergency abort: halt (M112). The controller faults; fold_event handles the
-  // job transition + banner.
-  issue(model, printer.Halt)
+  // Emergency abort (ADR-0012): from any ACTIVE Session, `session.Abort` returns
+  // `Plan[Halt]` and rolls to Faulted. `run_plan` issues the M112 Halt through the
+  // controller, whose `Faulting` event the fold then handles (job reset + fault
+  // banner). M112 stays reachable from every motion stage. From a non-active
+  // Session (Loading) there is nothing on the wire to halt → a benign no-op.
+  case session.transition(current_session(model), session.Abort) {
+    Ok(#(_next, plan)) -> run_plan(model, plan)
+    // Not an active wire state (nothing to halt) — but keep the hard guarantee:
+    // a raw Halt is still issued so an emergency stop is NEVER swallowed.
+    Error(_) -> issue(model, printer.Halt)
+  }
 }
 
 fn fault(model: Model) -> Model {
@@ -1180,10 +1252,11 @@ fn fault(model: Model) -> Model {
 
 fn reconnect(model: Model) -> #(Model, Effect(Msg)) {
   // Controller Reconnect (Faulted → Idle) emits Recovered, which routes the job
-  // Faulted → Aligned. Clear stale progress + modal; land on Align.
+  // Faulted → Parsed (ADR-0011: no trusted transform survives a fault; re-register
+  // from a clean slate). The screen then DERIVES back to Load (ADR-0012: Faulted →
+  // Loading on reconnect). Clear stale progress + modal.
   let #(m1, eff1) = issue(model, printer.Reconnect)
-  let m2 =
-    Model(..m1, screen: Align, progress: NoProgress, bit_change: NoBitChange)
+  let m2 = Model(..m1, progress: NoProgress, bit_change: NoBitChange)
   #(m2, eff1)
 }
 
@@ -1208,7 +1281,6 @@ fn new_board(model: Model) -> #(Model, Effect(Msg)) {
   noeff(
     Model(
       ..model,
-      screen: Load,
       board: NoBoard,
       board_model: NoBoardModel,
       diagnostic: NoDiagnostic,
@@ -1291,7 +1363,7 @@ fn has_alignment(model: Model) -> Bool {
 }
 
 fn is_energized(model: Model) -> Bool {
-  model.printer == Jogging
+  session.is_jogging(current_session(model))
 }
 
 // Drive a de-energize through the job FSM AND clear the model alignment/position
@@ -1671,33 +1743,6 @@ fn set_config_field(model: Model, field: String, value: String) -> Model {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn resting_screen(model: Model) -> model.Screen {
-  case model.job {
-    HaveJob(j) ->
-      case j.state {
-        job.Parsed -> Load
-        job.Registering -> Align
-        job.Aligned -> Align
-        job.AlignmentRejected -> Align
-        job.DryRun -> DryRun
-        job.Drilling -> Drill
-        job.Done -> Done
-        job.Faulted -> Align
-      }
-    NoJob -> Load
-  }
-}
-
-fn stage_screen(stage: model.StageId) -> model.Screen {
-  case stage {
-    StageLoad -> Load
-    StageAlign -> Align
-    StageDryRun -> DryRun
-    StageDrill -> Drill
-    StageDone -> Done
-  }
-}
-
 fn next_uncaptured(
   candidates: List(#(Float, Float)),
   captured: List(model.Fiducial),
@@ -1732,14 +1777,17 @@ fn clamp_zoom(z: Float) -> Float {
 // ── view ─────────────────────────────────────────────────────────────────────
 
 fn view(model: Model) -> Element(Msg) {
-  case model.screen {
+  // The screen is DERIVED from the Session + overlay (ADR-0012) — there is no
+  // stored screen field. Settings / Log are full-screen overlays; everything else
+  // renders the operator shell.
+  case current_screen(model) {
     Settings -> stages.settings(model)
     model.Log -> stages.comms_log(model)
-    _ -> session(model)
+    _ -> session_view(model)
   }
 }
 
-fn session(model: Model) -> Element(Msg) {
+fn session_view(model: Model) -> Element(Msg) {
   h.div([a.class("app")], [
     fault_banner(model),
     shell.header(model),
@@ -1752,14 +1800,15 @@ fn session(model: Model) -> Element(Msg) {
 }
 
 fn fault_banner(model: Model) -> Element(Msg) {
-  case model.printer == Faulted {
+  // The loud fault banner shows whenever the REAL wire is Faulted (ADR-0012).
+  case session.is_faulted(current_session(model)) {
     True -> shell.fault_banner()
     False -> element.none()
   }
 }
 
 fn stage_main(model: Model) -> Element(Msg) {
-  case model.screen {
+  case current_screen(model) {
     Load -> load_with_sample(model)
     Align -> stages.align(model)
     DryRun -> stages.dry_run(model)

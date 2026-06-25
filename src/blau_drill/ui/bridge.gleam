@@ -7,12 +7,10 @@
 ////   * `feature_candidates` — the 4 bbox-corner-nearest holes (registration
 ////     targets), deduped.
 ////   * `board_of` — the canvas-facing `Board` from a parsed `BoardModel`.
-////   * `printer_state` — `control` FSM → UI `PrinterState` for the gates.
 ////   * `estimate_machine_point` — pre-fit click-to-jump (1 capture → translate,
 ////     2+ → similarity), the inverse of the canvas's board-space estimate.
 ////   * config coercion — settings strings → `domain/config.GcodeConfig`.
 
-import blau_drill/control/printer
 import blau_drill/domain/board_model.{type BoardModel}
 import blau_drill/domain/config.{type GcodeConfig}
 import blau_drill/domain/transform2d.{type Point}
@@ -209,26 +207,6 @@ fn dedup_points(pts: List(Point)) -> List(Point) {
       False -> list.append(acc, [p])
     }
   })
-}
-
-// ── control FSM → UI PrinterState ────────────────────────────────────────────
-
-/// Map the `control` printer state into the flat UI `PrinterState` the views
-/// gate off. Streaming and Jogging map straight across; Idle is "connected,
-/// motors off"; Faulted is loud; Disconnected is no port.
-pub fn printer_state(s: printer.PrinterState) -> model.PrinterState {
-  case s {
-    printer.Disconnected -> model.Disconnected
-    printer.Idle(_, _) -> model.Idle
-    printer.Jogging(_, _) -> model.Jogging
-    printer.Streaming(_, _) -> model.Streaming
-    // A stream halted at an in-app pause point still maps to the UI's `Streaming`
-    // gate: the run is in flight (motion stays gated, the abort affordance stays
-    // up), the operator just has the on-screen Resume modal. The bit-change modal
-    // (driven off the pause event) is what tells them to swap the bit.
-    printer.StreamPaused(_, _) -> model.Streaming
-    printer.Faulted -> model.Faulted
-  }
 }
 
 // ── parse error → operator copy ──────────────────────────────────────────────

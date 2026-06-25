@@ -20,16 +20,39 @@ import blau_drill/ui/bridge
 import blau_drill/ui/mock
 import blau_drill/ui/model.{
   type Model, Align, BBox, Board, CancelRelease, ConfNone, ConfirmReleaseMotors,
-  Connection, Disconnected, Done, Drill, DryRun, Front, HaveBoard,
-  HaveBoardModel, HaveJob, HaveTransform, Head, Idle, Jogging, Load, Model,
-  NoBitChange, NoBoard, NoDiagnostic, NoFitDiag, NoHeadPos, NoProgress,
-  NoSummary, NoTransform, Release, Settings,
+  Connection, Done, Drill, DryRun, Front, HaveBoard, HaveBoardModel, HaveJob,
+  HaveTransform, Head, Load, Model, NoBitChange, NoBoard, NoDiagnostic,
+  NoFitDiag, NoHeadPos, NoOverlay, NoProgress, NoSummary, NoTransform, Release,
+  Settings,
 }
 import blau_drill/ui/sample
+import blau_drill/ui/session
 import gleam/float
 import gleam/list
 import gleam/option.{None, Some}
 import gleeunit/should
+
+// ── Session-derived reads (ADR-0012): the screen + wire are no longer stored ──
+// fields. Project them the same way `app`/the views do, so these tests assert
+// the genuine derived state.
+
+fn scr(m: Model) -> model.Screen {
+  session.screen(
+    session.of(m.job, m.board, controller.state(m.controller)),
+    m.overlay,
+  )
+}
+
+fn is_jogging(m: Model) -> Bool {
+  session.is_jogging(session.of(m.job, m.board, controller.state(m.controller)))
+}
+
+fn is_idle(m: Model) -> Bool {
+  case controller.state(m.controller) {
+    printer.Idle(..) -> True
+    _ -> False
+  }
+}
 
 fn approx(a: Float, b: Float) -> Bool {
   float.absolute_value(a -. b) <. 1.0e-9
@@ -144,8 +167,7 @@ fn base_model() -> Model {
     board_model.parse(Inputs(drl: Some(sample.drl()), edge_cuts: None))
   let wm = bridge.working_board_model(bm, Front)
   Model(
-    screen: Load,
-    printer: Disconnected,
+    overlay: NoOverlay,
     board: HaveBoard(bridge.board_of(wm)),
     diagnostic: NoDiagnostic,
     file_selected: True,
@@ -250,7 +272,7 @@ pub fn live_capture_records_head_z_test() {
       model.ControllerEvent(controller.Issue(printer.Connect)),
     )
   let #(m2, _) = app.update(m1, model.Energize)
-  m2.printer |> should.equal(Jogging)
+  is_jogging(m2) |> should.be_true
   let #(m3, _) = app.update(m2, model.StartRegistering)
   // Jog the head down to a known bit-down height on the pad: head.z = -1.5.
   let m4 = Model(..m3, head: Head(m3.head.x, m3.head.y, -1.5))
@@ -272,9 +294,9 @@ pub fn connect_then_energize_reaches_jogging_test() {
       base_model(),
       model.ControllerEvent(controller.Issue(printer.Connect)),
     )
-  m1.printer |> should.equal(Idle)
+  is_idle(m1) |> should.be_true
   let #(m2, _) = app.update(m1, model.Energize)
-  m2.printer |> should.equal(Jogging)
+  is_jogging(m2) |> should.be_true
 }
 
 // ── app_pause: in-app pause modal + ResumeDrilling resumes the stream ──────────
@@ -329,7 +351,7 @@ fn pump_to_pause(m: Model, fuel: Int) -> Model {
 // field, which it previously did not.)
 pub fn app_pause_pauses_at_first_bit_change_and_surfaces_panel_test() {
   let m0 = drill_ready_app_pause_model()
-  m0.screen |> should.equal(DryRun)
+  scr(m0) |> should.equal(DryRun)
   let m = pump_to_pause(m0, 100)
   // The FSM is genuinely paused on the first sentinel (not streaming through).
   controller.state(m.controller) |> printer.is_stream_paused |> should.be_true
@@ -398,15 +420,15 @@ pub fn jump_with_no_captures_is_noop_test() {
   let m = registering_jogging_model()
   // Preconditions: energized (Jogging), on the Align screen, NOTHING captured and
   // no solved transform — the only state from which a jump must no-op.
-  m.printer |> should.equal(Jogging)
-  m.screen |> should.equal(Align)
+  is_jogging(m) |> should.be_true
+  scr(m) |> should.equal(Align)
   m.captures |> should.equal([])
   m.transform |> should.equal(NoTransform)
   // A click-to-jump to any board point writes nothing and moves nothing: the
   // model is returned UNCHANGED (the estimate Errors → `noeff(model)`).
   let #(m2, _e) = app.update(m, model.JumpTo(#(12.0, 34.0)))
   m2.head |> should.equal(m.head)
-  m2.printer |> should.equal(Jogging)
+  is_jogging(m2) |> should.be_true
   m2.current_target |> should.equal(m.current_target)
   // Nothing was streamed / the controller did not transition out of Jogging.
   controller.state(m2.controller) |> printer.is_streaming |> should.be_false
@@ -427,12 +449,12 @@ fn job_state(m: Model) -> job.State {
 // confirmed). The alignment is still intact at this point.
 pub fn release_while_aligned_sets_confirm_does_not_reset_test() {
   let m = aligned_jogging_model()
-  m.printer |> should.equal(Jogging)
+  is_jogging(m) |> should.be_true
   job_state(m) |> should.equal(job.Aligned)
   let #(m2, _e) = app.update(m, Release)
   // The confirm gate is up; nothing has been released or reset yet.
   m2.release_confirm |> should.be_true
-  m2.printer |> should.equal(Jogging)
+  is_jogging(m2) |> should.be_true
   job_state(m2) |> should.equal(job.Aligned)
   case m2.transform {
     HaveTransform(_) -> True
@@ -483,12 +505,12 @@ pub fn release_with_no_alignment_releases_directly_test() {
       model.ControllerEvent(controller.Issue(printer.Connect)),
     )
   let #(m2, _e2) = app.update(m1, model.Energize)
-  m2.printer |> should.equal(Jogging)
+  is_jogging(m2) |> should.be_true
   job_state(m2) |> should.equal(job.Parsed)
   let #(m3, _e3) = app.update(m2, Release)
   // No confirm needed; the motors released directly.
   m3.release_confirm |> should.be_false
-  m3.printer |> should.equal(Idle)
+  is_idle(m3) |> should.be_true
 }
 
 // Disconnect is INVOLUNTARY (no confirm) and resets the alignment directly.
@@ -501,4 +523,17 @@ pub fn disconnect_resets_alignment_test() {
   m2.captured |> should.equal([])
   m2.head_confidence |> should.equal(ConfNone)
   job_state(m2) |> should.equal(job.Parsed)
+}
+
+// ── backend selection (ADR-0013: the faithful emulator is operator-selectable) ─
+
+// `backend_for` maps each operator-selectable `BackendKind` to a concrete
+// transport. The faithful Marlin emulator must be reachable from the picker, so
+// `EmuBackend` resolves to `transport.emulator()` (identified by its `.name`).
+// localStorage is `undefined` headlessly, so we exercise the PURE mapping here
+// rather than the storage round-trip (which no-ops in node).
+pub fn backend_for_maps_each_kind_test() {
+  app.backend_for(model.SimBackend).name |> should.equal("Simulator")
+  app.backend_for(model.RealBackend).name |> should.equal("Web Serial")
+  app.backend_for(model.EmuBackend).name |> should.equal("Emulator")
 }
