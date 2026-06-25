@@ -33,6 +33,22 @@ export function deferredPromise(d) {
   return d.promise;
 }
 
+// Race a deferred against a wall-clock deadline so a never-resolving deferred
+// (a regressed handshake that parks forever) FAILS LOUDLY within `ms` instead of
+// stalling gleeunit's sequential loop forever. Resolves with the Gleam-side
+// `ok(value)` when the deferred settles first, or `err()` on timeout. `ok`/`err`
+// are passed in from Gleam (Ok/Error constructors) to keep the Result shape in
+// Gleam's hands. The timer is cleared on settle so it can't keep the loop alive.
+export function deferredPromiseWithTimeout(d, ms, ok, err) {
+  let timer;
+  const deadline = new Promise((res) => {
+    timer = setTimeout(() => res(err()), ms);
+  });
+  return Promise.race([d.promise.then((v) => ok(v)), deadline]).finally(() =>
+    clearTimeout(timer),
+  );
+}
+
 export function deferredResolve(d, value) {
   d.resolve(value);
   return value;

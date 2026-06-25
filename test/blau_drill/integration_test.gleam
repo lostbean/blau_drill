@@ -11,7 +11,7 @@
 //// pipeline (spindle-before-plunge), since we stream `gcode_program` unmodified.
 
 import blau_drill/control/backend.{type Backend, type Conn}
-import blau_drill/control/printer.{type PrinterState, Stream}
+import blau_drill/control/printer.{type PrinterState, ResumeStream, Stream}
 import blau_drill/control/transport
 import blau_drill/domain/alignment
 import blau_drill/domain/board_model.{Inputs}
@@ -45,8 +45,15 @@ type Deferred(a)
 @external(javascript, "./control_test_ffi.mjs", "newDeferred")
 fn new_deferred() -> Deferred(a)
 
-@external(javascript, "./control_test_ffi.mjs", "deferredPromise")
-fn deferred_promise(d: Deferred(a)) -> Promise(a)
+/// Await the deferred but give up after `ms` — a never-resolving deferred (a
+/// regressed handshake) then FAILS loudly here instead of stalling the runner.
+@external(javascript, "./control_test_ffi.mjs", "deferredPromiseWithTimeout")
+fn deferred_promise_with_timeout(
+  d: Deferred(a),
+  ms: Int,
+  ok: fn(a) -> Result(a, Nil),
+  err: fn() -> Result(a, Nil),
+) -> Promise(Result(a, Nil))
 
 @external(javascript, "./control_test_ffi.mjs", "deferredResolve")
 fn deferred_resolve(d: Deferred(a), value: a) -> a
@@ -128,19 +135,46 @@ fn build_drill_program() -> gcode_program.GcodeProgram {
 // ── the end-to-end stream proof ──────────────────────────────────────────────
 
 /// Stream the real drill program through the real sim + real transitions; the
-/// machine reaches `StreamComplete` → `Idle` having confirmed all lines and
-/// drilled every hole (one `G0 X..` per hole).
+/// machine reaches `StreamComplete` → `Idle` having confirmed every streamed
+/// line and drilled every hole (one `G0 X..` per hole).
+///
+/// We stream `gcode_program.stream_lines(program)` — the exact form the app
+/// streams (`app.gleam`): the rich `.lines` minus blank lines and full-line
+/// comments, which Marlin doesn't reliably `ok`. The sentinels survive the
+/// filter (they start with a command token), so the pause path is still
+/// exercised.
+///
+/// The default config has `app_pause: True`, so the program carries
+/// `M0_APP_PAUSE` sentinels (one per bit-change). When the stream hits a
+/// sentinel the FSM enters `StreamPaused` and emits `StreamPausedAt` — it does
+/// NOT auto-complete. The harness drives the pause/resume handshake exactly as
+/// the app does (`app_test`'s `ResumeDrilling` → `ResumeStream`): on every
+/// inbound line, if the FSM is now paused, issue `ResumeStream` to send the next
+/// real line and re-arm the handshake. So this proves the full streamed-WITH-
+/// pauses program runs straight through to `StreamComplete` + `Idle`.
 pub fn drill_program_streams_to_complete_test() -> Promise(Nil) {
   let program = build_drill_program()
-  let total_lines = list.length(program.lines)
+  // The app streams the FILTERED view, not the rich `.lines`. Mirror that here.
+  let lines = gcode_program.stream_lines(program)
+  let total_lines = list.length(lines)
   // Count actual hole moves: `G0 X..` lines, EXCLUDING the per-tool-block
   // bit-exchange move (also a `G0 X..`, but carrying the exchange comment).
   let hole_count =
-    list.count(program.lines, fn(l) {
+    list.count(lines, fn(l) {
       string.starts_with(l, "G0 X")
       && !string.contains(l, "bit-exchange position")
     })
   hole_count |> should.equal(130)
+
+  // The app-pause sentinels are CONSUMED by the FSM, never sent to the port, so
+  // they never draw an `ok`/`Progress`. The handshake therefore confirms only
+  // the REAL lines: every streamed line except the sentinels. The run must carry
+  // at least one sentinel (default app_pause is on) so this asserts the pause
+  // path is actually exercised, not bypassed.
+  let sentinel_count =
+    list.count(lines, fn(l) { string.trim(l) == gcode_program.app_pause_marker })
+  { sentinel_count >= 1 } |> should.equal(True)
+  let confirmable_lines = total_lines - sentinel_count
 
   let b = transport.simulator()
   let acks = new_ref(0)
@@ -159,16 +193,31 @@ pub fn drill_program_streams_to_complete_test() -> Promise(Nil) {
       fn(_reason) { Nil },
     )
 
-    let started = printer.command(ref_get(state_ref), Stream(program.lines))
+    let started = printer.command(ref_get(state_ref), Stream(lines))
     let _ = ref_set(state_ref, started.state)
     perform_writes(b, conn, started.writes)
     Nil
   })
-  |> promise.await(fn(_) { deferred_promise(done) })
-  |> promise.map(fn(confirmed) {
-    confirmed |> should.equal(total_lines)
-    ref_get(state_ref) |> printer.state_name |> should.equal("idle")
-    Nil
+  // Bound the wait: a regressed handshake that never reaches StreamComplete now
+  // FAILS here rather than hanging the runner forever. The happy path streams
+  // ~470 lines, each acked ~10ms ahead by the sim (≈5s wall), so the deadline is
+  // 7s — comfortably above the real run, below the gate's 8s per-test backstop.
+  |> promise.await(fn(_) {
+    deferred_promise_with_timeout(done, 7000, Ok, fn() { Error(Nil) })
+  })
+  |> promise.map(fn(result) {
+    case result {
+      // Every real (sent) line was confirmed by its `ok`; the sentinels were the
+      // only lines never sent. Reaching here means the full program — pauses and
+      // all — ran to `StreamComplete` and the machine settled back to `idle`.
+      Ok(confirmed) -> {
+        confirmed |> should.equal(confirmable_lines)
+        ref_get(state_ref) |> printer.state_name |> should.equal("idle")
+        Nil
+      }
+      // Timed out: the stream never completed. Fail loudly.
+      Error(Nil) -> should.fail()
+    }
   })
 }
 
@@ -200,7 +249,26 @@ fn on_inbound(
 
   perform_writes(b, conn, step.writes)
 
-  case printer.is_streaming(step.state) {
+  // The default config has app_pause on, so the program pauses at every
+  // bit-change sentinel. When the FSM parks in `StreamPaused`, drive the
+  // operator's resume (exactly as the app's `ResumeDrilling` does): issue
+  // `ResumeStream` to send the next real line and re-arm the handshake, so the
+  // run continues to completion instead of hanging at the first pause.
+  case printer.is_stream_paused(step.state) {
+    True -> {
+      let resumed = printer.command(step.state, ResumeStream)
+      let _ = ref_set(state_ref, resumed.state)
+      perform_writes(b, conn, resumed.writes)
+      // Resuming after the FINAL sentinel completes the run with no further
+      // inbound line (no real line to ok), so settle here too.
+      case list.any(resumed.events, fn(e) { e == printer.StreamComplete }) {
+        True -> {
+          let _ = deferred_resolve(done, ref_get(acks))
+          Nil
+        }
+        False -> Nil
+      }
+    }
     False ->
       case list.any(step.events, fn(e) { e == printer.StreamComplete }) {
         True -> {
@@ -209,7 +277,6 @@ fn on_inbound(
         }
         False -> Nil
       }
-    True -> Nil
   }
 }
 
