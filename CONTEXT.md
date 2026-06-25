@@ -137,13 +137,31 @@ API**, or `transport.simulator()` for hardware-free dev). It hides the entire
 Marlin protocol — line numbering, checksums, the `ok`/`resend` handshake, `M114`
 polling, flow control — behind verbs `Energize`/`Release`/`Jog`/`MoveTo`/
 `Where`/`Stream`/`Halt`/`Reconnect`, plus `CancelStream` (benign stop → Jogging,
-for navigating away from a dry-run) and `ResumeStream` (continue past an in-app
-pause). Its mode is one of `Disconnected | Idle | Jogging | Streaming |
-StreamPaused | Faulted`, where `StreamPaused` is a stream halted at an in-app
-pause point (`app_pause`) awaiting `ResumeStream`; `Halt` and `CancelStream` stay
-reachable from it so abort is never gated.
+for navigating away from a dry-run), `ResumeStream` (continue past an in-app
+pause), and `Quickstop` (graceful planner flush — see below). Its mode is one of
+`Disconnected | Idle | Jogging | Streaming | StreamPaused | Faulted`, where
+`StreamPaused` is a stream halted at an in-app pause point (`app_pause`) awaiting
+`ResumeStream`; `Halt`, `CancelStream`, and `Quickstop` stay reachable from it so
+abort/flush is never gated.
 _Avoid:_ "serial driver" / "the port" as the noun, and do **not** model it as
 OctoPrint or a general print host — it owns the port only for the session.
+
+### Quickstop {#term-quickstop}
+
+The **graceful planner flush** verb on `PrinterConnection`: it emits `M410`
+(quickstop — abort all queued/buffered moves NOW, clearing Marlin's planner) then
+`M400` (wait for the now-empty move queue) **raw/unnumbered**, so they are
+actioned immediately rather than queued behind the very moves they must cancel.
+Valid from `Streaming`/`StreamPaused`/`Jogging`, it lands in `Jogging` — motors
+stay energized, so alignment trust is preserved (ADR-0011). It is the missing
+piece the bug exposed: `CancelStream` only stops the **host** from sending more
+lines (it writes nothing), so the moves already in the firmware's planner keep
+executing; `Quickstop` actually flushes them. Used on `ConfirmRegistration`
+(dry-run → drill) and `RedoAlignment` (drill rehearsal → align) so a phase change
+stops in-flight motion dead before the next phase prepares (ADR-0014).
+_Avoid:_ conflating it with `CancelStream` (benign, no write — host stop only) or
+`Halt` (M112 emergency → `Faulted`). `Quickstop` is graceful (stays connected,
+motors live) but, unlike `CancelStream`, it physically empties the planner.
 
 ### MarlinEmulator {#term-marlinemulator}
 
@@ -285,7 +303,26 @@ hardcoded:
 - **zchange** = `30` mm — the lift height for bit changes, clearing the head so
   the operator can swap bits.
 _Avoid:_ inventing new names like "z_travel" / "z_cut" / "z_tool"; use these
-three exactly. (Related tuned values: `drill-feed` = 200, spindle speed = 255.)
+three exactly. (Related tuned values: the `FeedProfile` feeds — base ~200 — and
+spindle speed = 255.)
+
+### FeedProfile {#term-feedprofile}
+
+The set of three motion **feed rates** (mm/min) for one run mode:
+`xy_feed` (XY travel between holes), `plunge_feed` (the downward Z into the work),
+and `retract_feed` (the upward Z back to safe). `GcodeConfig` carries **two**
+profiles — `dry_run_feeds` and `drill_feeds` — and `GcodeProgram.build` selects by
+`cfg.mode`, so dry-run and real drilling run at independently tuned speeds (the
+dry-run `xy_feed` defaults to ~2× the drill `xy_feed` — a spindle-off trace can
+travel faster). Every motion line is emitted as a **feed-controlled** `G1`
+(including XY travel, which was previously an uncontrolled `G0` rapid), so speed is
+predictable and operator-settable. Replaces the single scalar `drill-feed`
+(ADR-0015). Like all run tunables it is operator config, persisted per-operator in
+`localStorage` — never a hardcoded hardware truth (ADR-0004).
+_Avoid:_ a single shared feed for both modes, or leaving XY travel as an
+uncontrolled `G0` rapid; the feed is per-mode and every move is `G1`-controlled.
+Changing a feed changes only the move's **speed**, never its Z — the
+XY-only-at-safe-Z invariant is untouched.
 
 ### M3 S255
 

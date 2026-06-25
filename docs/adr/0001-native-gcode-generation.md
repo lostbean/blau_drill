@@ -1,4 +1,5 @@
 # 1. Native Marlin G-code generation in Elixir
+<a id="adr-0001"></a>
 
 - **Status:** Accepted
 - **Date:** 2026-06-18
