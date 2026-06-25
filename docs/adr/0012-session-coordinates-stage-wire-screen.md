@@ -40,9 +40,15 @@ running. Three machines, no coordinator enforcing legal cross-machine transition
 
 ## Decision
 
-Introduce **one** pure value, `Session` (`domain/session.gleam`), that **owns the
+Introduce **one** pure value, `Session` (`ui/session.gleam`), that **owns the
 cross-machine state** by *nesting the real machines* — not by copying their state
-tags into its own variants:
+tags into its own variants. It lives in `ui/` (not `domain/`) because it is a
+**coordination tier above both layers**: it nests `printer.PrinterState` (from
+`control/`) and projects to `model.Screen` (from `ui/`), and the repo's clean
+layering has `control` importing `domain` while `domain` imports neither
+`control` nor `ui` — so a `Session` in `domain/` would invert those arrows.
+`ui/` already imports both `control` and `model` (e.g. `bridge.gleam`), so the
+coordinator belongs there. It is still a **pure** value (no IO):
 
 ```gleam
 pub type Session {
@@ -91,6 +97,24 @@ combination fail to type-check" trick that distinguishes `PendingAlignment` from
 `Session` that *copies* stage/wire info into its own tags — that would
 re-introduce a third authority that can drift, the very thing we are removing.
 Nesting the real values is what makes the coordinator drift-proof.
+
+### Implementation note — the `Session` is *derived*, not stored
+
+As built, the model does **not** hold a `session: Session` field. The model keeps
+the underlying authorities — `job` (stage), the `controller`'s single real
+`printer.PrinterState` (wire), and `board` — and the `Session` is **computed on
+demand** by `session.of(job, board, wire)` wherever the screen, a motion gate, or
+a flow transition is needed (`app.current_session/1`). This was forced by a
+layering fact (`ui/session` imports `ui/model`, so a `session` field on `Model`
+would form an import cycle) and is **strictly truer to the design's intent than a
+stored field would be**: a value that is recomputed from the real machines every
+frame cannot be set inconsistently with them, so "derive, don't store" holds at
+the model level too — there is no stored `Session` to drift, only the one `job`
+and the one `printer` it is derived from. A flow `Msg` runs `session.transition`
+on the derived session and persists only the resulting `job` (via
+`session.job_opt`); the `Session` type still makes illegal cross-machine states
+unconstructable *during* the transition. The `Overlay` type lives in `ui/model`
+(re-exported from `session`) to keep that derivation acyclic.
 
 ## Consequences
 

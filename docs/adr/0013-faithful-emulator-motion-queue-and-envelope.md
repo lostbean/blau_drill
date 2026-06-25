@@ -88,3 +88,11 @@ The decisions:
   flow tests require.
 - **The thin simulator stays.** It remains the fast/forgiving dev backend; the
   faithful emulator is additive and selectable, and all existing tests stay green.
+- **`EmuBackend` is an operator-selectable `BackendKind`.** To make "selectable"
+  concrete (and to let app-level e2e tests drive `app.update` over the faithful
+  core), the emulator is exposed as a third `model.BackendKind` variant —
+  `EmuBackend`, alongside `SimBackend` / `RealBackend` — wired in `app.gleam`'s
+  `backend_for` to `transport.emulator()`, round-tripped through
+  `storage.{save,load}_backend` (token `"emu"`), and offered in the settings
+  backend selector. This is the live-in-app-virtual-machine goal above, made
+  reachable from the UI rather than only from a hand-built test controller.

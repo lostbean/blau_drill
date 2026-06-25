@@ -230,11 +230,13 @@ flowchart LR
         <h2><span class="num">01</span>System at a glance</h2>
         <h3 class="t">One coordinator over five pure modules and one identity</h3>
         <p>Files enter on the left as values; the only thing with identity is the serial link to Marlin.
-          Above the two machines sits the <a class="xref" href="../../CONTEXT.md#term-session">Session</a> — the
-          single value the Lustre model holds. It <em>nests</em> the <a class="xref" href="../../CONTEXT.md#term-job">Job</a>
-          (stage) and the <a class="xref" href="../../CONTEXT.md#term-printerconnection">PrinterConnection</a> (wire),
+          Above the two machines sits the <a class="xref" href="../../CONTEXT.md#term-session">Session</a> — a value
+          <em>derived on demand</em> from the model's one <a class="xref" href="../../CONTEXT.md#term-job">Job</a>
+          (stage) and one <a class="xref" href="../../CONTEXT.md#term-printerconnection">PrinterConnection</a> (wire)
+          via <code>session.of(job, board, wire)</code>. It <em>nests</em> those real values (never copies them),
           <em>projects</em> the screen the views render, and on a flow action returns an ordered
-          <a class="xref" href="../../CONTEXT.md#term-plan">Plan</a> the app executes through the controller.</p>
+          <a class="xref" href="../../CONTEXT.md#term-plan">Plan</a> the app executes through the controller. Recomputing
+          it each frame (rather than storing it) means it can never drift from the machines it is derived from.</p>
         <div class="mermaid">
 flowchart TB
   subgraph edge["Parsing edge — pure"]
@@ -330,10 +332,13 @@ gcode_program.build(board, alignment, <span class="ty">GcodeConfig</span>(..cfg,
         <h2><span class="num">03</span>Progressive breakdown · Session <span class="newpill">new</span></h2>
         <h3 class="t">The coordinator that owns stage + wire + screen</h3>
         <p><strong>Interface:</strong> <code>session.transition(Session, Action) -> Result(#(Session, Plan), Rejected)</code>
-          and <code>session.screen(Session, Overlay) -> Screen</code>. Pure, in <code>domain/session.gleam</code> — it mirrors
+          and <code>session.screen(Session, Overlay) -> Screen</code>. Pure, in <code>ui/session.gleam</code> — the
+          coordination tier <em>above</em> both <code>control</code> and the <code>ui</code> model (it nests
+          <code>printer.PrinterState</code> from <code>control</code> and projects to <code>model.Screen</code>, so it cannot
+          live in <code>domain/</code>, which imports neither). It mirrors
           the <a class="xref" href="../../CONTEXT.md#term-printerconnection">printer core</a>'s <code>Step(state, writes, events)</code>
           shape one level up. Each variant carries the <em>actual</em> <code>job.Job</code> / <code>printer.PrinterState</code>, never a copy.</p>
-        <pre><span class="cm">// domain/session.gleam — the outer coordinator value (pure, no IO)</span>
+        <pre><span class="cm">// ui/session.gleam — the outer coordinator value (pure, no IO)</span>
 <span class="kw">pub type</span> <span class="ty">Session</span> {
   <span class="st">Loading</span>(board: <span class="ty">BoardOpt</span>, printer: printer.<span class="ty">PrinterState</span>)   <span class="cm">// pre-parse / pre-connect</span>
   <span class="st">Aligning</span>(job: job.<span class="ty">Job</span>, printer: printer.<span class="ty">PrinterState</span>)     <span class="cm">// Registering|Aligned|Rejected</span>
@@ -503,7 +508,7 @@ flowchart LR
     classDef new fill:#1c232d,stroke:#5ad6a8,color:#e6edf3;
     class CORE,SH,TP new;
         </div>
-        <div class="callout win"><strong>Same core, both uses.</strong> The deterministic driver makes CI assertions exact; the auto-pump shim makes the emulator a faithful virtual machine you can run the live UI against — so the flow is both <em>tested</em> and <em>demonstrable</em> without the bench. See <a class="xref" href="../adr/0013-faithful-emulator-motion-queue-and-envelope.md#adr-0013">ADR-0013</a>.</div>
+        <div class="callout win"><strong>Same core, both uses.</strong> The deterministic driver makes CI assertions exact; the auto-pump shim makes the emulator a faithful virtual machine you can run the live UI against — exposed as a third operator-selectable <code>BackendKind</code> (<code>EmuBackend</code>, beside <code>SimBackend</code> / <code>RealBackend</code>) — so the flow is both <em>tested</em> and <em>demonstrable</em> without the bench. See <a class="xref" href="../adr/0013-faithful-emulator-motion-queue-and-envelope.md#adr-0013">ADR-0013</a>.</div>
       </section>
 
       <!-- ============================ 10 ============================ -->

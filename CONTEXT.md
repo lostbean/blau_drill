@@ -163,6 +163,10 @@ is *not* admitted (the head does not advance). A `force` seam sets arbitrary
 `tick` by hand (deterministic CI/e2e); an `emulator_ffi.mjs` shim auto-pumps it
 on a JS interval so the same core runs as a live in-app virtual machine
 (ADR-0013).
+It is an **operator-selectable backend**: `EmuBackend` is a third
+`model.BackendKind` (with `SimBackend` / `RealBackend`), wired to
+`transport.emulator()`, so the operator can drive the live UI against the
+faithful virtual machine — the same backend the app-level e2e tests use.
 _Avoid:_ confusing it with the **thin `simulator`** (which acks everything and
 masks real bugs); the emulator is the faithful one. Bounds are **test-injected**,
 never a hardcoded product default (motion limits are operator/hardware config).
