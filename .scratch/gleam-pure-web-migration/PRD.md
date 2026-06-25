@@ -156,9 +156,8 @@ Coordinator validation (independent, not taken on the agent's word):
   with monotonic line numbers); Stream 35 lines → strict one-in-flight
   ok-handshake `N11…N44`, "stream complete", returns to JOGGING; ABORT → FAULTED
   with **raw** `TX M112` (OOB, no N/checksum) + Reconnect→Idle affordance.
-- No console errors/warnings. Evidence:
-  `.scratch/gleam-pure-web-migration/coordinator_validation_faulted.png` plus the
-  agent's `web/spike/dist/evidence_*.png`.
+- No console errors/warnings. Evidence: the migration verification screenshots
+  (since archived/removed) plus the agent's `web/spike/dist/evidence_*.png`.
 
 Toolchain fixes landed in `flake.nix`: added `pkgs.gleam` (1.17.0) and
 `pkgs.rebar3` (the latter is required to compile `lustre_dev_tools`' Erlang-target
