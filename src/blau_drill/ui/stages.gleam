@@ -660,6 +660,11 @@ pub fn dry_run(model: Model) -> Element(model.Msg) {
         ]),
       ]),
       progress_note(model),
+      // The bit-change pause surfaces HERE in the dry-run aside (a sidebar panel,
+      // not a pop-up): the stream halts at each bit-change sentinel and waits for
+      // the operator to resume the rehearsal. Without this, the run stopped at the
+      // first pause with no way to continue.
+      pause_panel(model, "▶ Resume Rehearsal"),
       h.button(
         [
           a.class("btn btn-surface btn-block btn-lg"),
@@ -739,6 +744,8 @@ pub fn drill(model: Model) -> Element(model.Msg) {
         telemetry_row("Est. Time Remaining", model.telemetry_eta, "secondary"),
         telemetry_row("Spindle", model.telemetry_spindle, ""),
       ]),
+      // Bit-change pause as a sidebar panel (consistent with dry-run; no pop-up).
+      pause_panel(model, "▶ Resume Drilling"),
       h.button(
         [
           a.class("btn-estop"),
@@ -750,7 +757,6 @@ pub fn drill(model: Model) -> Element(model.Msg) {
       ),
       complete_button(model),
     ]),
-    bit_change_modal(model),
   ])
 }
 
@@ -788,51 +794,39 @@ fn complete_button(model: Model) -> Element(model.Msg) {
   }
 }
 
-fn bit_change_modal(model: Model) -> Element(model.Msg) {
+// The in-app pause affordance — a SIDEBAR panel (not a blocking pop-up) shown in
+// the dry-run / drill aside while the stream is paused at a bit-change sentinel.
+// The stream is genuinely halted (nothing in flight); `ResumeDrilling` issues the
+// ResumeStream that sends the next real line. The first pause is "mount the first
+// bit" (ADR-0010 removed the touch-off); later ones are per-tool swaps. `resume`
+// is the button label so it reads right per stage ("rehearsal" vs "drilling").
+fn pause_panel(model: Model, resume: String) -> Element(model.Msg) {
   case model.bit_change {
-    // Per-tool bit change: swap to the named size, then resume. The very first
-    // pause is also a bit change (mount the first tool's bit) — ADR-0010 removed
-    // the start-of-run touch-off, so there is no longer a distinct modal for it.
     model.HaveBitChange(bc) ->
-      pause_modal(
-        "⚠",
-        "Bit Change Required",
-        "Swap to a " <> fmt_step(bc.diameter) <> "mm bit to continue.",
-        "Warning: do not move the board substrate during the change — "
-          <> "alignment will be lost.",
-        "▶ Resume Drilling",
-      )
+      h.div([a.class("panel panel-warn")], [
+        h.div([a.class("panel-head")], [
+          h.span([a.class("panel-head-label")], [h.text("Paused — bit change")]),
+          h.span([a.class("badge offline blink")], [h.text("PAUSED")]),
+        ]),
+        h.p([a.class("panel-hint")], [
+          h.text("Mount the "),
+          h.strong([], [h.text(fmt_step(bc.diameter) <> "mm")]),
+          h.text(
+            " bit, then resume. Do NOT move the board — the alignment is locked.",
+          ),
+        ]),
+        h.button(
+          [
+            a.class("btn btn-primary btn-block btn-lg"),
+            a.style("margin-top", "0.75rem"),
+            a.attribute("type", "button"),
+            event.on_click(ResumeDrilling),
+          ],
+          [h.text(resume)],
+        ),
+      ])
     model.NoBitChange -> element.none()
   }
-}
-
-fn pause_modal(
-  icon: String,
-  title: String,
-  body: String,
-  warn: String,
-  button: String,
-) -> Element(model.Msg) {
-  h.div([a.class("modal-scrim")], [
-    h.div([a.class("modal")], [
-      h.span([a.class("modal-icon"), a.attribute("aria-hidden", "true")], [
-        h.text(icon),
-      ]),
-      h.h3([], [h.text(title)]),
-      h.p([a.class("modal-paused")], [h.text("System Paused")]),
-      h.p([a.class("modal-body")], [h.text(body)]),
-      h.p([a.class("modal-warn")], [h.text(warn)]),
-      h.button(
-        [
-          a.class("btn btn-primary btn-block btn-lg"),
-          a.style("margin-top", "1.25rem"),
-          a.attribute("type", "button"),
-          event.on_click(ResumeDrilling),
-        ],
-        [h.text(button)],
-      ),
-    ]),
-  ])
 }
 
 // ── Stage 5: Completion ───────────────────────────────────────────────────────

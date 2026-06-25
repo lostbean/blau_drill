@@ -437,16 +437,20 @@ fn pump_to_pause(m: Model, fuel: Int) -> Model {
 // With app_pause ON (now the DEFAULT), starting a run streams a program whose
 // FIRST pause is the first tool block's bit-change sentinel (ADR-0010 removed the
 // touch-off — the fitted surface plane is the Z datum). Driving the handshake
-// forward, the FSM pauses there and the app raises the bit-change modal: the
-// operator mounts the first tool's bit and resumes. (This is the exact "stuck at
-// 0 with no pop" regression, now an explicit on-screen bit-change pause.)
-pub fn app_pause_pauses_at_first_bit_change_and_shows_modal_test() {
+// forward, the FSM pauses there and the app sets `bit_change` so the DRY-RUN aside
+// surfaces the bit-change pause PANEL (a sidebar affordance, not a pop-up): the
+// operator mounts the first tool's bit and resumes the rehearsal. (This is the
+// exact "moves to centre then stops, no pop, no way to resume" regression — the
+// pause is real; the dry-run view now renders the resume affordance off this
+// field, which it previously did not.)
+pub fn app_pause_pauses_at_first_bit_change_and_surfaces_panel_test() {
   let m0 = drill_ready_app_pause_model()
   m0.screen |> should.equal(DryRun)
   let m = pump_to_pause(m0, 100)
   // The FSM is genuinely paused on the first sentinel (not streaming through).
   controller.state(m.controller) |> printer.is_stream_paused |> should.be_true
-  // The bit-change modal is up so the operator can mount the first bit and resume.
+  // `bit_change` is set — the dry-run aside's `pause_panel` renders off this, so
+  // the operator gets a Resume affordance on the dry-run screen.
   case m.bit_change {
     model.HaveBitChange(_) -> True
     model.NoBitChange -> False
