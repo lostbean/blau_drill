@@ -15,10 +15,10 @@ import blau_drill/ui/model.{
   type Config, type Model, type SettingsCategory, ApplyConfig, CancelRelease,
   CaptureFiducial, ConfirmRegistration, ConfirmReleaseMotors, Connection,
   Defaults, Energize, Fit, Jog, Jogging, MotionLimits, NewBoard, ParseBoard,
-  Recapture, RedoAlignment, Release, RestartAlignment, ResumeAlignment,
-  ResumeDrilling, RunDryRun, SelectCategory, SelectFile, SelectOutline,
-  SetConfigField, SetJogStep, SpindleControl, StartRegistering, TestSpindle,
-  ToggleAppPause, ToggleAutoConnect,
+  Recapture, RedoAlignment, Release, RestartAlignment, ResumeDrilling, RunDryRun,
+  SelectCategory, SelectFile, SelectOutline, SetConfigField, SetJogStep,
+  SpindleControl, StartRegistering, TestSpindle, ToggleAppPause,
+  ToggleAutoConnect,
 }
 import gleam/float
 import gleam/int
@@ -275,7 +275,6 @@ pub fn align(model: Model) -> Element(model.Msg) {
           ),
         ]),
       ]),
-      resume_panel(model),
       release_confirm_panel(model),
       motors_panel(motors_online),
       jog_panel(model, motors_online),
@@ -319,77 +318,13 @@ pub fn align(model: Model) -> Element(model.Msg) {
         [
           a.class("btn btn-primary btn-block btn-lg spacer"),
           a.attribute("type", "button"),
-          // Gated on `resume_pending` too: a restored alignment is UNCONFIRMED
-          // until the operator explicitly resumes (board-hasn't-moved), so it
-          // must not be dry-run/trusted while the resume prompt is still up.
-          a.disabled(
-            model.quality < 0
-            || model.alignment_rejected
-            || model.resume_pending,
-          ),
+          a.disabled(model.quality < 0 || model.alignment_rejected),
           event.on_click(RunDryRun),
         ],
         [h.text("Proceed to Dry-run →")],
       ),
     ]),
   ])
-}
-
-// Restored-alignment resume prompt. Shown ONLY when an alignment was restored
-// from the previous session on reload but is not yet trusted (`resume_pending`).
-// It makes the restored alignment's UNCONFIRMED status obvious and offers two
-// paths: re-instate it (once the port is reconnected) by confirming the board
-// hasn't moved, or restart alignment from scratch. The resume button is disabled
-// until the printer is reconnected (the operator must re-open the serial port
-// first), with a hint explaining why.
-fn resume_panel(model: Model) -> Element(model.Msg) {
-  case model.resume_pending {
-    False -> element.none()
-    True -> {
-      let connected = model.printer != model.Disconnected
-      h.div([a.class("panel panel-warn")], [
-        h.div([a.class("panel-head")], [
-          h.span([a.class("panel-head-label")], [
-            h.text("Alignment restored — UNCONFIRMED"),
-          ]),
-          h.span([a.class("badge offline blink")], [h.text("RESTORED")]),
-        ]),
-        h.p([a.class("panel-hint")], [
-          h.text(
-            "An alignment from your last session was restored. The serial "
-            <> "connection was dropped on reload, so it is NOT trusted yet. If "
-            <> "the board has NOT moved, reconnect and resume; otherwise restart "
-            <> "alignment.",
-          ),
-        ]),
-        h.button(
-          [
-            a.class("btn btn-primary btn-block"),
-            a.style("margin-top", "0.75rem"),
-            a.attribute("type", "button"),
-            a.disabled(!connected),
-            event.on_click(ResumeAlignment),
-          ],
-          [h.text("Board hasn't moved — resume")],
-        ),
-        h.p([a.class("panel-hint")], [
-          h.text(case connected {
-            True -> "Confirms the restored alignment and re-instates it."
-            False -> "Reconnect the printer first to enable resume."
-          }),
-        ]),
-        h.button(
-          [
-            a.class("btn btn-outline btn-block"),
-            a.style("margin-top", "0.5rem"),
-            a.attribute("type", "button"),
-            event.on_click(RestartAlignment),
-          ],
-          [h.text("↺ Restart alignment instead")],
-        ),
-      ])
-    }
-  }
 }
 
 // ADR-0011 anti-surprise confirm: a VOLUNTARY "Disable Motors" that would discard
