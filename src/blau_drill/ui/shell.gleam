@@ -5,9 +5,10 @@
 
 import blau_drill/ui/model.{
   type Model, type PrinterState, type Screen, type StageId, Align, ConnectDevice,
-  DisconnectDevice, Disconnected, Done, Drill, DryRun, Faulted, GoToSettings,
-  Idle, Jogging, Load, RealBackend, SelectBackend, Settings, SimBackend,
-  StageAlign, StageDone, StageDrill, StageDryRun, StageLoad, Streaming,
+  DisconnectDevice, Disconnected, Done, Drill, DryRun, Faulted, GoToLog,
+  GoToSettings, Idle, Jogging, Load, Log, RealBackend, SelectBackend, Settings,
+  SimBackend, StageAlign, StageDone, StageDrill, StageDryRun, StageLoad,
+  Streaming,
 }
 import gleam/float
 import gleam/int
@@ -28,16 +29,28 @@ pub fn header(model: Model) -> Element(model.Msg) {
   h.header([a.class("header")], [
     brand(),
     h.ol([a.class("stepper")], stepper_nodes(current)),
-    h.button(
-      [
-        a.class("config-link"),
-        a.attribute("type", "button"),
-        a.attribute("aria-label", "Printer configuration"),
-        a.attribute("title", "Printer configuration"),
-        event.on_click(GoToSettings),
-      ],
-      [h.span([], [h.text("⚙")]), h.span([], [h.text("Config")])],
-    ),
+    h.div([a.class("header-actions")], [
+      h.button(
+        [
+          a.class("config-link"),
+          a.attribute("type", "button"),
+          a.attribute("aria-label", "Serial communications log"),
+          a.attribute("title", "Serial communications log"),
+          event.on_click(GoToLog),
+        ],
+        [h.span([], [h.text("≣")]), h.span([], [h.text("Log")])],
+      ),
+      h.button(
+        [
+          a.class("config-link"),
+          a.attribute("type", "button"),
+          a.attribute("aria-label", "Printer configuration"),
+          a.attribute("title", "Printer configuration"),
+          event.on_click(GoToSettings),
+        ],
+        [h.span([], [h.text("⚙")]), h.span([], [h.text("Config")])],
+      ),
+    ]),
   ])
 }
 
@@ -257,8 +270,9 @@ pub fn screen_stage(screen: Screen) -> StageId {
     DryRun -> StageDryRun
     Drill -> StageDrill
     Done -> StageDone
-    // Settings has no stepper position; show Load as the resting stage.
+    // Settings / Log have no stepper position; show Load as the resting stage.
     Settings -> StageLoad
+    Log -> StageLoad
   }
 }
 

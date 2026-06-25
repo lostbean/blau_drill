@@ -32,6 +32,10 @@ fn set_item(key: String, value: String) -> Nil
 @external(javascript, "./storage_ffi.mjs", "removeItem")
 fn remove_item(key: String) -> Nil
 
+/// Wall-clock milliseconds — for stamping serial-log entries at the effect edge.
+@external(javascript, "./storage_ffi.mjs", "nowMs")
+pub fn now_ms() -> Float
+
 // ── config ───────────────────────────────────────────────────────────────────
 
 /// Persist the operator config (best-effort; never throws).
@@ -226,6 +230,7 @@ fn screen_slug(screen: model.Screen) -> String {
     model.Drill -> "drill"
     model.Done -> "done"
     model.Settings -> "settings"
+    model.Log -> "log"
   }
 }
 

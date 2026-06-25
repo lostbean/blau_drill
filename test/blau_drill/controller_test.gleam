@@ -6,6 +6,7 @@
 import blau_drill/control/controller
 import blau_drill/control/printer
 import blau_drill/control/transport
+import gleam/list
 import gleeunit/should
 
 // ── new ──────────────────────────────────────────────────────────────────────
@@ -42,4 +43,34 @@ pub fn set_backend_then_sim_again_state_test() {
     |> controller.set_backend(transport.simulator())
   controller.is_connected(c) |> should.be_false
   controller.state(c) |> should.equal(printer.Disconnected)
+}
+
+// ── comms log: the controller surfaces every TX / RX / note in `out.log` ──────
+
+// A written line is logged as TX. Connecting (Issue(Connect)) emits the raw
+// `M110 N0` line-counter reset — assert it shows up as a LogTx.
+pub fn update_logs_tx_writes_test() {
+  let c = controller.new(transport.simulator())
+  let out = controller.update(c, controller.Issue(printer.Connect))
+  list.contains(out.log, controller.LogTx("M110 N0")) |> should.be_true
+}
+
+// An inbound line is logged as RX (whether or not it drives any writes).
+pub fn update_logs_rx_inbound_test() {
+  let c = controller.new(transport.simulator())
+  let out = controller.update(c, controller.Inbound("ok"))
+  list.contains(out.log, controller.LogRx("ok")) |> should.be_true
+}
+
+// A serial loss is logged as a Note (not as wire traffic).
+pub fn update_logs_note_on_loss_test() {
+  let c = controller.new(transport.simulator())
+  let out = controller.update(c, controller.Lost("device gone"))
+  list.any(out.log, fn(l) {
+    case l {
+      controller.LogNote(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
 }

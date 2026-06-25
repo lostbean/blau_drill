@@ -53,6 +53,27 @@ pub type Screen {
   Done
   /// The printer-configuration screen.
   Settings
+  /// The serial communications log — every TX/RX line + connection notes.
+  Log
+}
+
+// ── Serial comms log ─────────────────────────────────────────────────────────
+
+/// The direction / kind of a serial-log entry.
+pub type LogDir {
+  /// A line written TO the printer (host → machine).
+  Tx
+  /// A line received FROM the printer (machine → host).
+  Rx
+  /// A connection note (open / close / fault / serial-loss) — not wire traffic.
+  Note
+}
+
+/// One serial-comms log entry: when, which direction, and the raw line. `at_ms`
+/// is a wall-clock millisecond stamp captured at the edge (the pure core never
+/// reads the clock).
+pub type LogEntry {
+  LogEntry(at_ms: Float, dir: LogDir, line: String)
 }
 
 /// The stage ids for the 5-node stepper / sidebar nav, in order.
@@ -420,6 +441,10 @@ pub type Model {
     /// `CancelRelease` clears it. Involuntary de-energize (fault / serial loss /
     /// disconnect) bypasses the gate and resets directly. False by default.
     release_confirm: Bool,
+    /// The serial communications log — TX/RX lines + connection notes, newest
+    /// LAST. A bounded ring (capped in `app`) so it can't grow unbounded. Drives
+    /// the Log screen.
+    comms_log: List(LogEntry),
   )
 }
 
@@ -443,6 +468,10 @@ pub type Msg {
   GoToSettings
   GoToSession
   NavStage(StageId)
+  /// Open the serial communications log screen.
+  GoToLog
+  /// Clear the serial communications log.
+  ClearLog
 
   // Stage 1 — load & connect
   SelectFile

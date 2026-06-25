@@ -185,6 +185,7 @@ fn base_model() -> Model {
     bit_changes_seen: 0,
     board_side: Front,
     release_confirm: False,
+    comms_log: [],
   )
 }
 

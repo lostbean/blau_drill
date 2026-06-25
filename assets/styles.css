@@ -1905,3 +1905,66 @@ button {
 .btn-apply:hover {
   background: var(--primary-fixed);
 }
+
+/* ── header actions (Log + Config buttons) ─────────────────────────────────── */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ── serial comms log screen ───────────────────────────────────────────────── */
+.log-count {
+  font-family: var(--font-data);
+  font-size: 0.75rem;
+  color: var(--on-surface-variant);
+  margin-right: 0.25rem;
+}
+.log-scroll {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--surface-container-lowest);
+  padding: 0.75rem 1rem;
+  font-family: var(--font-data);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.log-empty {
+  color: var(--on-surface-variant);
+  font-family: var(--font-data);
+  padding: 1rem 0;
+}
+.log-row {
+  display: flex;
+  gap: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-bottom: 1px solid var(--surface-container);
+  padding: 0.0625rem 0;
+}
+.log-time {
+  color: var(--outline);
+  flex: none;
+  opacity: 0.8;
+}
+.log-arrow {
+  flex: none;
+  width: 1ch;
+  font-weight: 700;
+}
+.log-line {
+  flex: 1;
+}
+.log-tx .log-arrow,
+.log-tx .log-line {
+  color: var(--primary);
+}
+.log-rx .log-arrow,
+.log-rx .log-line {
+  color: var(--secondary);
+}
+.log-note .log-arrow,
+.log-note .log-line {
+  color: var(--on-surface-variant);
+  font-style: italic;
+}

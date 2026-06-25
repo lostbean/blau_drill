@@ -2,6 +2,16 @@
 // get returns "" when the key is missing or storage is unavailable (private
 // mode / blocked); set is best-effort and never throws.
 
+// Wall-clock milliseconds, for stamping serial-log entries at the effect edge
+// (the pure core never reads the clock). Returns a Float.
+export function nowMs() {
+  try {
+    return Date.now();
+  } catch (_) {
+    return 0;
+  }
+}
+
 export function getItem(key) {
   try {
     if (typeof localStorage === "undefined") return "";

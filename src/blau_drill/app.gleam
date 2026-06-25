@@ -137,6 +137,7 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       bit_changes_seen: 0,
       board_side: model.Front,
       release_confirm: False,
+      comms_log: [],
     )
   // Re-parse the restored board (deterministic; no hardware). If the stored DRL
   // is empty or fails to parse, `parse_board` leaves the model board-less.
@@ -260,6 +261,8 @@ fn update_inner(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     // in-flight stream GRACEFULLY (→ Idle, still connected), never via Halt.
     GoToSettings -> noeff(Model(..model, screen: Settings))
     GoToSession -> nav_to(model, resting_screen(model))
+    model.GoToLog -> noeff(Model(..model, screen: model.Log))
+    model.ClearLog -> noeff(Model(..model, comms_log: []))
     NavStage(stage) -> nav_to(model, stage_screen(stage))
 
     // Stage 1 — load & connect
@@ -390,10 +393,45 @@ fn apply_controller(
       ..model,
       controller: out.controller,
       printer: bridge.printer_state(controller.state(out.controller)),
+      comms_log: append_log(model.comms_log, out.log),
     )
   let #(m2, ev_effects) = fold_events(m1, out.events)
   let ctrl_effect = effect.map(out.effect, ControllerEvent)
   #(m2, effect.batch([ctrl_effect, ev_effects]))
+}
+
+/// Max serial-log entries kept (a ring — oldest dropped). Bounds memory + render.
+const log_cap = 500
+
+/// Stamp each control-layer `LogLine` with a wall-clock time, map it to a
+/// `model.LogEntry`, append (newest LAST), and keep only the most recent
+/// `log_cap`. The timestamp is read at this effect edge — the pure core never
+/// reads the clock.
+fn append_log(
+  existing: List(model.LogEntry),
+  lines: List(controller.LogLine),
+) -> List(model.LogEntry) {
+  case lines {
+    [] -> existing
+    _ -> {
+      let stamped =
+        list.map(lines, fn(l) {
+          let #(dir, text) = case l {
+            controller.LogTx(s) -> #(model.Tx, s)
+            controller.LogRx(s) -> #(model.Rx, s)
+            controller.LogNote(s) -> #(model.Note, s)
+          }
+          model.LogEntry(at_ms: storage.now_ms(), dir: dir, line: text)
+        })
+      let combined = list.append(existing, stamped)
+      // Keep the most recent `log_cap` (drop from the front when over).
+      let over = list.length(combined) - log_cap
+      case over > 0 {
+        True -> list.drop(combined, over)
+        False -> combined
+      }
+    }
+  }
 }
 
 /// Fold the pure `printer.Event`s a transition produced into the model. Returns
@@ -1696,6 +1734,7 @@ fn clamp_zoom(z: Float) -> Float {
 fn view(model: Model) -> Element(Msg) {
   case model.screen {
     Settings -> stages.settings(model)
+    model.Log -> stages.comms_log(model)
     _ -> session(model)
   }
 }
@@ -1727,6 +1766,8 @@ fn stage_main(model: Model) -> Element(Msg) {
     Drill -> stages.drill(model)
     Done -> stages.done(model)
     Settings -> stages.load(model)
+    // Log is intercepted by `view` (full screen, like Settings); unreachable here.
+    model.Log -> stages.load(model)
   }
 }
 

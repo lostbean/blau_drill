@@ -21,6 +21,7 @@
 import blau_drill/control/backend.{type Backend, type Conn}
 import blau_drill/control/printer.{type Command, type Event, type PrinterState}
 import gleam/javascript/promise.{type Promise}
+import gleam/list
 import lustre/effect.{type Effect}
 
 // ── controller record ────────────────────────────────────────────────────────
@@ -53,14 +54,25 @@ pub type ControllerMsg {
   WriteDone(Result(Nil, String))
 }
 
+/// The direction of a logged serial line (control-layer; the host stamps it with
+/// a timestamp and renders it). `LogTx` = written to the port, `LogRx` = received,
+/// `LogNote` = a connection event (open / close / fault / loss).
+pub type LogLine {
+  LogTx(String)
+  LogRx(String)
+  LogNote(String)
+}
+
 /// What a controller `update` hands back to the host: the next controller, the
-/// effect to run, and the pure events emitted by the transition (so the host can
-/// react — animate progress, surface a position, show a fault).
+/// effect to run, the pure events emitted by the transition (so the host can
+/// react — animate progress, surface a position, show a fault), and the serial
+/// lines to LOG (every TX/RX/note this step produced) for the comms log.
 pub type ControllerOut {
   ControllerOut(
     controller: Controller,
     effect: Effect(ControllerMsg),
     events: List(Event),
+    log: List(LogLine),
   )
 }
 
@@ -109,12 +121,17 @@ pub fn connect_existing(
 /// Route a `ControllerMsg` through the state machine and the transport.
 pub fn update(controller: Controller, msg: ControllerMsg) -> ControllerOut {
   case msg {
-    Issue(cmd) -> run_step(controller, printer.command(controller.state, cmd))
+    Issue(cmd) ->
+      run_step(controller, printer.command(controller.state, cmd), [])
 
-    Inbound(line) -> run_step(controller, printer.feed(controller.state, line))
+    // An inbound line is logged as RX; the step it drives may emit TX writes too.
+    Inbound(line) ->
+      run_step(controller, printer.feed(controller.state, line), [LogRx(line)])
 
     Lost(reason) ->
-      run_step(controller, printer.serial_lost(controller.state, reason))
+      run_step(controller, printer.serial_lost(controller.state, reason), [
+        LogNote("serial loss: " <> reason),
+      ])
 
     Opened(Ok(conn)) -> {
       // Record the connection, drive the pure machine to Idle, and install the
@@ -125,34 +142,54 @@ pub fn update(controller: Controller, msg: ControllerMsg) -> ControllerOut {
         controller: c,
         effect: read_effect(controller.backend, conn),
         events: step.events,
+        log: [LogNote("port opened"), ..tx_log(step.writes)],
       )
     }
 
-    Opened(Error(_reason)) ->
+    Opened(Error(reason)) ->
       // Open failed: stay disconnected, no writes, no events. The host surfaces
       // the reason from its own error channel if it cares.
-      ControllerOut(controller, effect.none(), [])
+      ControllerOut(controller, effect.none(), [], [
+        LogNote("open failed: " <> reason),
+      ])
 
-    WriteDone(Ok(_)) -> ControllerOut(controller, effect.none(), [])
+    WriteDone(Ok(_)) -> ControllerOut(controller, effect.none(), [], [])
 
     WriteDone(Error(reason)) ->
       // A write failure is serial loss — fault the machine.
-      run_step(controller, printer.serial_lost(controller.state, reason))
+      run_step(controller, printer.serial_lost(controller.state, reason), [
+        LogNote("write failed: " <> reason),
+      ])
   }
 }
 
 // ── glue: run a pure step, then perform its writes ───────────────────────────
 
-/// Apply a pure `printer.Step`: adopt the next state, and emit one effect that
-/// writes the step's framed payloads IN ORDER (or none).
-fn run_step(controller: Controller, step: printer.Step) -> ControllerOut {
+/// Apply a pure `printer.Step`: adopt the next state, emit one effect that writes
+/// the step's framed payloads IN ORDER (or none), and LOG every framed write as
+/// TX (after any `prefix_log`, e.g. the RX/note line that drove this step).
+fn run_step(
+  controller: Controller,
+  step: printer.Step,
+  prefix_log: List(LogLine),
+) -> ControllerOut {
   let c = Controller(..controller, state: step.state)
   let eff = case c.conn, step.writes {
     _, [] -> effect.none()
     HaveConn(conn), writes -> write_seq_effect(c.backend, conn, writes)
     NoConn, _ -> effect.none()
   }
-  ControllerOut(controller: c, effect: eff, events: step.events)
+  ControllerOut(
+    controller: c,
+    effect: eff,
+    events: step.events,
+    log: list.append(prefix_log, tx_log(step.writes)),
+  )
+}
+
+/// One `LogTx` per framed write payload, in send order.
+fn tx_log(writes: List(String)) -> List(LogLine) {
+  list.map(writes, LogTx)
 }
 
 // ── effects: read loop and ordered writes ────────────────────────────────────

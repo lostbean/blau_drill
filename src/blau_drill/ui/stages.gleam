@@ -910,6 +910,93 @@ pub fn settings(model: Model) -> Element(model.Msg) {
   ])
 }
 
+// ── Serial comms log (full screen, like Settings) ────────────────────────────
+
+pub fn comms_log(model: Model) -> Element(model.Msg) {
+  h.div([a.class("app")], [
+    h.header([a.class("settings-top")], [
+      h.div([a.class("settings-top-left")], [
+        shell_brand(),
+        h.div([a.class("settings-divider")], []),
+        h.span([a.class("settings-sys")], [h.text("SERIAL COMMS LOG")]),
+      ]),
+      h.div([a.class("settings-top-left")], [
+        h.span([a.class("log-count")], [
+          h.text(int.to_string(list.length(model.comms_log)) <> " lines"),
+        ]),
+        h.button(
+          [
+            a.class("config-link"),
+            a.attribute("type", "button"),
+            event.on_click(model.ClearLog),
+          ],
+          [h.text("Clear")],
+        ),
+        h.button(
+          [
+            a.class("config-link"),
+            a.attribute("type", "button"),
+            event.on_click(model.GoToSession),
+          ],
+          [h.text("← Session")],
+        ),
+      ]),
+    ]),
+    h.div([a.class("log-scroll")], case model.comms_log {
+      [] -> [
+        h.p([a.class("log-empty")], [
+          h.text(
+            "No serial traffic yet. Connect and the TX/RX lines will appear here.",
+          ),
+        ]),
+      ]
+      entries -> list.map(entries, log_row)
+    }),
+  ])
+}
+
+fn log_row(e: model.LogEntry) -> Element(model.Msg) {
+  let #(cls, arrow) = case e.dir {
+    model.Tx -> #("log-tx", "→")
+    model.Rx -> #("log-rx", "←")
+    model.Note -> #("log-note", "•")
+  }
+  h.div([a.class("log-row " <> cls)], [
+    h.span([a.class("log-time")], [h.text(fmt_log_time(e.at_ms))]),
+    h.span([a.class("log-arrow")], [h.text(arrow)]),
+    h.span([a.class("log-line")], [h.text(e.line)]),
+  ])
+}
+
+// Format an epoch-ms stamp as mm:ss.mmm (clock-ish, compact — enough to read
+// timing between lines without a full date).
+fn fmt_log_time(at_ms: Float) -> String {
+  let total_ms = float.round(at_ms)
+  let ms = total_ms % 1000
+  let total_s = total_ms / 1000
+  let s = total_s % 60
+  let m = { total_s / 60 } % 60
+  pad2(m) <> ":" <> pad2(s) <> "." <> pad3(ms)
+}
+
+fn pad2(n: Int) -> String {
+  case n < 10 {
+    True -> "0" <> int.to_string(n)
+    False -> int.to_string(n)
+  }
+}
+
+fn pad3(n: Int) -> String {
+  case n < 10 {
+    True -> "00" <> int.to_string(n)
+    False ->
+      case n < 100 {
+        True -> "0" <> int.to_string(n)
+        False -> int.to_string(n)
+      }
+  }
+}
+
 fn settings_top() -> Element(model.Msg) {
   h.header([a.class("settings-top")], [
     h.div([a.class("settings-top-left")], [
