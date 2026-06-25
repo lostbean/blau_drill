@@ -258,6 +258,23 @@ already holding. In blau-drill this is enforced structurally:
 _Avoid:_ describing it as a "homing offset" or a calibration step — it is a
 stepper re-engagement snap, prevented by the energize gate.
 
+### Energize trust boundary
+
+Position/alignment knowledge is valid **only while motors stay continuously
+energized** (ADR-0011). ANY de-energize — operator `Release`, fault, serial loss,
+disconnect, or a page refresh (a new runtime) — **invalidates** it: the `job` FSM
+`Deenergize` event returns to `Parsed` and discards `pending`/`alignment`/
+`residuals`, and the model's alignment/position fields reset in lockstep. You
+cannot recover trust by querying `M114` (Marlin's own position is unreliable after
+a motors-off move); only physically re-registering restores it. Consequently:
+alignment/position is **never persisted** (localStorage is config-only — ADR-0004);
+a **capture** requires energized (Jogging); **click-to-jump** requires ≥1 capture
+(no captures ⇒ no transform ⇒ inert, never a phantom (0,0) origin); and the
+interactive jump lifts Z **relatively** (`G91 Z+`), never an absolute retract that
+could plunge.
+_Avoid:_ treating a re-energize or refresh as "resume where we were" — there is no
+trusted position across a motors-off gap; the operator re-registers.
+
 ### Residual gate
 
 The guard on the `Job` transition `:aligned → :drilling`: it requires
