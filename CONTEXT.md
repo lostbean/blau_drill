@@ -191,29 +191,64 @@ never a hardcoded product default (motion limits are operator/hardware config).
 
 ### GcodeProgram {#term-gcodeprogram}
 
-The generated Marlin G-code for **one mode** (`:dry_run | :drill`), built by
-`GcodeProgram.build(%Alignment{}, opts)`. It requires an `Alignment` by type —
-there is no arity that accepts raw, unaligned holes. Dry-run and real are the
-*same* generator with one parameter flipped (`plunge: {:hover, 0.2} |
-{:drill, -2.5}`), not two code paths.
-_Avoid:_ "the gcode file" — it is an in-memory value (`lines`, `mode`,
-`bbox_machine`), generated natively, not produced by pcb2gcode or a Python
-post-processor.
+The drilling program for **one mode** (`:dry_run | :drill`), built by
+`GcodeProgram.build(board, %Alignment{}, cfg)`. It requires an `Alignment` by
+type — there is no arity that accepts raw, unaligned holes. Dry-run and real are
+the *same* generator with one parameter flipped (`plunge: {:hover, 0.2} |
+{:drill, -2.5}`), not two code paths. Its payload is a typed list of
+[Operation](#term-operation) — **not** a `List(String)` of G-code; G-code is a
+*rendered view* of the program ([RenderedLine](#term-renderedline)), produced at
+the wire edge (ADR-0016).
+_Avoid:_ "the gcode file" / treating `lines` as the program — the program is the
+typed `Operation` list; G-code strings are rendered from it, never the source of
+truth. Generated natively, not produced by pcb2gcode or a Python post-processor.
 
-The **streamed** form and the **export** form differ by design (ADR-0009).
-`lines` is the rich, human-readable program (blank lines, `( comments )`, `M0`
-stops); a future export uses it verbatim. The app never streams `lines` directly
-— it streams `stream_lines(program)`, which is **sanitized**: no blank/comment
-lines (real Marlin does not `ok` a blank line, so a streamed blank stalls the
-handshake at 0 — the simulator masks this by acking everything). `M0` stops are
-governed by `app_pause`: in the in-app workflow `M0` is omitted and the app pauses
-the stream in-app at touch-off / each bit change (control stays on the screen);
-export keeps `M0`. A streamed program that omits `M0` still **pauses** at each
-bit-change boundary — a bit swap opportunity is mandatory. Each tool block also
-moves to the board **centroid** (center of mass of the machine-space holes) for
-the bit exchange after retracting Z.
-_Avoid:_ streaming `lines` verbatim (stalls on blanks); "the gcode" without
-distinguishing the sanitized stream from the rich export.
+The **streamed** form and the **export** form are two **render targets** of the
+*same* `Operation` list (ADR-0016), so they cannot drift. The wire render is
+sanitized by construction (no blank/comment lines — real Marlin does not `ok` a
+blank line, so a streamed blank stalls the handshake at 0; the simulator masks
+this); a comment is a `Rich`-target render, not a line to filter back out. `M0`
+stops are governed by `app_pause`: in the in-app workflow `M0` is omitted and the
+program carries a typed `Pause` op the streaming FSM intercepts (control stays on
+the screen); export keeps `M0`. A streamed program that omits `M0` still
+**pauses** at each bit-change boundary — a bit swap opportunity is mandatory. Each
+`ToolBlock` moves to the board **centroid** (center of mass of the machine-space
+holes) for the bit exchange after retracting Z.
+_Avoid:_ a reverse-parse that recovers structure from rendered G-code (count
+holes / find the tool / detect a pause by string-matching the lines) — read the
+typed [Operation](#term-operation) / [RenderedLine](#term-renderedline) origin
+instead.
+
+### Operation {#term-operation}
+
+The unit of a drilling [GcodeProgram](#term-gcodeprogram): a typed **intent**
+(`Preamble | Prepare | ToolBlock | DrillHole | Pause | Postamble`), the value
+`build` returns. Operations are **symbolic** — a `DrillHole` carries a stable
+`HoleId` (file-parse order) and a *board* point, not resolved G-code numbers; the
+feeds / safe-Z / centroid / mode live in a `RenderContext` applied at render time.
+Structure is read from the type — counting holes is counting `DrillHole` ops, the
+next tool is the next `ToolBlock`, a pause is a `Pause` op — never recovered by
+parsing strings. The two safety invariants live in the **renderer**: a `DrillHole`
+renders the atom travel→plunge→retract (no XY at unsafe Z is expressible), and a
+`ToolBlock` (spindle-on) always precedes its holes (ADR-0016).
+_Avoid:_ calling it a "line" or "command string" — an Operation is pre-render
+intent; one Operation may render to many wire lines. Not a `printer.Command`
+(that is a wire verb the FSM actions); an Operation is a *program step*.
+
+### RenderedLine {#term-renderedline}
+
+One wire line **paired with the typed origin** it was rendered from:
+`RenderedLine(wire, origin)` where `origin` carries the `op_index`, `kind`, and
+the `tool` / `hole_id` / `pause` of the [Operation](#term-operation) that produced
+it. It is what `printer.Stream` carries (the streaming FSM indexes
+`RenderedLine`s, not strings — ADR-0017), so progress, the bit-change tool, and
+the pause are read from the **origin** by pattern match, with zero string-matching.
+The list is rendered **once** at run start and stored immutably in the
+`StreamJob`, so a Marlin `Resend: N` re-frames the identical stored `wire` —
+byte-stable by construction.
+_Avoid:_ indexing **ops** in the handshake (the Marlin protocol is per-**line**,
+and one op renders to many lines) — index lines, read the op via
+`origin.op_index`. Do not regenerate a line on resend.
 
 ### Job {#term-job}
 

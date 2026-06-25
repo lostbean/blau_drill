@@ -443,15 +443,21 @@ stateDiagram-v2
 
       <!-- ============================ 07 ============================ -->
       <section id="s07">
-        <h2><span class="num">07</span>Progressive breakdown · GcodeProgram</h2>
-        <h3 class="t">Native generation</h3>
-        <p><strong>Interface:</strong> <code>gcode_program.build(board, alignment, cfg) -> GcodeProgram(lines, mode, bbox_machine, tool_order)</code>. Requires an <a class="xref" href="../../CONTEXT.md#term-alignment">Alignment</a> by type — there is no way to generate from unaligned holes.</p>
-        <pre><span class="cm">// Per hole: transform, then emit. No pcb2gcode, no Python.</span>
-let #(mx, my) = <span class="ty">transform2d</span>.apply(alignment.transform, #(hole.x, hole.y))
-<span class="cm">// Tool-grouped, M3 S255 (laser-PWM spindle), dwell, plunge per mode.</span>
-<span class="st">DryRun</span> -&gt; spindle off, Z +0.2   <span class="cm">// registration check</span>
-<span class="st">Drill</span>  -&gt; M3 S255,   Z -2.5   <span class="cm">// real, into sacrificial layer</span></pre>
-        <p>The streamed form is <em>sanitized</em> (no blank/comment lines — Marlin does not <code>ok</code> a blank) and, with <code>app_pause</code> on, pauses in-app at each bit-change boundary rather than emitting <code>M0</code> (<a class="xref" href="../adr/0009-real-hardware-correct-streamed-program.md#adr-0009">ADR-0009</a>). The Marlin spindle quirk (<code>S</code> must be on the <code>M3</code> line) is encoded once here.</p>
+        <h2><span class="num">07</span>Progressive breakdown · GcodeProgram <span class="newpill">new</span></h2>
+        <h3 class="t">A typed Operation algebra, rendered to G-code at the edge</h3>
+        <p><strong>Interface:</strong> <code>gcode_program.build(board, alignment, cfg) -> List(Operation)</code>, then <code>render(ops, ctx, target) -> List(RenderedLine)</code>. Requires an <a class="xref" href="../../CONTEXT.md#term-alignment">Alignment</a> by type. The program is a <strong>typed value</strong>, not a string blob — G-code is a <em>rendered view</em> of it (<a class="xref" href="../adr/0016-typed-operation-algebra.md#adr-0016">ADR-0016</a>).</p>
+        <pre><span class="kw">pub type</span> <span class="ty">Operation</span> {           <span class="cm">// the program — structure is in the TYPE, never re-parsed</span>
+  <span class="st">Preamble</span>  <span class="st">Prepare</span>(centroid, safe_z)  <span class="st">ToolBlock</span>(tool)
+  <span class="st">DrillHole</span>(hole_id, board_pt)   <span class="st">Pause</span>(reason)   <span class="st">Postamble</span>
+}
+<span class="cm">// Ops are SYMBOLIC; feeds/safe-Z/mode live in a RenderContext applied at the edge.</span>
+<span class="st">DryRun</span> -&gt; spindle off, Z +0.2   <span class="cm">// same ops, dry-run render</span>
+<span class="st">Drill</span>  -&gt; M3 S255,   Z -2.5   <span class="cm">// same ops, drill render + prepare pose (ADR-0014)</span></pre>
+        <p>The two safety invariants live in the <strong>renderer</strong>, structurally: a <a class="xref" href="../../CONTEXT.md#term-operation">DrillHole</a> renders the atom <em>travel→plunge→retract</em> (no XY at unsafe Z is expressible), and a <code>ToolBlock</code> (spindle-on) always precedes its holes. The wire and a future export are two <strong>render targets</strong> of the <em>same</em> ops, so they cannot drift — a comment is a <code>Rich</code>-only render, not a line to grep back out. With <code>app_pause</code> on, the program carries a typed <code>Pause</code> op the FSM intercepts rather than emitting <code>M0</code> (<a class="xref" href="../adr/0009-real-hardware-correct-streamed-program.md#adr-0009">ADR-0009</a>).</p>
+        <h3 class="t" style="margin-top:18px">The typed line through the streaming FSM</h3>
+        <p>The FSM streams <a class="xref" href="../../CONTEXT.md#term-renderedline">RenderedLine</a> — each wire string paired with the <strong>typed origin</strong> (op index, kind, tool, hole, pause) it was rendered from (<a class="xref" href="../adr/0017-typed-rendered-line-through-fsm.md#adr-0017">ADR-0017</a>). It indexes <em>lines</em> (the Marlin resend handshake is per-line; one op renders to many lines), reads <code>.wire</code> to frame, and <strong>pattern-matches <code>.origin</code></strong> to pause — zero string-matching. Rendered once at run start and held immutably in the <code>StreamJob</code>, so a <code>Resend: N</code> re-frames the identical stored line (byte-stable).</p>
+        <div class="panel" style="margin-top:12px"><h4>What this kills <span class="lenstag invariants">Invariants</span> <span class="lenstag state">State</span></h4>
+          <p>Every reverse-parser is deleted, not patched: <code>count_holes</code> grepping <code>"G0 X"</code> (the bug that froze dry-run progress at 0/N when <a class="xref" href="../adr/0015-per-mode-feed-profiles.md#adr-0015">ADR-0015</a> made travel a <code>G1</code>) → count <code>DrillHole</code> ops by index; <code>upcoming_tool</code> grepping <code>T&lt;n&gt;</code> → <code>origin.tool</code>; <code>is_pause_sentinel</code> → <code>origin.pause</code> match; <code>current_program</code> rebuilding+reparsing each frame → read the FSM's rendered list. And the <strong>Model</strong> holds only parameters + the nested machines + one <code>stream_index</code>; ~20 stored shadow fields (progress, quality, captured, transform, telemetry…) become pure projections, so no stored value can drift from a machine (<a class="xref" href="../adr/0018-model-is-params-plus-machines.md#adr-0018">ADR-0018</a>).</p></div>
       </section>
 
       <!-- ============================ 08 ============================ -->
@@ -563,7 +569,9 @@ flowchart LR
             <dt>Residuals</dt><dd>Per-point fit error (rms + max). The trust signal; gates the real run.</dd>
             <dt>PrinterConnection</dt><dd>The single stateful identity: the serial control state machine (pure <code>printer.gleam</code> core + effectful <code>controller.gleam</code> shell over a <code>Backend</code> seam) owning the Web Serial port, the Marlin handshake, live position, and mode.</dd>
             <dt>MarlinEmulator <span class="newpill">new</span></dt><dd>The faithful, pure Marlin protocol core behind the <code>Backend</code> seam — line/checksum validation, motor state, <code>M0</code> block, <code>M114</code>, plus a motion queue, a <code>tick</code>, and an injected envelope. Drives both deterministic e2e tests and a live in-app virtual machine.</dd>
-            <dt>GcodeProgram</dt><dd>Generated Marlin G-code for one mode (<code>DryRun | Drill</code>), built from an <code>Alignment</code>.</dd>
+            <dt>GcodeProgram</dt><dd>The drilling program for one mode (<code>DryRun | Drill</code>), built from an <code>Alignment</code> as a typed <code>List(Operation)</code> — G-code is a rendered view, not the source of truth.</dd>
+            <dt>Operation <span class="newpill">new</span></dt><dd>The unit of a program — a typed intent (<code>Preamble | Prepare | ToolBlock | DrillHole | Pause | Postamble</code>). Symbolic; renders to wire G-code at the edge. Structure is read from the type, never re-parsed from strings.</dd>
+            <dt>RenderedLine <span class="newpill">new</span></dt><dd>One wire line paired with its typed origin (op index, kind, tool, hole, pause). What the streaming FSM carries, so progress/pause/tool are read by pattern match — zero string-matching. Rendered once, byte-stable on resend.</dd>
             <dt>Job</dt><dd>The session stage machine enforcing the legal order: parse → register → align → dry-run → drill. Embedded by the <code>Session</code>.</dd>
           </dl>
         </div>
