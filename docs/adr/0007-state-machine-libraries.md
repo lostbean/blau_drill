@@ -1,4 +1,5 @@
 # 0007 — State-machine approach for `Job` and the serial control layer
+<a id="adr-0007"></a>
 
 - **Status:** Accepted
 - **Date:** 2026-06-18

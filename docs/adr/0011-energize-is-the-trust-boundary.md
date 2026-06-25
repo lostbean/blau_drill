@@ -1,4 +1,5 @@
 # 11. Energize is the trust boundary — alignment/position is FSM-scoped, never persisted
+<a id="adr-0011"></a>
 
 - **Status:** Accepted
 - **Date:** 2026-06-25

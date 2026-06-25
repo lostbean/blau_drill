@@ -1,4 +1,5 @@
 # 4. Ephemeral session state — no persistence, no database
+<a id="adr-0004"></a>
 
 - **Status:** Accepted (reinforced by ADR-0011 — alignment/position is NEVER
   persisted; only config survives a reload. ADR-0011 removes the alignment-restore

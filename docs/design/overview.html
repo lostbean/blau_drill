@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>blau-drill — Architecture Overview</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+      :root {
+        --bg: #0e1116; --panel: #161b22; --panel2: #1c232d; --ink: #e6edf3;
+        --muted: #9aa7b4; --line: #2a323d; --accent: #6cb6ff;
+        /* five-lens colours */
+        --depth: #b98bff; --composition: #5ad6a8; --state: #ffb454;
+        --invariants: #ff7b9c; --robustness: #59c2ff; --code-bg: #11161d;
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; background: var(--bg); color: var(--ink);
+        font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+      .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px 120px; }
+      header.hero { padding: 64px 24px 40px;
+        background: radial-gradient(1200px 400px at 50% -120px, #1d2733, transparent);
+        border-bottom: 1px solid var(--line); text-align: center; }
+      header.hero h1 { font-size: 40px; margin: 0 0 8px; letter-spacing: -0.02em; }
+      header.hero .sub { color: var(--muted); font-size: 18px; max-width: 760px; margin: 0 auto; }
+      .pillrow { margin-top: 22px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+      .lens { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+        padding: 4px 11px; border-radius: 999px; border: 1px solid currentColor;
+        background: color-mix(in srgb, currentColor 12%, transparent); }
+      .lens.depth { color: var(--depth); } .lens.composition { color: var(--composition); }
+      .lens.state { color: var(--state); } .lens.invariants { color: var(--invariants); }
+      .lens.robustness { color: var(--robustness); }
+      .lens .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+      section { margin-top: 56px; }
+      h2 { font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted);
+        margin: 0 0 6px; font-weight: 700; }
+      h2 .num { color: var(--accent); margin-right: 10px; }
+      h3.t { font-size: 27px; margin: 0 0 18px; letter-spacing: -0.01em; }
+      h4 { font-size: 18px; margin: 28px 0 8px; }
+      p { color: #cdd6e0; }
+      .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; }
+      .panel + .panel { margin-top: 16px; }
+      .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+      code, pre { font-family: "SF Mono", ui-monospace, "Cascadia Code", Menlo, monospace; }
+      code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; font-size: 13.5px; color: #c9d4e0; }
+      pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 12px;
+        padding: 16px 18px; overflow-x: auto; font-size: 13px; line-height: 1.55; color: #cdd6e0; }
+      pre .kw { color: var(--depth); } pre .ty { color: var(--composition); }
+      pre .st { color: var(--state); } pre .cm { color: #6b7785; font-style: italic; }
+      .tag { color: var(--invariants); }
+      table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+      th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--muted); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+      td .mono { font-family: ui-monospace, monospace; color: var(--accent); }
+      .invtable td:first-child { width: 44%; }
+      .mermaid { background: var(--panel2); border: 1px solid var(--line); border-radius: 14px; padding: 22px; margin-top: 6px; }
+      .callout { border-left: 3px solid var(--accent); background: #131a22; padding: 12px 18px; border-radius: 0 10px 10px 0; margin: 16px 0; color: #cdd6e0; }
+      .callout.warn { border-color: var(--invariants); }
+      .callout.win { border-color: var(--composition); }
+      .callout.bug { border-color: var(--state); }
+      ul.clean { padding-left: 20px; } ul.clean li { margin: 6px 0; }
+      .principle { display: flex; gap: 14px; align-items: flex-start; padding: 13px 0; border-bottom: 1px solid var(--line); }
+      .principle:last-child { border-bottom: none; }
+      .principle .pn { color: var(--accent); font-weight: 700; font-family: ui-monospace, monospace; min-width: 28px; }
+      .toc { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; justify-content: center; }
+      .toc a { font-size: 13px; color: var(--muted); text-decoration: none; border: 1px solid var(--line); padding: 5px 11px; border-radius: 8px; }
+      .toc a:hover { color: var(--ink); border-color: var(--accent); }
+      .lenspill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; border: 1px solid currentColor; }
+      .lenstag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; margin-left: 8px;
+        border: 1px solid currentColor; background: color-mix(in srgb, currentColor 14%, transparent); }
+      .lenstag.depth { color: var(--depth); } .lenstag.composition { color: var(--composition); }
+      .lenstag.state { color: var(--state); } .lenstag.invariants { color: var(--invariants); }
+      .lenstag.robustness { color: var(--robustness); }
+      .footer { margin-top: 70px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+      .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 10px; }
+      .badge { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: #20262f; color: var(--muted); border: 1px solid var(--line); }
+      .glos dt { color: var(--accent); font-family: ui-monospace, monospace; font-size: 13.5px; margin-top: 12px; }
+      .glos dd { margin: 3px 0 0; color: #cdd6e0; }
+      .nono { color: var(--invariants); }
+      a.xref { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+      a.xref:hover { color: var(--ink); }
+      .newpill { font-size: 10px; font-weight: 700; letter-spacing: .08em; padding: 2px 7px; border-radius: 999px;
+        color: var(--composition); border: 1px solid var(--composition); background: color-mix(in srgb, var(--composition) 14%, transparent); margin-left: 8px; vertical-align: middle; }
+    </style>
+  </head>
+  <body>
+    <header class="hero">
+      <h1>blau-drill</h1>
+      <div class="sub">
+        A single-operator, pure-browser instrument (Gleam → JavaScript via Lustre, no
+        backend, no install) that loads a KiCad board, drives the modified
+        Two&nbsp;Trees Bluer over the Web Serial API, fits an affine
+        <em>board&nbsp;→&nbsp;machine</em> transform from human-located fiducials, and streams
+        the drilling — dry-run first. One <a class="xref" href="../../CONTEXT.md#term-session">Session</a>
+        coordinates the stage, the wire, and the screen.
+      </div>
+      <div class="pillrow">
+        <span class="lens depth"><span class="dot"></span>Depth</span>
+        <span class="lens composition"><span class="dot"></span>Composition</span>
+        <span class="lens state"><span class="dot"></span>State</span>
+        <span class="lens invariants"><span class="dot"></span>Invariants</span>
+        <span class="lens robustness"><span class="dot"></span>Robustness</span>
+      </div>
+      <nav class="toc">
+        <a href="#s00">00 · Foundation</a>
+        <a href="#s01">01 · At a glance</a>
+        <a href="#s02">02 · Lens rationale</a>
+        <a href="#s03">03 · Session</a>
+        <a href="#s04">04 · BoardModel</a>
+        <a href="#s05">05 · Alignment</a>
+        <a href="#s06">06 · Printer</a>
+        <a href="#s07">07 · GcodeProgram</a>
+        <a href="#s08">08 · Job</a>
+        <a href="#s09">09 · Emulator</a>
+        <a href="#s10">10 · Walkthrough</a>
+        <a href="#s11">11 · Glossary</a>
+      </nav>
+    </header>
+
+    <div class="wrap">
+      <!-- ============================ 00 ============================ -->
+      <section id="s00">
+        <h2><span class="num">00</span>Goals, principles &amp; invariants</h2>
+        <h3 class="t">The foundation</h3>
+
+        <div class="panel">
+          <h4 style="margin-top:0">Goals</h4>
+          <ul class="clean">
+            <li>Take a KiCad board through <strong>one drilling session</strong>, end to end, in one app:
+              load → register → align → dry-run → drill.</li>
+            <li>Replace the manual chain (re-export, mirror flag, fiducial <code>G92</code>, pcb2gcode,
+              <code>postprocess_drill.py</code>) with a single fitted <strong>affine transform</strong>
+              that absorbs offset, rotation, mirror, and skew.</li>
+            <li>Give a human a <strong>visual, jog-driven alignment loop</strong> with live position
+              feedback and trustworthy residuals.</li>
+            <li>Generate Marlin-correct G-code natively (spindle on shared laser PWM as <code>M3 S255</code>).</li>
+            <li><strong>Coordinate the stage, the wire, and the screen as one value</strong> — so the UI
+              cannot show a screen the machines contradict and a cross-machine action is atomic.
+              <span class="newpill">coordination</span></li>
+          </ul>
+          <h4>Non-goals <span class="badge">load-bearing</span></h4>
+          <ul class="clean">
+            <li><span class="nono">Not</span> a multi-user / multi-machine service. One bench, one printer, one operator.</li>
+            <li><span class="nono">Not</span> a persistent job database — each session is a fresh upload (ephemeral state,
+              <a class="xref" href="../adr/0004-ephemeral-no-persistence.md#adr-0004">ADR-0004</a>).</li>
+            <li><span class="nono">Not</span> a CAM suite. No trace isolation, no laser-ablation pass — drilling only (for now).</li>
+            <li><span class="nono">Not</span> a replacement for OctoPrint as a general print host — it owns the serial port only for the duration of a drilling session.</li>
+            <li><span class="nono">Not</span> a state-machine library. Every machine — including the new
+              <a class="xref" href="../../CONTEXT.md#term-session">Session</a> — is a plain Gleam sum type with a pure
+              transition function (<a class="xref" href="../adr/0007-state-machine-libraries.md#adr-0007">ADR-0007</a>).</li>
+          </ul>
+          <h4>Runtime constraints <span class="badge">come with the architecture</span></h4>
+          <ul class="clean">
+            <li><strong>No backend, no install — the win:</strong> the whole app is Gleam compiled to JavaScript (Lustre), served as static files. The operator just opens a URL; there is no server to run, no server-side rendering, no database. All state lives in the Lustre model in the browser.</li>
+            <li><strong>Chromium-only:</strong> it talks to the printer directly over the <strong>Web Serial API</strong> (<code>navigator.serial</code>), available in Chrome / Edge / Opera 89+. Firefox and Safari are not supported.</li>
+            <li><strong>Secure context required:</strong> Web Serial only works over HTTPS, <code>localhost</code>, or <code>file://</code>.</li>
+            <li><strong>User-gesture connect:</strong> the port chooser can only open from an explicit operator click — the app can never silently grab the port.</li>
+          </ul>
+        </div>
+
+        <div class="panel">
+          <h4 style="margin-top:0">Core principles</h4>
+          <div class="principle"><span class="pn">P1</span><div><strong>The board is a value; the printer is the only identity.</strong>
+            Parsed boards, transforms, and G-code are immutable values that flow through pure functions. Exactly one stateful reference exists: the serial <a class="xref" href="../../CONTEXT.md#term-printerconnection">PrinterConnection</a>. <span class="lenstag state">State</span></div></div>
+          <div class="principle"><span class="pn">P2</span><div><strong>Alignment is a solved transform, not a procedure.</strong>
+            Registration captures correspondences; the transform is <em>fitted</em> and carries its own residuals. No <code>G92</code> ritual in the domain — that's an implementation detail of streaming. <span class="lenstag invariants">Invariants</span></div></div>
+          <div class="principle"><span class="pn">P3</span><div><strong>Every boundary parses into a precise type.</strong>
+            The <code>.drl</code>, Gerber, and each Marlin serial line are parsed at the edge into domain values; malformed input fails loudly there, never deep inside. <span class="lenstag robustness">Robustness</span></div></div>
+          <div class="principle"><span class="pn">P4</span><div><strong>Illegal sequencing is unrepresentable.</strong>
+            You cannot stream a drill without an <a class="xref" href="../../CONTEXT.md#term-alignment">Alignment</a>; you cannot fit one without ≥3 non-collinear points; and you cannot <em>start a drill while a stream is in flight</em> — the <a class="xref" href="../../CONTEXT.md#term-job">Job</a> and <a class="xref" href="../../CONTEXT.md#term-session">Session</a> machines make the only legal path the only typed path. <span class="lenstag invariants">Invariants</span></div></div>
+          <div class="principle"><span class="pn">P5</span><div><strong>The dangerous defaults are enforced, not documented.</strong>
+            Energize-before-jog, residual gate before drilling, dry-run before real, and <em>abort stops motion</em> — each is a state the machine must pass through, not a README sentence. <span class="lenstag robustness">Robustness</span></div></div>
+          <div class="principle"><span class="pn">P6</span><div><strong>One coordinator owns cross-machine moves; the UI is projected.</strong> <span class="newpill">coordination</span>
+            The <a class="xref" href="../../CONTEXT.md#term-session">Session</a> <em>nests</em> the real <code>job</code> and <code>printer</code> values (never a copy), the screen is a pure <em>projection</em> of it, and every flow action is one transition returning an ordered <a class="xref" href="../../CONTEXT.md#term-plan">Plan</a>. There is nothing to keep in sync. <span class="lenstag state">State</span><span class="lenstag depth">Depth</span></div></div>
+        </div>
+
+        <h4>Invariants — each paired with the representation that enforces it</h4>
+        <div class="panel">
+          <table class="invtable">
+            <tr><th>Invariant (must always hold)</th><th>Made unrepresentable by…</th></tr>
+            <tr><td>An <span class="mono">Alignment</span> exists only when solvable.</td>
+                <td>No public constructor. Only <code>alignment.fit(corrs)</code> returns <code>Ok(Alignment(..))</code>, and only for ≥3 non-collinear points; otherwise <code>Error(Degenerate)</code>. Fewer points are a <code>PendingAlignment</code> — a <em>different Gleam type</em>.</td></tr>
+            <tr><td>Drilling cannot start without a valid alignment.</td>
+                <td><code>gcode_program.build</code> takes an <code>Alignment</code> as a required argument — there is no overload that accepts raw holes. The "Drill" event only exists in <code>Job</code> state <span class="mono">Aligned</span>.</td></tr>
+            <tr><td>Residuals over tolerance block the real run.</td>
+                <td><code>Job</code> transition <span class="mono">Aligned → Drilling</span> is guarded by <code>residuals.max ≤ tol</code>; a failing fit lands in <span class="mono">AlignmentRejected</span>, which has no drill event.</td></tr>
+            <tr><td>You never jog a de-energized axis (the 1–2 mm snap).</td>
+                <td><code>PrinterConnection</code> state <span class="mono">Idle</span> matches no <code>Jog</code> command — the pure core returns a <code>NotEnergized</code> refusal and writes nothing. The only path to <span class="mono">Jogging</span> runs an energize step (M17) first.</td></tr>
+            <tr><td>Real drilling is never the first thing that runs.</td>
+                <td><code>Job</code> has no <span class="mono">Aligned → Drilling</span> case clause — it routes through <span class="mono">DryRun</span>, whose completion is the precondition for the real-run event.</td></tr>
+            <tr><td>A hole's machine coordinate is always the transform of its board coordinate.</td>
+                <td>Holes are stored <em>only</em> in board space. Machine coordinates are computed on demand by <code>transform2d.apply</code> — there is no settable machine-coordinate field to drift out of sync.</td></tr>
+            <tr><td class="nono">There is exactly one stage value and one wire value in the app. <span class="newpill">new</span></td>
+                <td>The <a class="xref" href="../../CONTEXT.md#term-session">Session</a> variants <em>contain</em> <code>job.Job</code> / <code>printer.PrinterState</code>. <code>model.screen</code>, <code>model.PrinterState</code>, and the <code>bridge.printer_state</code> mirror are deleted.</td></tr>
+            <tr><td class="nono">The UI screen always matches the FSMs. <span class="newpill">new</span></td>
+                <td><code>screen</code> is computed by <code>session.screen/2</code>; there is no settable screen field to drift. (<a class="xref" href="../adr/0012-session-coordinates-stage-wire-screen.md#adr-0012">ADR-0012</a>)</td></tr>
+            <tr><td class="nono">A drill stream cannot start while another stream is in flight. <span class="newpill">new</span></td>
+                <td>The <code>Drilling</code> session variant is constructed <em>only</em> by the transition that also emits the cancel-then-stream <a class="xref" href="../../CONTEXT.md#term-plan">Plan</a>.</td></tr>
+            <tr><td class="nono">Abort stops motion, not just the controller. <span class="newpill">new</span></td>
+                <td>Abort is one <code>Session</code> transition whose <code>Plan</code> is <code>Halt</code> + queue-clear; the emulator's motion queue lets a test <em>assert</em> the head stops. (<a class="xref" href="../adr/0013-faithful-emulator-motion-queue-and-envelope.md#adr-0013">ADR-0013</a>)</td></tr>
+          </table>
+        </div>
+
+        <h4>The central type lattice</h4>
+        <p>The registration → alignment progression is the spine. Illegal states (a "drilling job with no transform", a "transform from 2 points") have <strong>no node</strong> — they cannot be constructed.</p>
+        <div class="mermaid">
+flowchart LR
+  RAW["raw correspondences<br/><i>[Correspondence]</i>"] --> P{"count &amp;<br/>collinearity"}
+  P -->|"&lt; 3 pts"| PEND["PendingAlignment<br/><span>no transform field</span>"]
+  P -->|"3+ collinear"| DEG["Error(Degenerate)<br/><span>not a value</span>"]
+  P -->|"3+ non-collinear"| AL["Alignment<br/>{transform, residuals}"]
+  AL --> G{"residuals.max ≤ tol ?"}
+  G -->|no| REJ["AlignmentRejected<br/><span>has no drill event</span>"]
+  G -->|yes| RDY["drillable<br/><span>gcode_program.build accepts it</span>"]
+  classDef ok fill:#13241c,stroke:#5ad6a8,color:#d7f5e8;
+  classDef bad fill:#2a161c,stroke:#ff7b9c,color:#ffd9e2;
+  classDef mid fill:#221d10,stroke:#ffb454,color:#ffe9c7;
+  class AL,RDY ok; class DEG,REJ bad; class PEND,RAW mid;
+        </div>
+        <div class="legend">
+          <span style="color:var(--composition)">■ constructible &amp; safe</span>
+          <span style="color:var(--invariants)">■ unrepresentable / dead-ends loudly</span>
+          <span style="color:var(--state)">■ in-progress (distinct type)</span>
+        </div>
+      </section>
+
+      <!-- ============================ 01 ============================ -->
+      <section id="s01">
+        <h2><span class="num">01</span>System at a glance</h2>
+        <h3 class="t">One coordinator over five pure modules and one identity</h3>
+        <p>Files enter on the left as values; the only thing with identity is the serial link to Marlin.
+          Above the two machines sits the <a class="xref" href="../../CONTEXT.md#term-session">Session</a> — the
+          single value the Lustre model holds. It <em>nests</em> the <a class="xref" href="../../CONTEXT.md#term-job">Job</a>
+          (stage) and the <a class="xref" href="../../CONTEXT.md#term-printerconnection">PrinterConnection</a> (wire),
+          <em>projects</em> the screen the views render, and on a flow action returns an ordered
+          <a class="xref" href="../../CONTEXT.md#term-plan">Plan</a> the app executes through the controller.</p>
+        <div class="mermaid">
+flowchart TB
+  subgraph edge["Parsing edge — pure"]
+    KI["KiCad outputs<br/>.drl · Edge.Cuts · copper"] --> BM["BoardModel<br/><i>holes · outline · fiducials · tools</i>"]
+  end
+  subgraph core["Domain core — pure values"]
+    BM --> REG["Registration<br/><i>pick board points</i>"]
+    REG --> AL["Alignment.fit<br/><i>affine + Z plane + residuals</i>"]
+    AL --> GP["GcodeProgram.build<br/><i>dry-run | real</i>"]
+  end
+  subgraph coord["Session — the coordinator (NEW · pure)"]
+    SESS["Session<br/><i>nests Job + Printer · projects screen · emits Plan</i>"]
+  end
+  subgraph live["Lustre app (browser · Model-View-Update)"]
+    VIZ["Board canvas + shell<br/>render(screen(session))"]
+    JOB["Job FSM<br/><i>(held by Session)</i>"]
+  end
+  subgraph io["Stateful boundary"]
+    PC["PrinterConnection<br/><i>(held by Session)</i><br/>control state machine · Web Serial / emulator"]
+  end
+  BM --> VIZ
+  AL --> VIZ
+  SESS -. holds .-> JOB
+  SESS -. holds .-> PC
+  SESS -->|"screen"| VIZ
+  SESS -->|"Plan: ordered printer.Command"| PC
+  REG -->|"jog + capture M114"| PC
+  GP -->|"stream lines + ok-handshake"| PC
+  PC -->|"events: progress · position · fault"| SESS
+  classDef pure fill:#13241c,stroke:#5ad6a8,color:#d7f5e8;
+  classDef stateful fill:#221d10,stroke:#ffb454,color:#ffe9c7;
+  classDef ui fill:#1a2030,stroke:#6cb6ff,color:#dce8ff;
+  classDef coordc fill:#1e1830,stroke:#b98bff,color:#ece3ff;
+  class BM,REG,AL,GP pure; class PC stateful; class VIZ,JOB ui; class SESS coordc;
+        </div>
+        <div class="callout win"><strong>The one-line shape:</strong> views read <code>screen(session)</code>;
+          <code>app.update</code> turns a <code>Msg</code> into a <code>Session</code> action, gets back
+          <code>#(Session, Plan)</code>, and runs the <code>Plan</code> through the <em>existing</em> controller. We add a
+          coordinator layer; we do not rewrite the machines beneath it.</div>
+      </section>
+
+      <!-- ============================ 02 ============================ -->
+      <section id="s02">
+        <h2><span class="num">02</span>Lens-driven design rationale</h2>
+        <h3 class="t">Why it's shaped this way</h3>
+
+        <div class="panel">
+          <span class="lenspill" style="color:var(--depth)">DEPTH</span>
+          <h4 style="display:inline; margin-left:8px">Deep modules carry the hard parts behind small interfaces</h4>
+          <p><strong><a class="xref" href="../../CONTEXT.md#term-printerconnection">PrinterConnection</a></strong> hides the entire Marlin serial protocol — port lifecycle, line numbering, checksums, the <code>ok</code>/<code>resend</code> handshake, <code>M114</code> polling, flow control — behind a small set of verbs. <strong><a class="xref" href="../../CONTEXT.md#term-alignment">Alignment</a></strong> hides a least-squares affine + Z-plane solve behind one function, <code>alignment.fit</code>. And the new <strong><a class="xref" href="../../CONTEXT.md#term-session">Session</a></strong> hides all cross-machine choreography — cancel-then-drill, reconcile-on-abort, route-a-serial-loss-into-both-machines — behind just <code>transition/2</code> and <code>screen/2</code>.</p>
+          <p class="callout win"><strong>Easy choice rejected:</strong> letting each <code>app.update</code> handler poke the job, the printer, and the screen independently. That is precisely the three-authority glue that produced the dry-run→drill bug. The narrow coordinator interface is what makes the cross-machine ordering legal by construction.</p>
+        </div>
+
+        <div class="panel">
+          <span class="lenspill" style="color:var(--composition)">COMPOSITION</span>
+          <h4 style="display:inline; margin-left:8px">Small total transforms that recombine</h4>
+          <p>The pipeline is a chain of total functions over values: <code>parse → register → fit → apply → emit</code>. Dry-run and real are the <em>same</em> generator with one field flipped. The <a class="xref" href="../../CONTEXT.md#term-plan">Plan</a> the coordinator returns is just <code>List(printer.Command)</code> — it composes with the controller the app already has, so the coordinator <em>reuses</em> every wire transition rather than duplicating it. And the faithful <a class="xref" href="../../CONTEXT.md#term-marlinemulator">emulator</a> is one pure core with two drivers: a hand-pumped <code>tick</code> for deterministic tests and an auto-pump FFI shim for a live in-app virtual machine.</p>
+          <pre><span class="cm">// generation is one function, two configs — composition, not duplication.</span>
+gcode_program.build(board, alignment, <span class="ty">GcodeConfig</span>(..cfg, <span class="st">mode:</span> <span class="ty">DryRun</span>))  <span class="cm">// spindle off, hover +0.2</span>
+gcode_program.build(board, alignment, <span class="ty">GcodeConfig</span>(..cfg, <span class="st">mode:</span> <span class="ty">Drill</span>))   <span class="cm">// M3 S255, plunge -2.5</span></pre>
+        </div>
+
+        <div class="panel">
+          <span class="lenspill" style="color:var(--state)">STATE</span>
+          <h4 style="display:inline; margin-left:8px">One reference, one session value, everything else a value-across-time</h4>
+          <p>Per <strong>P1</strong>, the board, the captured correspondences, the fitted transform, and the emitted program are immutable values in the Lustre model. The <em>only</em> managed reference is <a class="xref" href="../../CONTEXT.md#term-printerconnection">PrinterConnection</a>. The drift we removed (<strong>P6</strong>) had two literal roots: <code>model.PrinterState</code> (<code>model.gleam:117</code>) was a lossy mirror of <code>printer.PrinterState</code> bridged by hand, and <code>screen</code> was a stored copy of <code>f(job, printer)</code>. The cure is structural: one <a class="xref" href="../../CONTEXT.md#term-session">Session</a> value is the spine; it <em>contains</em> the single <code>job</code> and <code>printer</code>; the screen and the mirror are deleted.</p>
+          <p class="callout"><strong>Config resolves once:</strong> baud, bed size, tool diameters, feeds/depths — read at session start into an immutable config value (persisted in <code>localStorage</code>), never re-read mid-run.</p>
+        </div>
+
+        <div class="panel">
+          <span class="lenspill" style="color:var(--invariants)">INVARIANTS</span>
+          <h4 style="display:inline; margin-left:8px">The data model encodes the domain knowledge</h4>
+          <p>This is the richest lens (see §00). The generative decisions: <strong>holes live only in board space</strong> (machine coords are a derived view); <strong>"not enough points yet" is a different Gleam type</strong> than "a solved alignment"; and now <strong>"drilling" is a Session variant constructed only with its own in-flight stream</strong>, so "Drilling but nothing streaming" — the exact bug — has no representation. Each is the same move: make the illegal combination fail to type-check, the way <a class="xref" href="../../CONTEXT.md#term-pendingalignment">PendingAlignment</a> vs <a class="xref" href="../../CONTEXT.md#term-alignment">Alignment</a> already does.</p>
+        </div>
+
+        <div class="panel">
+          <span class="lenspill" style="color:var(--robustness)">ROBUSTNESS</span>
+          <h4 style="display:inline; margin-left:8px">Failures are loud, local, early — and physical</h4>
+          <ul class="clean">
+            <li><strong>Parse edge:</strong> a malformed <code>.drl</code> or absolute-page-coordinate export is rejected at <code>board_model.parse</code> with a diagnostic, not discovered as an out-of-bounds move mid-drill.</li>
+            <li><strong>Residual gate:</strong> a bad fit shows a large residual and the drill button is unreachable — the misalignment is caught <em>before</em> the bit touches copper.</li>
+            <li><strong>Explicit fault state:</strong> a disconnect mid-stream transitions to <span class="mono">Faulted</span>, halts the stream, and surfaces in the UI — an explicit, recoverable value, not a silent stall.</li>
+            <li><strong>Rejected flow actions:</strong> an illegal <code>Session</code> action returns a typed <code>Rejected(reason)</code> and writes nothing — never a half-applied cross-machine transition. <span class="newpill">new</span></li>
+            <li><strong>Abort stops motion:</strong> the emulator's motion queue makes "still moving after abort" a concrete, assertable state, and <code>Halt</code> clears it — turning a real-hardware safety hazard into a regression test. <span class="newpill">new</span></li>
+            <li><strong>Envelope limits:</strong> an out-of-bounds / past-min move is a Marlin-style error reply with the head <em>unmoved</em>. <span class="newpill">new</span></li>
+          </ul>
+          <p class="callout warn"><strong>Trade-off stated:</strong> we deliberately under-optimize <em>persistence robustness</em> — a crash loses the session (ephemeral, per non-goals). Acceptable because a session is minutes long and re-capturing 3 fiducials is the only redo cost. Per <a class="xref" href="../adr/0011-energize-is-the-trust-boundary.md#adr-0011">ADR-0011</a>, that loss is also a <em>safety</em> feature: no trusted position survives a motors-off gap.</p>
+        </div>
+      </section>
+
+      <!-- ============================ 03 SESSION ============================ -->
+      <section id="s03">
+        <h2><span class="num">03</span>Progressive breakdown · Session <span class="newpill">new</span></h2>
+        <h3 class="t">The coordinator that owns stage + wire + screen</h3>
+        <p><strong>Interface:</strong> <code>session.transition(Session, Action) -> Result(#(Session, Plan), Rejected)</code>
+          and <code>session.screen(Session, Overlay) -> Screen</code>. Pure, in <code>domain/session.gleam</code> — it mirrors
+          the <a class="xref" href="../../CONTEXT.md#term-printerconnection">printer core</a>'s <code>Step(state, writes, events)</code>
+          shape one level up. Each variant carries the <em>actual</em> <code>job.Job</code> / <code>printer.PrinterState</code>, never a copy.</p>
+        <pre><span class="cm">// domain/session.gleam — the outer coordinator value (pure, no IO)</span>
+<span class="kw">pub type</span> <span class="ty">Session</span> {
+  <span class="st">Loading</span>(board: <span class="ty">BoardOpt</span>, printer: printer.<span class="ty">PrinterState</span>)   <span class="cm">// pre-parse / pre-connect</span>
+  <span class="st">Aligning</span>(job: job.<span class="ty">Job</span>, printer: printer.<span class="ty">PrinterState</span>)     <span class="cm">// Registering|Aligned|Rejected</span>
+  <span class="st">Rehearsing</span>(job: job.<span class="ty">Job</span>, printer: printer.<span class="ty">PrinterState</span>)   <span class="cm">// DryRun — stream REQUIRED</span>
+  <span class="st">Drilling</span>(job: job.<span class="ty">Job</span>, printer: printer.<span class="ty">PrinterState</span>)     <span class="cm">// constructed ONLY with a drill plan</span>
+  <span class="st">Completed</span>(job: job.<span class="ty">Job</span>, printer: printer.<span class="ty">PrinterState</span>)    <span class="cm">// Done</span>
+  <span class="st">Faulted</span>(job: <span class="ty">JobOpt</span>, printer: printer.<span class="ty">PrinterState</span>)        <span class="cm">// off-ramp from any active state</span>
+}
+<span class="kw">pub type</span> <span class="ty">Overlay</span> { <span class="st">NoOverlay</span>  <span class="st">SettingsOpen</span>  <span class="st">LogOpen</span> }  <span class="cm">// side routes — orthogonal to lifecycle</span>
+<span class="kw">pub type</span> <span class="ty">Plan</span> = <span class="ty">List</span>(printer.<span class="ty">Command</span>)             <span class="cm">// ordered; app runs it in ONE effect</span>
+<span class="kw">pub type</span> <span class="ty">Rejected</span> { <span class="st">IllegalHere</span>(Action)  <span class="st">JobRefused</span>(job.TransitionError)  <span class="st">WireBusy</span> }</pre>
+        <div class="mermaid">
+stateDiagram-v2
+    [*] --> Loading
+    Loading --> Aligning: StartRegistering (energized)
+    Aligning --> Aligning: Capture / Fit / RestartAlignment
+    Aligning --> Rehearsing: RunDryRun  ⟹ Plan[Stream dry-run]
+    Rehearsing --> Aligning: RedoAlignment  ⟹ Plan[CancelStream]
+    Rehearsing --> Drilling: ConfirmRegistration  ⟹ Plan[CancelStream, Stream drill]
+    Drilling --> Completed: MarkComplete (stream done)
+    Aligning --> Loading: Deenergize (ADR-0011 reset)
+    Rehearsing --> Loading: Deenergize
+    Drilling --> Faulted: Abort  ⟹ Plan[Halt + queue-clear]
+    Rehearsing --> Faulted: Abort / SerialLost
+    Aligning --> Faulted: SerialLost
+    Faulted --> Loading: Reconnect (re-register)
+    Completed --> [*]
+        </div>
+        <ul class="clean">
+          <li><strong>Nest, don't copy:</strong> exactly one <code>job</code> and one <code>printer</code> exist; <code>model.screen</code> / <code>model.PrinterState</code> / <code>bridge.printer_state</code> are deleted. Nothing to sync, nothing to drift.</li>
+          <li><strong>Project, don't store:</strong> <code>screen(session, overlay)</code> is total; the side routes override it without becoming lifecycle states that clobber the job.</li>
+          <li><strong>Atomic cross-machine moves:</strong> <code>Rehearsing → Drilling</code> is one transition returning <code>Plan[CancelStream, Stream(drill)]</code> — the drill cannot be refused <code>Busy</code> because the cancel precedes it in the same effect.</li>
+        </ul>
+        <div class="callout win"><strong>The fix, on one edge.</strong> The old three-write <code>confirm_registration</code> handler (advance job + set screen + stream, un-atomic) collapses into a single legal transition. See <a class="xref" href="../adr/0012-session-coordinates-stage-wire-screen.md#adr-0012">ADR-0012</a>.</div>
+      </section>
+
+      <!-- ============================ 04 ============================ -->
+      <section id="s04">
+        <h2><span class="num">04</span>Progressive breakdown · BoardModel</h2>
+        <h3 class="t">The parsing edge</h3>
+        <p><strong>Interface:</strong> <code>board_model.parse(Inputs) -> Result(BoardModel, ParseError)</code>. Everything downstream consumes a <a class="xref" href="../../CONTEXT.md#term-boardmodel">BoardModel</a> and never touches a file.</p>
+        <pre><span class="cm">// pure value — board coordinates only, never machine</span>
+<span class="kw">pub type</span> <span class="ty">BoardModel</span> {
+  <span class="ty">BoardModel</span>(holes: <span class="ty">List</span>(<span class="ty">Hole</span>), outline: <span class="ty">Outline</span>,
+             fiducials: <span class="ty">List</span>(<span class="ty">Fiducial</span>), tools: <span class="ty">ToolTable</span>, bbox: <span class="ty">Bbox</span>)
+}
+<span class="kw">pub type</span> <span class="ty">Hole</span>     { <span class="ty">Hole</span>(x: <span class="ty">Float</span>, y: <span class="ty">Float</span>, tool: <span class="ty">ToolId</span>) }       <span class="cm">// board space</span>
+<span class="kw">pub type</span> <span class="ty">Fiducial</span> { <span class="ty">Fiducial</span>(x: <span class="ty">Float</span>, y: <span class="ty">Float</span>, kind: <span class="ty">FiducialKind</span>) } <span class="cm">// Cross | Hole</span>
+<span class="kw">type</span> <span class="ty">ToolTable</span> = <span class="ty">Dict</span>(<span class="ty">ToolId</span>, <span class="ty">Float</span>)                          <span class="cm">// tool_id -> diameter_mm</span></pre>
+        <ul class="clean">
+          <li><strong>Depth:</strong> three different file formats (Excellon, RS-274X Gerber, edge SVG) collapse into one uniform value.</li>
+          <li><strong>Robustness:</strong> the absolute-page-coordinate export is detected here (bbox far from origin) and rejected with guidance, not streamed.</li>
+          <li><strong>Selectable points</strong> = <code>fiducials ++ holes</code>; the viz makes them clickable to start a <a class="xref" href="../../CONTEXT.md#term-correspondence">Correspondence</a>.</li>
+        </ul>
+      </section>
+
+      <!-- ============================ 05 ============================ -->
+      <section id="s05">
+        <h2><span class="num">05</span>Progressive breakdown · Alignment</h2>
+        <h3 class="t">The fitted transform (2.5D)</h3>
+        <p><strong>Interface (the smart constructor):</strong></p>
+        <pre><span class="ty">alignment</span>.fit(<span class="ty">List</span>(<span class="ty">Correspondence</span>))
+  -&gt; <span class="ty">Result</span>(<span class="ty">Alignment</span>(transform: <span class="ty">Transform2D</span>, plane: <span class="ty">ZPlane</span>, residuals: <span class="ty">Residuals</span>(rms, max)),
+            <span class="ty">FitError</span>)
+<span class="cm">// FitError = TooFew     &lt; 3 → caller still holds a PendingAlignment</span>
+<span class="cm">//         | Degenerate  collinear / coincident points</span>
+<span class="ty">transform2d</span>.apply(t, #(bx, by)) -&gt; #(mx, my)   <span class="cm">// board → machine (XY)</span></pre>
+        <div class="callout"><strong>Why full affine + a Z plane, not <code>G92</code>:</strong> least-squares over 3–4 points yields translation + rotation + mirror + skew in one matrix <em>and</em> a tilted surface plane <code>z = a·bx + b·by + c</code> (<a class="xref" href="../adr/0010-alignment-captures-z-surface-plane.md#adr-0010">ADR-0010</a>), so drill depth references the real per-hole surface. It absorbs the back-side X-mirror (no separate flag), a board not square to the bed, and the fiducial offset. Residuals are the honesty check — they tell you the fit is trustworthy <em>before</em> you drill.</div>
+      </section>
+
+      <!-- ============================ 06 ============================ -->
+      <section id="s06">
+        <h2><span class="num">06</span>Progressive breakdown · PrinterConnection</h2>
+        <h3 class="t">The one identity</h3>
+        <p>The serial control state machine owning the Web Serial port. It is the system's only mutable reference, living in <code>src/blau_drill/control/</code>: a <strong>pure transition core</strong> (<code>printer.gleam</code>: <code>command(state, Command)</code> / <code>feed(state, line)</code> → <code>Step(state, writes, events)</code>) wrapped by a <strong>thin effectful shell</strong> (<code>controller.gleam</code>) over a <code>Backend</code> seam — <code>transport.web_serial()</code> for the real port, <code>transport.simulator()</code> or the faithful <a class="xref" href="../../CONTEXT.md#term-marlinemulator">emulator</a> for hardware-free dev. State is a plain value; there is no process. The <a class="xref" href="../../CONTEXT.md#term-session">Session</a> holds this value directly.</p>
+        <pre><span class="ty">Where</span>                  <span class="cm">// query live position (M114); valid in Idle/Jogging</span>
+<span class="ty">Energize</span> / <span class="ty">Release</span>     <span class="cm">// M17 / M18 — the only entry to / exit from Jogging</span>
+<span class="ty">Jog</span>(axis, mm) / <span class="ty">MoveTo</span>(x, y, z_lift)   <span class="cm">// relative / safe-jump motion — only in Jogging</span>
+<span class="ty">Stream</span>(lines) / <span class="ty">ResumeStream</span> / <span class="ty">CancelStream</span>   <span class="cm">// program + in-app pause + benign stop</span>
+<span class="ty">Halt</span> / <span class="ty">Reconnect</span>       <span class="cm">// M112 abort → Faulted; recover Faulted → Idle</span></pre>
+        <div class="mermaid">
+stateDiagram-v2
+  [*] --> Disconnected
+  Disconnected --> Idle: connect (Web Serial)
+  Idle --> Jogging: energize (M17)
+  Jogging --> Idle: release (M18)
+  Jogging --> Streaming: begin program
+  Idle --> Streaming: begin program
+  Streaming --> StreamPaused: in-app pause (sentinel)
+  StreamPaused --> Streaming: resume
+  Streaming --> Idle: program done
+  Streaming --> Faulted: serial loss / halt
+  StreamPaused --> Faulted: halt
+  Faulted --> Idle: reconnect
+  note right of Idle: no jog command matches here\n(designs out the 1–2 mm snap)
+        </div>
+        <ul class="clean">
+          <li><strong>Depth:</strong> the entire reliability protocol (line numbers, checksums, resend) is invisible to callers.</li>
+          <li><strong>Robustness:</strong> <span class="mono">Faulted</span> is reachable from any active state and is loud; <code>Reconnect</code> recovers cleanly — an explicit transition, not a restart. <code>Halt</code> / <code>CancelStream</code> stay reachable from <span class="mono">StreamPaused</span> so abort is never gated behind a pause.</li>
+        </ul>
+      </section>
+
+      <!-- ============================ 07 ============================ -->
+      <section id="s07">
+        <h2><span class="num">07</span>Progressive breakdown · GcodeProgram</h2>
+        <h3 class="t">Native generation</h3>
+        <p><strong>Interface:</strong> <code>gcode_program.build(board, alignment, cfg) -> GcodeProgram(lines, mode, bbox_machine, tool_order)</code>. Requires an <a class="xref" href="../../CONTEXT.md#term-alignment">Alignment</a> by type — there is no way to generate from unaligned holes.</p>
+        <pre><span class="cm">// Per hole: transform, then emit. No pcb2gcode, no Python.</span>
+let #(mx, my) = <span class="ty">transform2d</span>.apply(alignment.transform, #(hole.x, hole.y))
+<span class="cm">// Tool-grouped, M3 S255 (laser-PWM spindle), dwell, plunge per mode.</span>
+<span class="st">DryRun</span> -&gt; spindle off, Z +0.2   <span class="cm">// registration check</span>
+<span class="st">Drill</span>  -&gt; M3 S255,   Z -2.5   <span class="cm">// real, into sacrificial layer</span></pre>
+        <p>The streamed form is <em>sanitized</em> (no blank/comment lines — Marlin does not <code>ok</code> a blank) and, with <code>app_pause</code> on, pauses in-app at each bit-change boundary rather than emitting <code>M0</code> (<a class="xref" href="../adr/0009-real-hardware-correct-streamed-program.md#adr-0009">ADR-0009</a>). The Marlin spindle quirk (<code>S</code> must be on the <code>M3</code> line) is encoded once here.</p>
+      </section>
+
+      <!-- ============================ 08 ============================ -->
+      <section id="s08">
+        <h2><span class="num">08</span>Progressive breakdown · Job</h2>
+        <h3 class="t">The stage machine the Session embeds</h3>
+        <div class="mermaid">
+stateDiagram-v2
+  [*] --> Parsed: upload accepted
+  Parsed --> Registering: pick board points
+  Registering --> Aligned: fit ok &amp; residuals ≤ tol
+  Registering --> AlignmentRejected: residuals &gt; tol
+  AlignmentRejected --> Registering: recapture
+  Aligned --> DryRun: run dry-run
+  DryRun --> Aligned: residuals look wrong, redo
+  DryRun --> Drilling: confirm registration
+  Drilling --> Done: all holes
+  Drilling --> Faulted: serial loss
+  Faulted --> Parsed: reconnect (re-register · ADR-0011)
+        </div>
+        <p>The <a class="xref" href="../../CONTEXT.md#term-job">Job</a> FSM is a Gleam sum type with a pure <code>transition(job, event) -> Result(Job, _)</code>: each event exists only where it's legal — no "drill" in <span class="mono">Parsed</span>, no <span class="mono">Aligned → Drilling</span> case clause. Per <a class="xref" href="../adr/0011-energize-is-the-trust-boundary.md#adr-0011">ADR-0011</a>, any de-energize (release, fault, serial loss, refresh) discards the alignment and routes back to a clean slate — no trusted position survives a motors-off gap. The <a class="xref" href="../../CONTEXT.md#term-session">Session</a> embeds this value and lifts its events into the cross-machine plan.</p>
+      </section>
+
+      <!-- ============================ 09 EMULATOR ============================ -->
+      <section id="s09">
+        <h2><span class="num">09</span>Progressive breakdown · Faithful emulator <span class="newpill">new</span></h2>
+        <h3 class="t">A motion queue, an envelope, and time</h3>
+        <p>The <a class="xref" href="../../CONTEXT.md#term-marlinemulator">Marlin emulator</a> (<code>control/marlin_emulator.gleam</code>) is a pure protocol core: it validates line numbers + checksums, tracks motor state, blocks on <code>M0</code>, and answers <code>M114</code>. It is leveled up with <strong>physical time</strong> (a planner queue drained by a tick) and an <strong>envelope</strong>, so the safety-relevant states the thin simulator masks become observable.</p>
+        <pre><span class="kw">pub type</span> <span class="ty">EmulatorState</span> {
+  <span class="ty">EmulatorState</span>(last_line: Int, motors_on: Bool, abs: Bool, x: Float, y: Float, z: Float, paused: Bool,
+    queue: <span class="ty">List</span>(<span class="ty">QueuedMove</span>),   <span class="cm">// NEW — admitted-but-not-yet-executed moves (the planner buffer)</span>
+    bounds: <span class="ty">Bounds</span>)             <span class="cm">// NEW — injected XYZ envelope (test-supplied, never a product default)</span>
+}
+<span class="kw">pub fn</span> feed(s, line) -&gt; #(<span class="ty">EmulatorState</span>, <span class="ty">List</span>(String))  <span class="cm">// admits a move + acks admission</span>
+<span class="kw">pub fn</span> tick(s, dt) -&gt; <span class="ty">EmulatorState</span>      <span class="cm">// drains the queue; SEPARATE from feed so a test can</span>
+                                  <span class="cm">// feed + NOT tick → assert the head is still mid-move</span>
+<span class="kw">pub fn</span> halt(s) -&gt; <span class="ty">EmulatorState</span>           <span class="cm">// clears the queue → motion stops (assert queue == [])</span>
+<span class="kw">pub fn</span> force(fields…) -&gt; <span class="ty">EmulatorState</span>     <span class="cm">// test seam: drop into ANY condition directly</span></pre>
+        <div class="grid2">
+          <div class="panel"><h4>Envelope limits <span class="lenstag robustness">Robustness</span></h4>
+            <p>A move whose target is outside <code>bounds</code> (or past a negative min) replies a Marlin-style <code>error</code> and is <strong>not admitted</strong> — the head does not advance. Bounds are injected at construction (tests pick the envelope), so we add <em>no</em> product default — motion limits are operator/hardware config (<a class="xref" href="../adr/0004-ephemeral-no-persistence.md#adr-0004">ADR-0004</a>).</p></div>
+          <div class="panel"><h4>Abort-mid-move <span class="lenstag state">State</span></h4>
+            <p>Feed a long move, do <em>not</em> tick: the queue is non-empty and the head sits at its start — the "still moving" state. Issue <code>Halt</code>: the queue empties. The e2e test asserts both, turning "physical motion continues after abort" into a regression test.</p></div>
+        </div>
+        <h4>One core, two drivers <span class="lenstag composition">Composition</span></h4>
+        <div class="mermaid">
+flowchart LR
+    CORE["marlin_emulator.gleam<br/>pure: feed · tick · halt · force"]
+    TP["CI / e2e: tests pump tick(dt)<br/>by hand — deterministic"]
+    SH["live: emulator_ffi.mjs shim<br/>auto-pumps tick on a JS interval"]
+    CORE --> TP
+    CORE --> SH
+    SH -->|Backend seam| APP["the real app, hardware-free"]
+    classDef new fill:#1c232d,stroke:#5ad6a8,color:#e6edf3;
+    class CORE,SH,TP new;
+        </div>
+        <div class="callout win"><strong>Same core, both uses.</strong> The deterministic driver makes CI assertions exact; the auto-pump shim makes the emulator a faithful virtual machine you can run the live UI against — so the flow is both <em>tested</em> and <em>demonstrable</em> without the bench. See <a class="xref" href="../adr/0013-faithful-emulator-motion-queue-and-envelope.md#adr-0013">ADR-0013</a>.</div>
+      </section>
+
+      <!-- ============================ 10 ============================ -->
+      <section id="s10">
+        <h2><span class="num">10</span>End-to-end usage walkthrough</h2>
+        <h3 class="t">One board, start to finish</h3>
+        <div class="panel">
+          <ol class="clean">
+            <li><strong>Open &amp; connect.</strong> Open the app URL in Chromium (no install) and click "Connect" — a user gesture that opens the Web Serial port chooser. Drop the KiCad <code>.drl</code> + <code>Edge.Cuts</code> + back-copper exports. <code>board_model.parse</code> runs; the canvas draws outline, holes, and fiducials. The <a class="xref" href="../../CONTEXT.md#term-session">Session</a> is <span class="mono">Loading</span>; <code>screen</code> projects <span class="badge">Load</span>.</li>
+            <li><strong>Pick registration points.</strong> Click 3–4 fiducials (or distinctive holes). Each becomes a pending <a class="xref" href="../../CONTEXT.md#term-correspondence">Correspondence</a>. Session <span class="mono">Aligning</span> → <span class="badge">Align</span>.</li>
+            <li><strong>Energize &amp; jog.</strong> Hit "Enable steppers" (<code>Energize</code> — the app refuses to <code>Jog</code> from <code>Idle</code>, designs out the snap). Jog the bit onto the first physical fiducial.</li>
+            <li><strong>Capture.</strong> "Capture" → app issues <code>Where</code> (<code>M114</code>), pairs it with the selected board point and its machine Z. Repeat for each point.</li>
+            <li><strong>Fit.</strong> On the 3rd non-collinear capture, <code>alignment.fit</code> solves the affine + Z plane and shows <strong>residuals</strong>. Green → <span class="badge">Align (ready)</span>; red → recapture.</li>
+            <li><strong>Dry-run.</strong> "Run dry-run" → <code>Action: RunDryRun</code> → Session <span class="mono">Rehearsing</span>, <code>Plan = [Stream(dry-run)]</code>. Spindle off, hover +0.2 over every hole. <span class="badge">DryRun</span></li>
+            <li><strong>Confirm → Drill.</strong> "Confirm" → <code>Action: ConfirmRegistration</code> → Session <span class="mono">Drilling</span>, <code>Plan = [CancelStream, Stream(drill)]</code> run in one ordered effect: the dry-run cancels, the drill streams cleanly. <code>screen</code> projects <span class="badge">Drill</span> only now — and it's <em>true</em>. <code>M3 S255</code>, plunge −2.5, per-tool bit-change pauses. → <span class="badge">Done</span></li>
+            <li><strong>Abort (any time).</strong> "Abort" → <code>Plan = [Halt]</code>: Session → <span class="mono">Faulted</span>, the wire halts, and the emulator's motion queue clears — the head stops.</li>
+          </ol>
+        </div>
+        <div class="grid2">
+          <div class="panel"><h4><span class="badge">BEFORE</span> three machines, by hand</h4>
+            <ol class="clean">
+              <li>Click Confirm → <code>job: Drilling</code>.</li>
+              <li>…set <code>screen: Drill</code>, <code>progress: 0%</code>.</li>
+              <li>…issue <code>Stream(drill)</code> — <strong>refused <code>Busy</code></strong> (dry-run still streaming).</li>
+              <li>UI shows <strong>Drill / 0%</strong>; nothing moves to the drill program.</li>
+              <li>Abort → <code>Halt</code> faults the controller; queued motion keeps running.</li>
+            </ol></div>
+          <div class="panel"><h4><span class="badge">AFTER</span> one coordinated transition</h4>
+            <ol class="clean">
+              <li>Click Confirm → <code>Action: ConfirmRegistration</code>.</li>
+              <li><code>transition</code>: <code>Rehearsing → Drilling</code>, <code>Plan = [CancelStream, Stream(drill)]</code>.</li>
+              <li><code>app.update</code> runs the plan in one effect — clean.</li>
+              <li><code>screen(session)</code> derives <code>Drill</code> — and it's true.</li>
+              <li>Abort → <code>Plan = [Halt]</code>: session Faulted, wire halts, queue clears; test asserts the head stopped.</li>
+            </ol></div>
+        </div>
+        <p class="callout win">Everything we did by hand — re-export with the right origin, no-mirror, fiducial <code>G92</code>, post-process for <code>M3 S255</code>, dry-run first, <em>and now sequence the confirm + abort across two machines</em> — becomes a single guided flow where the wrong order is <strong>unrepresentable</strong>.</p>
+      </section>
+
+      <!-- ============================ 11 ============================ -->
+      <section id="s11">
+        <h2><span class="num">11</span>Glossary</h2>
+        <h3 class="t">Domain vocabulary</h3>
+        <div class="panel glos">
+          <dl>
+            <dt>Session <span class="newpill">new</span></dt><dd>The coordinator value the Lustre model holds: it <em>nests</em> the <code>Job</code> (stage) and <code>PrinterConnection</code> (wire), <em>projects</em> the UI screen, and on a flow <code>Action</code> returns <code>#(Session, Plan)</code> or a typed <code>Rejected</code>. See <a class="xref" href="../../CONTEXT.md#term-session">CONTEXT</a>.</dd>
+            <dt>Plan <span class="newpill">new</span></dt><dd>The ordered <code>List(printer.Command)</code> a <code>Session</code> transition returns; the app executes it in one effect (never <code>effect.batch</code>). See <a class="xref" href="../../CONTEXT.md#term-plan">CONTEXT</a>.</dd>
+            <dt>BoardModel</dt><dd>Immutable parse of the KiCad outputs: holes, outline, fiducials, tools — all in <strong>board coordinates</strong>.</dd>
+            <dt>Correspondence</dt><dd>A captured pair <code>{board_point, machine_point}</code> — a board feature and where the printer actually is when the operator locates it (carries machine Z).</dd>
+            <dt>PendingAlignment</dt><dd>The in-progress type holding &lt;3 correspondences. Has <em>no</em> transform field — cannot be used to drill.</dd>
+            <dt>Alignment</dt><dd>A solved affine <code>Transform2D</code> + a Z surface plane + residuals. Constructible only via <code>alignment.fit</code> from ≥3 non-collinear points.</dd>
+            <dt>Residuals</dt><dd>Per-point fit error (rms + max). The trust signal; gates the real run.</dd>
+            <dt>PrinterConnection</dt><dd>The single stateful identity: the serial control state machine (pure <code>printer.gleam</code> core + effectful <code>controller.gleam</code> shell over a <code>Backend</code> seam) owning the Web Serial port, the Marlin handshake, live position, and mode.</dd>
+            <dt>MarlinEmulator <span class="newpill">new</span></dt><dd>The faithful, pure Marlin protocol core behind the <code>Backend</code> seam — line/checksum validation, motor state, <code>M0</code> block, <code>M114</code>, plus a motion queue, a <code>tick</code>, and an injected envelope. Drives both deterministic e2e tests and a live in-app virtual machine.</dd>
+            <dt>GcodeProgram</dt><dd>Generated Marlin G-code for one mode (<code>DryRun | Drill</code>), built from an <code>Alignment</code>.</dd>
+            <dt>Job</dt><dd>The session stage machine enforcing the legal order: parse → register → align → dry-run → drill. Embedded by the <code>Session</code>.</dd>
+          </dl>
+        </div>
+      </section>
+
+      <div class="footer">
+        blau-drill · consolidated architecture overview · designed against the five lenses
+        (depth · composition · state · invariants · robustness). Single-operator pure-browser app
+        (Gleam → JavaScript via Lustre, no backend, no install), one <a class="xref" href="../../CONTEXT.md#term-session">Session</a>
+        coordinating stage + wire + screen over a live serial link / faithful emulator. This is the durable,
+        promoted source of truth for structure; it borrows vocabulary from <code>CONTEXT.md</code> and rationale from
+        <code>docs/adr/</code> by link. Build/test: <code>nix develop -c bash -c 'gleam build &amp;&amp; gleam test'</code>.
+      </div>
+    </div>
+
+    <script>
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "dark",
+        themeVariables: {
+          primaryColor: "#1c232d", primaryTextColor: "#e6edf3", lineColor: "#5b6776",
+          fontSize: "14px", fontFamily: "ui-monospace, monospace",
+        },
+        flowchart: { curve: "basis" },
+      });
+    </script>
+  </body>
+</html>

@@ -1,4 +1,5 @@
 # 10. Alignment captures a Z surface plane; no start-of-run touch-off
+<a id="adr-0010"></a>
 
 - **Status:** Accepted
 - **Date:** 2026-06-24

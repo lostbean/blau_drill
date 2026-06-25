@@ -1,4 +1,5 @@
 # 9. Real-hardware-correct streamed program (sanitize, app-pause, centroid exchange)
+<a id="adr-0009"></a>
 
 - **Status:** Accepted (app-pause is now the DEFAULT, commit 8578960; amended by
   ADR-0010 — the start-of-run touch-off `M0`/`G92` is REMOVED and Z is

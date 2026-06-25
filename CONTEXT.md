@@ -7,8 +7,8 @@ test name — use the term as defined below and avoid the synonyms each entry
 explicitly rejects.
 
 > This is a **single-context** repo: this one `CONTEXT.md` plus `docs/adr/`.
-> Architecture rationale lives in
-> [`docs/blau-drill-architecture.html`](docs/blau-drill-architecture.html); the
+> The promoted **architecture overview** (the durable source of truth for
+> structure) lives in [`docs/design/overview.html`](docs/design/overview.html); the
 > product brief in
 > [`docs/design_reference/blau_drill_project_brief.md`](docs/design_reference/blau_drill_project_brief.md).
 
@@ -36,7 +36,7 @@ The registration → alignment progression is the spine of the domain. Illegal
 states ("a drilling job with no transform", "a transform from 2 points") have no
 representation — they cannot be constructed.
 
-### BoardModel
+### BoardModel {#term-boardmodel}
 
 The immutable parse of the KiCad outputs — `holes`, `outline`, `fiducials`,
 `tools`, and bounding box — entirely in **board coordinates**. Produced once at
@@ -70,7 +70,7 @@ per-tool grouping in the G-code and the bit-change pauses during drilling.
 _Avoid:_ "bit list" in code; "ToolTable" is the type, "bit" is the physical
 object the operator swaps.
 
-### Correspondence
+### Correspondence {#term-correspondence}
 
 A captured pair `{board_point, machine_point}` — a board feature paired with
 where the printer head actually is when the operator locates that feature
@@ -79,7 +79,7 @@ accumulate as an append-only list while registering.
 _Avoid:_ "calibration pair" / "mapping" — it is specifically a board↔machine
 pair captured by a human.
 
-### PendingAlignment
+### PendingAlignment {#term-pendingalignment}
 
 The in-progress type holding **fewer than 3** correspondences (or 3+ that are
 still collinear). It has **no transform field** — it is a structurally different
@@ -89,7 +89,7 @@ via `Alignment.fit/1`, to an `Alignment`.
 _Avoid:_ treating it as "an Alignment that isn't ready" — it is a distinct type,
 not a flag on Alignment.
 
-### Alignment
+### Alignment {#term-alignment}
 
 A **solved** value: an affine `Transform2D` for XY, a **Z surface plane** for
 depth, plus its `residuals`. It is **2.5D** (ADR-0010): each Correspondence
@@ -125,7 +125,7 @@ real run (see **residual gate**).
 _Avoid:_ "error score" / "accuracy %"; the UI may show a quality percentage, but
 the domain value is `residuals` (rms + max).
 
-### PrinterConnection
+### PrinterConnection {#term-printerconnection}
 
 The system's **single stateful identity**: the serial control state machine
 owning the link to Marlin for the duration of a drilling session. In the Gleam
@@ -145,7 +145,29 @@ reachable from it so abort is never gated.
 _Avoid:_ "serial driver" / "the port" as the noun, and do **not** model it as
 OctoPrint or a general print host — it owns the port only for the session.
 
-### GcodeProgram
+### MarlinEmulator {#term-marlinemulator}
+
+The **faithful, pure Marlin protocol core** behind the `Backend` seam
+(`control/marlin_emulator.gleam`), used in place of the thin `simulator` to
+exercise real-hardware behaviour headlessly. Beyond protocol fidelity
+(line-number + checksum validation, the resend handshake, motor state, `M0`
+block, `M114`), it models enough **physical time** to make the safety-relevant
+states observable: a **motion queue** that `feed` admits moves into (acking the
+admission, like Marlin's planner buffer) and a separate `tick(state, dt)` that
+drains it — so a test can `feed` a long move and *not* `tick` to hold the head
+mid-move (the "still moving after abort" state), then `halt` to clear the queue
+and assert the head stops. It also carries an injected XYZ **envelope**
+(`bounds`): an out-of-range or past-min move replies a Marlin-style `error` and
+is *not* admitted (the head does not advance). A `force` seam sets arbitrary
+`EmulatorState` directly for edge cases. One pure core, two drivers: tests pump
+`tick` by hand (deterministic CI/e2e); an `emulator_ffi.mjs` shim auto-pumps it
+on a JS interval so the same core runs as a live in-app virtual machine
+(ADR-0013).
+_Avoid:_ confusing it with the **thin `simulator`** (which acks everything and
+masks real bugs); the emulator is the faithful one. Bounds are **test-injected**,
+never a hardcoded product default (motion limits are operator/hardware config).
+
+### GcodeProgram {#term-gcodeprogram}
 
 The generated Marlin G-code for **one mode** (`:dry_run | :drill`), built by
 `GcodeProgram.build(%Alignment{}, opts)`. It requires an `Alignment` by type —
@@ -171,7 +193,7 @@ the bit exchange after retracting Z.
 _Avoid:_ streaming `lines` verbatim (stalls on blanks); "the gcode" without
 distinguishing the sanitized stream from the rich export.
 
-### Job
+### Job {#term-job}
 
 The session **state machine** that enforces the only legal order: `parsed →
 registering → aligned → dry_run → drilling → done`, with `alignment_rejected`
@@ -179,6 +201,40 @@ and `faulted` as off-ramps. Each event exists only in the states where it is
 legal, so illegal sequencing is unrepresentable (no "drill" in `:parsed`; no
 straight edge from `:aligned` to `:drilling`).
 _Avoid:_ "workflow" / "wizard" as the type name; the domain value is **Job**.
+
+### Session {#term-session}
+
+The **coordinator** value the Lustre model holds — the single authority for
+"where the session is." It **nests** the real `Job` (the stage FSM) and
+`PrinterConnection` (the wire FSM) inside its variants — it never *copies* their
+state tags — so there is exactly one `job` and one `printer` in the whole app and
+nothing to keep in sync. Its variants are `Loading | Aligning | Rehearsing |
+Drilling | Completed | Faulted`, each carrying the actual nested machine value(s);
+side routes (Settings, Log) are an orthogonal `Overlay`, not lifecycle states.
+The UI screen is a **pure projection** of it (`session.screen/2`), never a stored
+field, so a handler cannot assert a screen the FSMs contradict. A flow `Action`
+is one pure transition `session.transition(session, action) -> Result(#(Session,
+Plan), Rejected)` (mirroring the printer core's `Step`), which makes
+cross-machine moves atomic and legal-by-construction — e.g. `ConfirmRegistration`
+is the single `Rehearsing -> Drilling` edge returning a cancel-then-drill
+`Plan`, so "start a drill while a stream is in flight" is unrepresentable
+(ADR-0012).
+_Avoid:_ treating it as a *third* state machine that duplicates `job`/`printer` —
+it is a thin outer type that **holds** them; and do not store the screen
+alongside it — the screen is **derived**.
+
+### Plan {#term-plan}
+
+The **ordered** `List(printer.Command)` a `Session` transition returns alongside
+the next session value. The effectful `app.update` executes it **in one effect,
+in order** — never `effect.batch` (which reverses synchronous order and would
+corrupt an order-dependent burst). A `Plan` is what makes a cross-machine action
+atomic: `ConfirmRegistration` yields `[CancelStream, Stream(drill)]` (the cancel
+precedes the drill in the same effect, so the drill is never refused `Busy`);
+`Abort` yields `[Halt]`. The pure `Session` core chooses the commands; the app
+performs them — the same pure-core/effect-edge split as the printer FSM.
+_Avoid:_ "command list" loosely — a **Plan** is specifically the *ordered*
+commands a session transition emits, executed as one effect.
 
 ### Registration
 
