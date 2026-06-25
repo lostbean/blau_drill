@@ -327,7 +327,16 @@ pub type Config {
     zdrill: String,
     zsafe: String,
     zchange: String,
-    drill_feed: String,
+    /// Per-mode feed profiles (ADR-0015), held as input strings. Six fields: the
+    /// dry-run profile (`dry_*`) and the drill profile (`drill_*`), each with an
+    /// XY-travel, plunge, and retract feed (mm/min). Coerced to two
+    /// `config.FeedProfile`s when a run starts.
+    dry_xy_feed: String,
+    dry_plunge_feed: String,
+    dry_retract_feed: String,
+    drill_xy_feed: String,
+    drill_plunge_feed: String,
+    drill_retract_feed: String,
     hover: String,
   )
 }

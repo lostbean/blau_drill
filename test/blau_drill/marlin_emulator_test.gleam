@@ -408,6 +408,24 @@ pub fn halt_mid_move_stops_motion_test() {
   approx(s.x, 0.0) |> should.be_true
 }
 
+// ── M410 quickstop empties the planner queue (ADR-0014) ───────────────────────
+//
+// The host's Quickstop emits a raw `M410` to flush Marlin's planner. The emulator
+// must model that flush so a test can ASSERT it: feeding `M410` empties the
+// motion queue (reusing the same path `halt` does) and acks `["ok"]`. This is the
+// behaviour the dry-run → drill flush relies on — moves already queued must be
+// CANCELLED, not drained.
+pub fn m410_flushes_the_motion_queue_test() {
+  // Energize, then feed a long move so the queue is non-empty (still in flight).
+  let #(s, _) = emu.feed(emu.new(), "M17")
+  let #(s, _) = emu.feed(s, "G0 X500")
+  s.queue |> should.not_equal([])
+  // M410: flush the planner — queue empties, acked with ["ok"].
+  let #(after, replies) = emu.feed(s, "M410")
+  after.queue |> should.equal([])
+  replies |> should.equal(["ok"])
+}
+
 // ── envelope: out-of-bounds moves are rejected (Error reply), not admitted ─────
 
 fn small_envelope() -> emu.EmulatorState {

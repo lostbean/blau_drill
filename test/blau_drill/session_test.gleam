@@ -193,13 +193,27 @@ pub fn confirm_registration_from_rehearsing_builds_drilling_test() {
     session.Drilling(job: j, ..) -> j.state |> should.equal(job.Drilling)
     _ -> should.fail()
   }
-  // THE cross-machine invariant: cancel the in-flight dry-run stream FIRST,
-  // THEN stream the drill program — so the drill can never be refused `Busy`.
+  // THE cross-machine invariant (ADR-0014): QUICKSTOP (flush the planner) the
+  // in-flight dry-run FIRST, THEN stream the drill program — so the dry-run
+  // motion is dead before the drill starts and the drill is never refused `Busy`.
   case plan {
-    [printer.CancelStream, printer.Stream(lines)] ->
+    [printer.Quickstop, printer.Stream(lines)] ->
       lines |> should.equal(drill_lines)
     _ -> should.fail()
   }
+}
+
+// RedoAlignment (Rehearsing → Aligning) QUICKSTOPS the dry-run stream (ADR-0014):
+// going back actually flushes the in-flight dry-run motion rather than letting it
+// drain. Motors stay energized (Quickstop → Jogging), alignment stays valid.
+pub fn redo_alignment_from_rehearsing_quickstops_test() {
+  let assert Ok(#(next, plan)) =
+    session.transition(rehearsing_session(), session.RedoAlignment)
+  case next {
+    session.Aligning(job: j, ..) -> j.state |> should.equal(job.Aligned)
+    _ -> should.fail()
+  }
+  plan |> should.equal([printer.Quickstop])
 }
 
 // No OTHER action from any other state yields a Drilling session.

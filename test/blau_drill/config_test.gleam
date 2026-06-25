@@ -19,10 +19,42 @@ pub fn default_fields_match_consts_test() {
   d.zdrill |> should.equal(config.default_zdrill)
   d.zsafe |> should.equal(config.default_zsafe)
   d.zchange |> should.equal(config.default_zchange)
-  d.drill_feed |> should.equal(config.default_drill_feed)
+  d.drill_feeds |> should.equal(config.default_drill_feeds())
+  d.dry_run_feeds |> should.equal(config.default_dry_run_feeds())
   d.spindle_speed |> should.equal(config.default_spindle_speed)
   d.hover |> should.equal(config.default_hover)
   d.app_pause |> should.equal(config.default_app_pause)
+}
+
+// ── per-mode feed profiles (ADR-0015) ────────────────────────────────────────
+
+// The drill profile: xy + plunge from the tuned base, retract a touch faster.
+pub fn default_drill_feeds_values_test() {
+  let f = config.default_drill_feeds()
+  f.xy_feed |> should.equal(config.default_drill_feed)
+  f.plunge_feed |> should.equal(config.default_drill_feed)
+  // retract a touch faster — 1.5× the tuned base.
+  f.retract_feed |> should.equal(config.default_drill_feed *. 1.5)
+}
+
+// The dry-run profile: xy 2× drill xy (the headline ask), plunge/retract match
+// drill (the hover move is small).
+pub fn default_dry_run_feeds_values_test() {
+  let dry = config.default_dry_run_feeds()
+  let drill = config.default_drill_feeds()
+  // Dry-run xy is double the drill xy.
+  dry.xy_feed |> should.equal(config.default_drill_feed *. 2.0)
+  dry.xy_feed |> should.equal(drill.xy_feed *. 2.0)
+  // Plunge/retract match the drill profile.
+  dry.plunge_feed |> should.equal(drill.plunge_feed)
+  dry.retract_feed |> should.equal(drill.retract_feed)
+}
+
+// The two profiles construct cleanly and the default() wires them in.
+pub fn default_carries_both_profiles_test() {
+  let d = config.default()
+  d.drill_feeds.xy_feed |> should.equal(200.0)
+  d.dry_run_feeds.xy_feed |> should.equal(400.0)
 }
 
 // app_pause defaults ON (ADR-0009): the in-app pause workflow IS the default —

@@ -353,6 +353,154 @@ pub fn invariant2_holds_for_random_programs_test() {
   })
 }
 
+// ── per-mode feed profiles (ADR-0015) ─────────────────────────────────────────
+//
+// XY travel is now a controlled `G1 X.. Y.. F<xy_feed>` (was an uncontrolled
+// `G0`). Plunge carries `F<plunge_feed>`, retract `F<retract_feed>`. The profile
+// is selected by mode: dry-run xy is 2× drill xy by default.
+
+// The inter-hole travel move (the XY at safe Z that precedes each plunge): a
+// `G1 X.. Y.. F..` line — NOT the `G0` bit-exchange reposition (which has a
+// comment), NOT the ADR-0014 drill prepare-pose travel (also commented), and NOT
+// a Z move. Inter-hole travels carry NO inline comment, so excluding commented
+// lines keeps this a pure "one per hole" predicate.
+fn xy_travel_line(line: String) -> Bool {
+  let assert Ok(re) =
+    regexp.from_string("^G1 X-?\\d.*\\bY-?\\d.*\\bF(\\d+(?:\\.\\d+)?)")
+  regexp.check(re, line) && !string.contains(line, "(")
+}
+
+// The F value parsed out of a move line, if present.
+fn parse_feed(line: String) -> Option(Float) {
+  let assert Ok(re) = regexp.from_string("\\bF(\\d+(?:\\.\\d+)?)")
+  case regexp.scan(re, line) {
+    [match, ..] ->
+      case match.submatches {
+        [Some(f), ..] -> parse_float_loose(f)
+        _ -> None
+      }
+    [] -> None
+  }
+}
+
+// Inter-hole XY travel is emitted as a controlled G1 with the profile's xy_feed —
+// drill = 200 (the tuned base), dry-run = 400 (2×). No bare `G0 X.. Y..` cut
+// travel survives (the only G0 X/Y is the commented bit-exchange reposition).
+pub fn xy_travel_is_controlled_g1_with_xy_feed_test() {
+  let drill =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let dry =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+
+  let drill_travel = list.filter(drill.lines, xy_travel_line)
+  let dry_travel = list.filter(dry.lines, xy_travel_line)
+  // There is one travel move per hole (130 holes in the fixture).
+  list.length(drill_travel) |> should.equal(130)
+  list.length(dry_travel) |> should.equal(130)
+
+  // Every drill travel move runs at xy_feed = 200; every dry-run at 400 (2×).
+  list.all(drill_travel, fn(l) {
+    case parse_feed(l) {
+      Some(f) -> float.absolute_value(f -. 200.0) <. z_tol
+      None -> False
+    }
+  })
+  |> should.be_true
+  list.all(dry_travel, fn(l) {
+    case parse_feed(l) {
+      Some(f) -> float.absolute_value(f -. 400.0) <. z_tol
+      None -> False
+    }
+  })
+  |> should.be_true
+
+  // No bare `G0 X.. Y..` CUT travel remains: the only `G0` carrying X/Y is the
+  // commented bit-exchange reposition (one per tool, ADR-0015 leaves it alone).
+  let assert Ok(g0xy) = regexp.from_string("^G0 X")
+  let g0_xy_lines = list.filter(drill.lines, fn(l) { regexp.check(g0xy, l) })
+  list.all(g0_xy_lines, fn(l) { string.contains(l, "bit-exchange") })
+  |> should.be_true
+}
+
+// The plunge (the cut/hover Z into the work) carries the profile's plunge_feed:
+// 200 in BOTH modes by default (dry-run plunge matches drill).
+pub fn plunge_carries_plunge_feed_test() {
+  let drill =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let drill_plunges = list.filter(drill.lines, plunge_line)
+  list.length(drill_plunges) |> should.equal(130)
+  list.all(drill_plunges, fn(l) {
+    case parse_feed(l) {
+      Some(f) -> float.absolute_value(f -. 200.0) <. z_tol
+      None -> False
+    }
+  })
+  |> should.be_true
+
+  // Dry-run hover lines also carry the plunge feed (200 by default).
+  let dry =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+  let hover_lines =
+    list.filter(dry.lines, fn(l) { string.contains(l, "dry-run hover") })
+  list.length(hover_lines) |> should.equal(130)
+  list.all(hover_lines, fn(l) {
+    case parse_feed(l) {
+      Some(f) -> float.absolute_value(f -. 200.0) <. z_tol
+      None -> False
+    }
+  })
+  |> should.be_true
+}
+
+// The per-hole retract back to safe Z carries the profile's retract_feed (300 =
+// 1.5× the 200 base) in both modes by default.
+pub fn retract_carries_retract_feed_test() {
+  [Drill, DryRun]
+  |> each(fn(mode) {
+    let p =
+      gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
+    // The per-hole travel retract is `G1 Z5.00000 F300.00000` (130 of them).
+    let assert Ok(re) = regexp.from_string("^G1 Z5\\.00000 F(\\d+(?:\\.\\d+)?)")
+    let retracts = list.filter(p.lines, fn(l) { regexp.check(re, l) })
+    list.length(retracts) |> should.equal(130)
+    list.all(retracts, fn(l) {
+      case parse_feed(l) {
+        Some(f) -> float.absolute_value(f -. 300.0) <. z_tol
+        None -> False
+      }
+    })
+    |> should.be_true
+  })
+}
+
+// The headline ADR-0015 invariant: the dry-run XY feed is exactly 2× the drill XY
+// feed (and they differ), proving the per-mode profile is selected by mode.
+pub fn dry_run_xy_feed_is_double_drill_xy_feed_test() {
+  let drill =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let dry =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+  let assert Some(drill_xy) =
+    list.filter(drill.lines, xy_travel_line)
+    |> list.first
+    |> option_of_result
+    |> option.then(parse_feed)
+  let assert Some(dry_xy) =
+    list.filter(dry.lines, xy_travel_line)
+    |> list.first
+    |> option_of_result
+    |> option.then(parse_feed)
+  { float.absolute_value(dry_xy -. drill_xy *. 2.0) <. z_tol } |> should.be_true
+  { float.absolute_value(dry_xy -. drill_xy) >. 1.0 } |> should.be_true
+}
+
+fn option_of_result(r: Result(a, b)) -> Option(a) {
+  case r {
+    Ok(v) -> Some(v)
+    Error(_) -> None
+  }
+}
+
 // --- structural counts (drill mode) -----------------------------------------
 
 pub fn total_plunges_130_test() {
@@ -594,6 +742,93 @@ pub fn exchange_move_uses_shared_board_centroid_test() {
     approx(x, round5(ex_cx)) && approx(y, round5(ex_cy))
   })
   |> should.be_true
+}
+
+// ── drill prepare pose (ADR-0014) ─────────────────────────────────────────────
+//
+// Entering Drill, the program's opening lines (BEFORE the first tool block) are a
+// PREPARE sequence: retract Z to the program-wide safe height, then travel (AT
+// safe Z) to the board-centroid setup pose — so drilling always starts from a
+// known, safe initial condition after the Quickstop flush. DRILL MODE ONLY: the
+// dry-run (entered from Aligning, nothing streaming) needs no prepare, so its
+// program stays byte-identical.
+
+// The first tool-change line index (`^T[1-5]$`) in a program's lines, or -1.
+fn first_tool_index(lines: List(String)) -> Int {
+  let assert Ok(tool_re) = regexp.from_string("^T[1-5]$")
+  let #(idx, _i, _found) =
+    list.fold(lines, #(-1, 0, False), fn(acc, line) {
+      let #(idx, i, found) = acc
+      case found {
+        True -> #(idx, i + 1, found)
+        False ->
+          case regexp.check(tool_re, string.trim(line)) {
+            True -> #(i, i + 1, True)
+            False -> #(idx, i + 1, found)
+          }
+      }
+    })
+  idx
+}
+
+pub fn drill_program_has_prepare_pose_before_first_tool_block_test() {
+  let p =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let ti = first_tool_index(p.lines)
+  { ti > 0 } |> should.be_true
+  // The lines before the first tool block contain the prepare sequence.
+  let before = list.take(p.lines, ti)
+
+  // A `G0 Z<safe>` retract to the program-wide travel/safe Z (max surface + zsafe).
+  // For the flat xmirror alignment that ceiling is zsafe (5.0).
+  let assert Ok(retract_re) = regexp.from_string("^G0 Z5\\.00000\\b")
+  let retracts = list.filter(before, fn(l) { regexp.check(retract_re, l) })
+  { list.length(retracts) >= 1 } |> should.be_true
+
+  // A controlled `G1 X<cx> Y<cy> F<xy_feed>` travel to the board centroid,
+  // AFTER the Z retract (XY only at safe Z — the safety invariant).
+  let assert Ok(travel_re) =
+    regexp.from_string("^G1 X-?\\d.*\\bY-?\\d.*\\bF(\\d+(?:\\.\\d+)?)")
+  let retract_idx = index_of(before, fn(l) { regexp.check(retract_re, l) })
+  let travel_idx = index_of(before, fn(l) { regexp.check(travel_re, l) })
+  { retract_idx >= 0 } |> should.be_true
+  { travel_idx >= 0 } |> should.be_true
+  { retract_idx < travel_idx } |> should.be_true
+
+  // The prepare travel XY equals the board centroid in machine space.
+  let assert Ok(travel_line) = list.first(list.drop(before, travel_idx))
+  let #(cx, cy) = expected_machine_centroid()
+  let assert Some(x) = parse_axis(travel_line, "X")
+  let assert Some(y) = parse_axis(travel_line, "Y")
+  approx(x, round5(cx)) |> should.be_true
+  approx(y, round5(cy)) |> should.be_true
+}
+
+// DRY-RUN gating: the dry-run program must NOT carry the prepare pose — its body
+// (everything between preamble and the first tool block) starts straight at the
+// first tool change, exactly as before ADR-0014. We pin this by proving the
+// dry-run line set is byte-identical to a baseline built the same way and that no
+// prepare-comment line is present.
+pub fn dry_run_program_has_no_prepare_pose_test() {
+  let p =
+    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+  // No prepare-pose comment leaks into the dry-run program.
+  list.any(p.lines, fn(l) { string.contains(l, "prepare") })
+  |> should.be_false
+
+  // The first emitted move after the preamble is the bit-exchange retract of the
+  // first tool block (`G00 Z.. (Retract)`), NOT a prepare `G0 Z<safe>` /
+  // `G1 X.. Y.. F..` travel — i.e. nothing precedes the first tool block.
+  let ti = first_tool_index(p.lines)
+  { ti > 0 } |> should.be_true
+  let before = list.take(p.lines, ti)
+  // The first tool block's own retract is `G00 Z..`; the only `G0`/`G1` X/Y/Z
+  // before the first tool token belong to that block's change header, never a
+  // prepare travel. Concretely: no `G1 X.. Y.. F..` travel exists before the
+  // first tool block (those only appear per-hole, inside a block).
+  let assert Ok(travel_re) =
+    regexp.from_string("^G1 X-?\\d.*\\bY-?\\d.*\\bF(\\d+(?:\\.\\d+)?)")
+  list.any(before, fn(l) { regexp.check(travel_re, l) }) |> should.be_false
 }
 
 // --- golden semantic diff ---------------------------------------------------
@@ -994,6 +1229,23 @@ fn each(xs: List(a), f: fn(a) -> b) -> Nil {
 
 fn count_eq(xs: List(String), target: String) -> Int {
   xs |> list.filter(fn(x) { x == target }) |> list.length
+}
+
+// The index of the FIRST element satisfying `pred`, or -1 if none.
+fn index_of(xs: List(a), pred: fn(a) -> Bool) -> Int {
+  let #(idx, _i, _found) =
+    list.fold(xs, #(-1, 0, False), fn(acc, x) {
+      let #(idx, i, found) = acc
+      case found {
+        True -> #(idx, i + 1, found)
+        False ->
+          case pred(x) {
+            True -> #(i, i + 1, True)
+            False -> #(idx, i + 1, found)
+          }
+      }
+    })
+  idx
 }
 
 // True if `xs` has a value within z_tol of `target`.

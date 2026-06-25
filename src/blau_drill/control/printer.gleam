@@ -132,6 +132,14 @@ pub type Command {
   /// connection (and any captured alignment in the host) is preserved. A no-op in
   /// any non-streaming connected state. Use `Halt` for a real emergency abort.
   CancelStream
+  /// Graceful planner flush — emits raw `M410` (abort queued/buffered moves NOW,
+  /// clear the planner) + `M400` (wait for the now-empty queue). RAW/unnumbered
+  /// (like M112/M114) so they action immediately rather than queue behind the
+  /// very moves they must cancel. Valid from `Streaming`/`StreamPaused`/`Jogging`
+  /// -> `Jogging` (motors stay energized, alignment trust preserved). Distinct
+  /// from `CancelStream` (host stop, no write) and `Halt` (M112 -> Faulted). It
+  /// is the flush `CancelStream` was wrongly assumed to be (ADR-0014).
+  Quickstop
   /// Emergency abort (M112, raw): any active state -> `Faulted`.
   Halt
   /// Recover after a fault: `Faulted -> Idle` (resets the line counter).
@@ -323,6 +331,35 @@ pub fn command(state: PrinterState, cmd: Command) -> Step {
     Idle(_, _), CancelStream -> accepted(state, [], cmd)
     Jogging(_, _), CancelStream -> accepted(state, [], cmd)
     Faulted, CancelStream -> refused(state, cmd, WhileFaulted)
+
+    // ── quickstop (graceful planner flush — raw M410 + M400, ADR-0014) ───────
+    // The flush CancelStream was wrongly assumed to be: emit RAW (unnumbered)
+    // M410 (abort all queued/buffered moves NOW, clear the planner) + M400 (wait
+    // for the now-empty queue), so they action immediately rather than queue
+    // behind the very moves they must cancel. Lands in Jogging (motors stay
+    // energized — alignment trust, ADR-0011), NOT Faulted. The two writes are an
+    // order-dependent burst returned as ONE list; the controller writes them in
+    // ONE effect (never effect.batch).
+    //
+    // From a stream we interrupted mid-handshake, so the in-flight `N` was never
+    // ok'd: reset line_no to 0 (like CancelStream) so the next stream starts at
+    // N1. From Jogging keep the existing line_no.
+    Streaming(_, _), Quickstop ->
+      accepted(Jogging(line_no: 0, pending: PendingNone), ["M410", "M400"], cmd)
+    StreamPaused(_, _), Quickstop ->
+      accepted(Jogging(line_no: 0, pending: PendingNone), ["M410", "M400"], cmd)
+    Jogging(line_no, _), Quickstop ->
+      accepted(
+        Jogging(line_no: line_no, pending: PendingNone),
+        ["M410", "M400"],
+        cmd,
+      )
+    // Idle = connected, motors OFF, nothing streaming: nothing to flush. Quickstop
+    // is a motion-control verb, so it is REFUSED here (NotEnergized) — keeping it
+    // a motion-gated command. (Disconnected is covered by the catch-all above;
+    // Faulted refuses WhileFaulted.)
+    Faulted, Quickstop -> refused(state, cmd, WhileFaulted)
+    Idle(_, _), Quickstop -> refuse_motion(state, cmd)
 
     // ── halt (M112, raw) — always reachable from an active state ─────────────
     Faulted, Halt ->

@@ -274,8 +274,42 @@ fn diagnostic_bar(model: Model) -> Element(model.Msg) {
 
 // ── Stage 2: Physical Alignment ──────────────────────────────────────────────
 
+/// Minimum captured fiducials needed before an alignment can be fit. Shared by
+/// the Fit button's `disabled` check and the next-step highlight below.
+const min_fit_points = 3
+
+/// Which alignment action is the operator's NEXT step. Derived purely from
+/// (captured count, fiducial target) so the Capture / Fit buttons can carry the
+/// primary (amber) emphasis in turn — no extra state threaded through the model.
+/// Below the 3-point minimum to fit, Capture is next; at/above it, Fit is next
+/// (at N/N captured ≥ target ≥ 3, so Fit is correctly next).
+pub type NextStep {
+  CaptureNext
+  FitNext
+}
+
+pub fn next_step(captured: Int, _target: Int) -> NextStep {
+  case captured >= min_fit_points {
+    True -> FitNext
+    False -> CaptureNext
+  }
+}
+
 pub fn align(model: Model) -> Element(model.Msg) {
   let motors_online = session.is_jogging(sess(model))
+  let captured_count = list.length(model.captured)
+  let next = next_step(captured_count, model.fiducial_target)
+  // Capture is done once we hit the target — you can't over-capture.
+  let capture_done = captured_count >= model.fiducial_target
+  // The next action wears the amber primary; the others recede to surface.
+  let capture_emphasis = case next == CaptureNext && motors_online {
+    True -> "btn-primary"
+    False -> "btn-surface"
+  }
+  let fit_emphasis = case next {
+    FitNext -> "btn-primary"
+    CaptureNext -> "btn-surface"
+  }
   h.div([a.class("stage-cols")], [
     h.div([a.class("canvas-frame")], [board_canvas.view(canvas_data(model))]),
     h.aside([a.class("aside aside-360")], [
@@ -295,15 +329,15 @@ pub fn align(model: Model) -> Element(model.Msg) {
       first_fiducial_hint(model, motors_online),
       h.button(
         [
-          a.class("btn btn-primary btn-block btn-lg"),
+          a.class("btn " <> capture_emphasis <> " btn-block btn-lg"),
           a.attribute("type", "button"),
-          a.disabled(!motors_online),
+          a.disabled(!motors_online || capture_done),
           event.on_click(CaptureFiducial),
         ],
         [
           h.text(
             "Capture Fiducial ("
-            <> int.to_string(list.length(model.captured))
+            <> int.to_string(captured_count)
             <> "/"
             <> int.to_string(model.fiducial_target)
             <> ")",
@@ -312,9 +346,9 @@ pub fn align(model: Model) -> Element(model.Msg) {
       ),
       h.button(
         [
-          a.class("btn btn-surface btn-block"),
+          a.class("btn " <> fit_emphasis <> " btn-block"),
           a.attribute("type", "button"),
-          a.disabled(list.length(model.captured) < 3),
+          a.disabled(captured_count < min_fit_points),
           event.on_click(Fit),
         ],
         [h.text("Fit Alignment")],
@@ -1196,9 +1230,22 @@ fn defaults_panel(c: Config) -> List(Element(model.Msg)) {
         number_field("zchange", "zchange (bit change)", c.zchange),
       ]),
     ]),
-    card("Feed & Hover", [
+    card("Feeds & Speeds (mm/min)", [
+      h.h4([], [h.text("Dry-run")]),
+      h.div([a.class("field-grid cols-3")], [
+        number_field("dry_xy_feed", "XY travel", c.dry_xy_feed),
+        number_field("dry_plunge_feed", "Plunge", c.dry_plunge_feed),
+        number_field("dry_retract_feed", "Retract", c.dry_retract_feed),
+      ]),
+      h.h4([], [h.text("Drill")]),
+      h.div([a.class("field-grid cols-3")], [
+        number_field("drill_xy_feed", "XY travel", c.drill_xy_feed),
+        number_field("drill_plunge_feed", "Plunge", c.drill_plunge_feed),
+        number_field("drill_retract_feed", "Retract", c.drill_retract_feed),
+      ]),
+    ]),
+    card("Hover", [
       h.div([a.class("field-grid cols-2")], [
-        number_field("drill_feed", "Drill Feed (mm/min)", c.drill_feed),
         number_field("hover", "Dry-run Hover (mm)", c.hover),
       ]),
     ]),

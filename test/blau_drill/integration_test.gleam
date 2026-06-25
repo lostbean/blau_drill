@@ -136,7 +136,7 @@ fn build_drill_program() -> gcode_program.GcodeProgram {
 
 /// Stream the real drill program through the real sim + real transitions; the
 /// machine reaches `StreamComplete` → `Idle` having confirmed every streamed
-/// line and drilled every hole (one `G0 X..` per hole).
+/// line and drilled every hole (one `G1 X.. Y.. F..` travel move per hole).
 ///
 /// We stream `gcode_program.stream_lines(program)` — the exact form the app
 /// streams (`app.gleam`): the rich `.lines` minus blank lines and full-line
@@ -157,12 +157,17 @@ pub fn drill_program_streams_to_complete_test() -> Promise(Nil) {
   // The app streams the FILTERED view, not the rich `.lines`. Mirror that here.
   let lines = gcode_program.stream_lines(program)
   let total_lines = list.length(lines)
-  // Count actual hole moves: `G0 X..` lines, EXCLUDING the per-tool-block
-  // bit-exchange move (also a `G0 X..`, but carrying the exchange comment).
+  // Count actual hole moves: the inter-hole XY travel is now a controlled
+  // `G1 X.. Y.. F<xy_feed>` (ADR-0015; was a `G0 X..` rapid). The only `G0 X..`
+  // left is the per-tool-block bit-exchange reposition, which is NOT counted. The
+  // ADR-0014 drill prepare-pose travel is ALSO a `G1 X.. Y.. F..` but carries an
+  // inline `( prepare: ... )` comment, so excluding commented lines keeps this a
+  // pure "one inter-hole travel per hole" count.
   let hole_count =
     list.count(lines, fn(l) {
-      string.starts_with(l, "G0 X")
-      && !string.contains(l, "bit-exchange position")
+      string.starts_with(l, "G1 X")
+      && string.contains(l, " F")
+      && !string.contains(l, "(")
     })
   hole_count |> should.equal(130)
 

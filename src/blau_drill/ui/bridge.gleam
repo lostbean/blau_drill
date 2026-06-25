@@ -433,12 +433,25 @@ pub fn board_to_machine_inverse(
 /// Config and are not part of the generator tunables this returns.
 pub fn gcode_config(c: model.Config, mode: config.Mode) -> GcodeConfig {
   let d = config.default()
+  // Per-mode feed profiles (ADR-0015): build each from its six string fields,
+  // falling back to the domain default for that mode/feed when blank/invalid.
+  let dry = config.default_dry_run_feeds()
+  let drill = config.default_drill_feeds()
   config.GcodeConfig(
     mode:,
     zdrill: parse_float(c.zdrill, d.zdrill),
     zsafe: parse_float(c.zsafe, d.zsafe),
     zchange: parse_float(c.zchange, d.zchange),
-    drill_feed: parse_float(c.drill_feed, d.drill_feed),
+    dry_run_feeds: config.FeedProfile(
+      xy_feed: parse_float(c.dry_xy_feed, dry.xy_feed),
+      plunge_feed: parse_float(c.dry_plunge_feed, dry.plunge_feed),
+      retract_feed: parse_float(c.dry_retract_feed, dry.retract_feed),
+    ),
+    drill_feeds: config.FeedProfile(
+      xy_feed: parse_float(c.drill_xy_feed, drill.xy_feed),
+      plunge_feed: parse_float(c.drill_plunge_feed, drill.plunge_feed),
+      retract_feed: parse_float(c.drill_retract_feed, drill.retract_feed),
+    ),
     spindle_speed: parse_int(c.spindle_speed, d.spindle_speed),
     hover: parse_float(c.hover, d.hover),
     // A plain Bool toggle (like auto_connect): pass it through to the generator,

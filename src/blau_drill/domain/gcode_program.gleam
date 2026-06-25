@@ -9,7 +9,8 @@
 ////
 //// 1. **Never traverse XY without Z safe.** Every hole is drilled through the
 ////    `safe_move` combinator, which *always* emits a retract to `zsafe` before
-////    the next `G0 X.. Y..` rapid.
+////    the next `G1 X.. Y.. F<xy_feed>` travel move (ADR-0015: controlled XY
+////    travel — the speed is operator-tunable, the Z is still the safe height).
 //// 2. **Spindle running before any plunge (drill mode).** A tool block emits
 ////    its holes only after the spindle-on step; in `DryRun` the plunge depth is
 ////    the positive hover, so a negative Z is unrepresentable in that mode.
@@ -92,19 +93,27 @@ pub fn build(
   // uses this shared ceiling.
   let safe_z = travel_safe_z(machine_holes, cfg)
 
+  // Select the active per-mode feed profile (ADR-0015). Every controlled move
+  // (XY travel, plunge, retract) formats with this profile's feed.
+  let feeds = case cfg.mode {
+    Drill -> cfg.drill_feeds
+    DryRun -> cfg.dry_run_feeds
+  }
+
   let body =
     list.flat_map(order, fn(tool) {
       let holes = case dict.get(by_tool, tool) {
         Ok(hs) -> hs
         Error(_) -> []
       }
-      tool_block(tool, holes, board.tools, cfg, centroid, safe_z)
+      tool_block(tool, holes, board.tools, cfg, feeds, centroid, safe_z)
     })
 
   let lines =
     list.flatten([
       header(board, order, cfg),
       preamble(cfg),
+      prepare(cfg, centroid, safe_z, feeds),
       body,
       postamble(cfg),
     ])
@@ -227,6 +236,48 @@ fn preamble(_cfg: GcodeConfig) -> List(String) {
   ]
 }
 
+// ---------------------------------------------------------------------------
+// Prepare pose (ADR-0014) — drill mode only.
+//
+// Entering Drill always follows a planner flush (the host's Quickstop: raw
+// M410+M400). The drill program's opening lines then re-establish a KNOWN, SAFE
+// initial condition before the first tool block: retract Z to the program-wide
+// travel/safe height, then travel (AT that safe Z) to the board-centroid setup
+// pose — the same well-defined spot used for bit changes. So drilling always
+// starts from a settled, defined pose, never wherever the flushed dry-run left
+// the head.
+//
+// XY-only-at-safe-Z invariant: the Z retract (a `G0 Z<safe>` upward move — going
+// UP to safe is never a plunge hazard) comes BEFORE the controlled
+// `G1 X.. Y.. F<xy_feed>` travel, so the XY traverse is at the safe ceiling.
+//
+// DRILL ONLY: the dry-run is entered from Aligning where nothing streams, so its
+// flush is a benign no-op and it needs no prepare. Gating on `cfg.mode == Drill`
+// keeps the dry-run program byte-identical (no perturbation of its line set).
+fn prepare(
+  cfg: GcodeConfig,
+  centroid: #(Float, Float),
+  safe_z: Float,
+  feeds: config.FeedProfile,
+) -> List(String) {
+  case cfg.mode {
+    DryRun -> []
+    Drill -> {
+      let #(cx, cy) = centroid
+      [
+        "G0 Z" <> fmt5(safe_z) <> " ( prepare: retract to travel-safe Z )",
+        "G1 X"
+          <> fmt5(cx)
+          <> " Y"
+          <> fmt5(cy)
+          <> " F"
+          <> fmt5(feeds.xy_feed)
+          <> " ( prepare: travel to board-centroid setup pose )",
+      ]
+    }
+  }
+}
+
 // A pause point: the real `M0` machine-stop line (DEFAULT, and g-code export),
 // OR the in-app pause sentinel when `app_pause` is on. Either way the program
 // PAUSES here — the bit swap / touch-off opportunity is never skipped, only its
@@ -250,6 +301,7 @@ fn tool_block(
   holes: List(MachineHole),
   tools: board_model.ToolTable,
   cfg: GcodeConfig,
+  feeds: config.FeedProfile,
   centroid: #(Float, Float),
   safe_z: Float,
 ) -> List(String) {
@@ -283,13 +335,17 @@ fn tool_block(
         "G0 Z" <> fmt5(safe_z),
         "G04 P1.00000",
         "",
-        "G1 F" <> fmt5(cfg.drill_feed),
+        // Belt-and-braces default feed for the holes that follow. Every move now
+        // carries its own explicit F (ADR-0015), so this is redundant, but it is
+        // kept (sourced from the active profile's xy_feed) to minimize behavioral
+        // surprise vs the prior per-tool `G1 F<drill_feed>` line.
+        "G1 F" <> fmt5(feeds.xy_feed),
       ],
     ])
 
   list.append(
     change,
-    list.flat_map(holes, fn(h) { drill_hole(h, cfg, safe_z) }),
+    list.flat_map(holes, fn(h) { drill_hole(h, cfg, feeds, safe_z) }),
   )
 }
 
@@ -309,45 +365,63 @@ fn spindle_on_step(cfg: GcodeConfig) -> List(String) {
 // ---------------------------------------------------------------------------
 // Per-hole emission — the `safe_move` combinator.
 //
-// STRUCTURAL invariant 1: every hole is `G0 X.. Y..` at the current safe Z,
-// then plunge, then ALWAYS retract to zsafe.
+// STRUCTURAL invariant 1: every hole is `G1 X.. Y.. F<xy_feed>` at the current
+// safe Z, then plunge (`F<plunge_feed>`), then ALWAYS retract to zsafe
+// (`F<retract_feed>`). Per ADR-0015 every move carries its own feed; only the
+// SPEED changes — the XY is still commanded at the program-wide safe height.
 // ---------------------------------------------------------------------------
 
 fn drill_hole(
   hole: MachineHole,
   cfg: GcodeConfig,
+  feeds: config.FeedProfile,
   safe_z: Float,
 ) -> List(String) {
-  safe_move(safe_z, hole.x, hole.y, fn() { [plunge_line(hole, cfg)] })
+  safe_move(safe_z, feeds, hole.x, hole.y, fn() {
+    [plunge_line(hole, cfg, feeds)]
+  })
 }
 
 // Travel to (x, y) at the program-wide travel/safe Z, run `body` (the plunge),
 // then retract back to that same safe Z. XY is only ever commanded at safe_z, so
 // invariant 1 holds: the bit can never traverse XY where it could strike the
-// board.
+// board. The XY travel is a controlled `G1 ... F<xy_feed>` (ADR-0015), the
+// retract a controlled `G1 Z<safe_z> F<retract_feed>`.
 fn safe_move(
   safe_z: Float,
+  feeds: config.FeedProfile,
   x: Float,
   y: Float,
   body: fn() -> List(String),
 ) -> List(String) {
-  list.flatten([[fmt_xy_rapid(x, y)], body(), [retract(safe_z)]])
+  list.flatten([
+    [fmt_xy_travel(x, y, feeds.xy_feed)],
+    body(),
+    [retract(safe_z, feeds.retract_feed)],
+  ])
 }
 
-fn retract(safe_z: Float) -> String {
-  fmt_g1_z(safe_z)
+fn retract(safe_z: Float, retract_feed: Float) -> String {
+  fmt_g1_z_feed(safe_z, retract_feed)
 }
 
 // The plunge line, PLANE-RELATIVE: the target Z is the hole's local surface plus
-// the config offset. In Drill -> `G1 Z<surface + zdrill>` (zdrill negative). In
-// DryRun -> `G1 Z<surface + hover>` (hover positive), so a negative Z is
+// the config offset, moved at `feeds.plunge_feed` (ADR-0015). In Drill ->
+// `G1 Z<surface + zdrill> F<plunge_feed>` (zdrill negative). In DryRun ->
+// `G1 Z<surface + hover> F<plunge_feed>` (hover positive), so a negative Z is
 // unrepresentable in dry-run as long as surface + hover >= 0.
-fn plunge_line(hole: MachineHole, cfg: GcodeConfig) -> String {
+fn plunge_line(
+  hole: MachineHole,
+  cfg: GcodeConfig,
+  feeds: config.FeedProfile,
+) -> String {
   case cfg.mode {
-    Drill -> fmt_g1_z(hole.surface_z +. cfg.zdrill)
+    Drill -> fmt_g1_z_feed(hole.surface_z +. cfg.zdrill, feeds.plunge_feed)
     DryRun ->
       "G1 Z"
       <> fmt5(hole.surface_z +. cfg.hover)
+      <> " F"
+      <> fmt5(feeds.plunge_feed)
       <> "  ( dry-run hover, was Z"
       <> fmt5(cfg.zdrill)
       <> " )"
@@ -452,12 +526,16 @@ fn fmt3(v: Float) -> String {
   float_to_decimals(v, 3)
 }
 
-fn fmt_xy_rapid(x: Float, y: Float) -> String {
-  "G0 X" <> fmt5(x) <> " Y" <> fmt5(y)
+// Controlled inter-hole XY travel (ADR-0015): `G1 X.. Y.. F<xy_feed>` (was an
+// uncontrolled `G0` rapid). Only the speed is settable; the Z is unchanged — the
+// caller (`safe_move`) only ever emits this at the program-wide safe height.
+fn fmt_xy_travel(x: Float, y: Float, xy_feed: Float) -> String {
+  "G1 X" <> fmt5(x) <> " Y" <> fmt5(y) <> " F" <> fmt5(xy_feed)
 }
 
-fn fmt_g1_z(z: Float) -> String {
-  "G1 Z" <> fmt5(z)
+// A controlled Z move carrying its own feed: `G1 Z<z> F<feed>` (plunge/retract).
+fn fmt_g1_z_feed(z: Float, feed: Float) -> String {
+  "G1 Z" <> fmt5(z) <> " F" <> fmt5(feed)
 }
 
 // Diameter formatting: 0.600 -> "0.6", 1.000 -> "1", 1.200 -> "1.2".

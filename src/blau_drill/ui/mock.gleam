@@ -122,7 +122,15 @@ pub fn default_config() -> Config {
     zdrill: "-1.5",
     zsafe: "3.0",
     zchange: "15.0",
-    drill_feed: "120",
+    // Per-mode feed profiles (ADR-0015), seeded from the prior "120" drill feed:
+    // drill xy/plunge = 120, retract a touch faster (180 = 1.5×); dry-run xy = 240
+    // (2×), plunge/retract match drill (120/180).
+    dry_xy_feed: "240",
+    dry_plunge_feed: "120",
+    dry_retract_feed: "180",
+    drill_xy_feed: "120",
+    drill_plunge_feed: "120",
+    drill_retract_feed: "180",
     hover: "1.0",
   )
 }

@@ -1791,6 +1791,20 @@ button {
   letter-spacing: 0.1em;
   color: var(--primary);
 }
+/* Sub-group label inside a card (e.g. the Dry-run / Drill columns under
+   "Feeds & Speeds"). Smaller and muted vs the card's h3 title. */
+.config-card h4 {
+  margin: 1rem 0 0.5rem;
+  font-family: var(--font-data);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--on-surface-variant);
+}
+.config-card h4:first-of-type {
+  margin-top: 0;
+}
 .field-grid {
   display: grid;
   gap: 1.5rem;

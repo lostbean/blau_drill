@@ -139,9 +139,32 @@ pub fn gcode_config_parses_default_config_test() {
   close(cfg.zdrill, -1.5) |> should.be_true
   close(cfg.zsafe, 3.0) |> should.be_true
   close(cfg.zchange, 15.0) |> should.be_true
-  close(cfg.drill_feed, 120.0) |> should.be_true
+  // Per-mode feed profiles (ADR-0015), parsed from the six string fields.
+  close(cfg.drill_feeds.xy_feed, 120.0) |> should.be_true
+  close(cfg.drill_feeds.plunge_feed, 120.0) |> should.be_true
+  close(cfg.drill_feeds.retract_feed, 180.0) |> should.be_true
+  // Dry-run xy is 2× the drill xy by default; plunge/retract match drill.
+  close(cfg.dry_run_feeds.xy_feed, 240.0) |> should.be_true
+  close(cfg.dry_run_feeds.plunge_feed, 120.0) |> should.be_true
+  close(cfg.dry_run_feeds.retract_feed, 180.0) |> should.be_true
   cfg.spindle_speed |> should.equal(200)
   close(cfg.hover, 1.0) |> should.be_true
+}
+
+// A blank/invalid feed field falls back to that mode/feed's domain default.
+pub fn gcode_config_feeds_fall_back_to_defaults_test() {
+  let c =
+    model.Config(
+      ..mock.default_config(),
+      drill_xy_feed: "",
+      dry_xy_feed: "not-a-number",
+    )
+  let cfg = bridge.gcode_config(c, config.Drill)
+  // Falls back to the domain default profiles.
+  close(cfg.drill_feeds.xy_feed, config.default_drill_feeds().xy_feed)
+  |> should.be_true
+  close(cfg.dry_run_feeds.xy_feed, config.default_dry_run_feeds().xy_feed)
+  |> should.be_true
 }
 
 pub fn gcode_config_carries_drill_mode_test() {

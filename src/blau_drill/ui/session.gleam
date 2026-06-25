@@ -22,9 +22,10 @@
 ////     mirrors `printer.gleam`'s `Step` one level up: it returns a `Plan` (an
 ////     ordered `List(printer.Command)`) that the app runs in ONE effect, in order
 ////     (never `effect.batch`). So `ConfirmRegistration` is the single transition
-////     `Rehearsing → Drilling` returning `[CancelStream, Stream(drill)]` — the
-////     cancel precedes the drill in the same effect, so the drill can never be
-////     refused `Busy`. The `Drilling` variant is constructible ONLY by that
+////     `Rehearsing → Drilling` returning `[Quickstop, Stream(drill)]` — the
+////     quickstop (planner flush) precedes the drill in the same effect, so the
+////     dry-run motion is dead and the drill can never be refused `Busy`
+////     (ADR-0014). The `Drilling` variant is constructible ONLY by that
 ////     transition, so "Drilling without its own in-flight stream" has no
 ////     representation. `Abort` is one transition whose `Plan` is `[Halt]`.
 ////
@@ -109,11 +110,13 @@ pub type Action {
   RestartAlignment
   /// Run the mandatory dry-run rehearsal, streaming `dry_run_lines`.
   RunDryRun(dry_run_lines: List(String))
-  /// Step back from the dry-run to `Aligned` (cancels the dry-run stream).
+  /// Step back from the dry-run to `Aligned` (quickstops/flushes the dry-run
+  /// stream — M410+M400 — so the in-flight motion stops, ADR-0014).
   RedoAlignment
   /// Confirm registration: `Rehearsing → Drilling`. The ONLY constructor of
-  /// `Drilling`. Cancels the in-flight dry-run stream FIRST, then streams
-  /// `drill_lines` — in one ordered Plan, so the drill is never refused `Busy`.
+  /// `Drilling`. Quickstops (flushes the planner of) the in-flight dry-run FIRST,
+  /// then streams `drill_lines` — in one ordered Plan, so the dry-run motion is
+  /// dead and the drill is never refused `Busy` (ADR-0014).
   ConfirmRegistration(drill_lines: List(String))
   /// The run completed (all holes drilled).
   MarkComplete
@@ -256,28 +259,38 @@ pub fn transition(s: Session, a: Action) -> Result(#(Session, Plan), Rejected) {
       }
     _, RunDryRun(_) -> Error(IllegalHere(a))
 
-    // ── RedoAlignment: Rehearsing → Aligning, cancel the dry-run stream ───────
+    // ── RedoAlignment: Rehearsing → Aligning, quickstop (flush) the dry-run ───
+    // stream — going back actually STOPS the in-flight dry-run motion (M410+M400)
+    // rather than letting it drain (ADR-0014). Motors stay energized (Quickstop →
+    // Jogging), alignment stays valid; the operator re-aligns from a settled head.
     Rehearsing(job: j, printer: p), RedoAlignment ->
       case job.transition(j, job.RedoAlignment) {
         Ok(j2) -> {
-          let next_wire = run_wire(p, printer.CancelStream)
-          Ok(#(Aligning(job: j2, printer: next_wire), [printer.CancelStream]))
+          let next_wire = run_wire(p, printer.Quickstop)
+          Ok(#(Aligning(job: j2, printer: next_wire), [printer.Quickstop]))
         }
         Error(e) -> Error(JobRefused(e))
       }
     _, RedoAlignment -> Error(IllegalHere(a))
 
     // ── ConfirmRegistration: Rehearsing → Drilling. THE only constructor of ──
-    // Drilling. Cancel the in-flight dry-run stream FIRST, then stream the
-    // drill program — in one ordered Plan, so the drill is never refused `Busy`.
+    // Drilling. Quickstop (flush the planner) the in-flight dry-run FIRST, then
+    // stream the drill program — in one ordered Plan (ADR-0014). The flush
+    // (M410+M400) physically empties Marlin's planner so the dry-run moves are
+    // DEAD before the drill stream, and the drill is never refused `Busy`. The
+    // drill program's own preamble re-establishes safe Z + the centroid setup
+    // pose (the prepare block).
     Rehearsing(job: j, printer: p), ConfirmRegistration(drill_lines) ->
       case job.transition(j, job.ConfirmRegistration) {
         Ok(j2) -> {
-          let plan = [printer.CancelStream, printer.Stream(drill_lines)]
-          // Apply the cancel then the stream to the wire, in order, so the
-          // nested PrinterState matches the Plan the app will run.
-          let after_cancel = run_wire(p, printer.CancelStream)
-          let after_stream = run_wire(after_cancel, printer.Stream(drill_lines))
+          let plan = [printer.Quickstop, printer.Stream(drill_lines)]
+          // Apply the quickstop then the stream to the wire, in order, so the
+          // nested PrinterState matches the Plan the app will run. Quickstop from
+          // Streaming lands in Jogging, and Stream is valid from Jogging — so the
+          // nested wire ends in Streaming (drill), exactly as before.
+          let after_quickstop = run_wire(p, printer.Quickstop)
+          let after_stream =
+            run_wire(after_quickstop, printer.Stream(drill_lines))
           Ok(#(Drilling(job: j2, printer: after_stream), plan))
         }
         Error(e) -> Error(JobRefused(e))

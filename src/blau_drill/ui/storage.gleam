@@ -67,7 +67,12 @@ fn encode_config(c: Config) -> String {
     #("zdrill", c.zdrill),
     #("zsafe", c.zsafe),
     #("zchange", c.zchange),
-    #("drill_feed", c.drill_feed),
+    #("dry_xy_feed", c.dry_xy_feed),
+    #("dry_plunge_feed", c.dry_plunge_feed),
+    #("dry_retract_feed", c.dry_retract_feed),
+    #("drill_xy_feed", c.drill_xy_feed),
+    #("drill_plunge_feed", c.drill_plunge_feed),
+    #("drill_retract_feed", c.drill_retract_feed),
     #("hover", c.hover),
   ]
   |> list.map(fn(kv) { kv.0 <> "=" <> kv.1 })
@@ -104,7 +109,12 @@ fn decode_config(blob: String, seed: Config) -> Config {
     zdrill: get("zdrill", seed.zdrill),
     zsafe: get("zsafe", seed.zsafe),
     zchange: get("zchange", seed.zchange),
-    drill_feed: get("drill_feed", seed.drill_feed),
+    dry_xy_feed: get("dry_xy_feed", seed.dry_xy_feed),
+    dry_plunge_feed: get("dry_plunge_feed", seed.dry_plunge_feed),
+    dry_retract_feed: get("dry_retract_feed", seed.dry_retract_feed),
+    drill_xy_feed: get("drill_xy_feed", seed.drill_xy_feed),
+    drill_plunge_feed: get("drill_plunge_feed", seed.drill_plunge_feed),
+    drill_retract_feed: get("drill_retract_feed", seed.drill_retract_feed),
     hover: get("hover", seed.hover),
   )
 }

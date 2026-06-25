@@ -212,3 +212,41 @@ pub fn abort_mid_move_stops_the_head_test() {
   let stopped = emu.halt(moving)
   stopped.queue |> should.equal([])
 }
+
+// ── TEST (c): Quickstop's M410 FLUSHES the queued dry-run moves (ADR-0014) ─────
+//
+// This is the e2e-level proof of the ADR-0014 flush — the assertion the existing
+// `confirm_registration_starts_the_drill_stream_test` lacked. That test checks
+// the streamed program is the DRILL program by line count, but it does NOT prove
+// the planner was flushed (the host merely stopped sending dry-run lines).
+//
+// WHY AT THE PURE-CORE LEVEL (not through the Backend transport): the live `write`
+// FFI (`emulator_ffi.mjs`) ALWAYS auto-pumps the queue (`tick_all` on every
+// write), so a move written through the Backend drains immediately — there is no
+// way to reach a `queue > 0` ("still moving") state through `write`. So, exactly
+// as test (b) does, this drives the PURE emulator core (`emu.feed`), where the
+// flush is observable: feed queued dry-run moves WITHOUT ticking, then feed the
+// quickstop's `M410` and assert the queue is EMPTY — the dry-run moves are GONE,
+// not drained. (The old test only proved the host stopped sending.)
+pub fn quickstop_flushes_queued_dry_run_moves_test() {
+  // Energize the pure emulator so moves are actually admitted to the planner.
+  let #(energized, _ok) = emu.feed(emu.new(), "M17")
+
+  // Feed several "queued dry-run moves" WITHOUT ticking — they sit in the planner
+  // (in flight), exactly the moves the bug let keep executing under the drill.
+  let #(s, _) = emu.feed(energized, "G0 X100")
+  let #(s, _) = emu.feed(s, "G0 Y100")
+  s.queue |> should.not_equal([])
+
+  // The quickstop's planner-flush line: M410 EMPTIES the queue — the queued
+  // dry-run moves are CANCELLED, not drained. This is the assertion the old test
+  // lacked: it proves the flush physically empties the planner.
+  let #(flushed, replies) = emu.feed(s, "M410")
+  flushed.queue |> should.equal([])
+  replies |> should.equal(["ok"])
+
+  // The full Quickstop write pair ends with M400 (wait for the now-empty queue):
+  // with the queue already empty it is an immediate ok.
+  let #(_settled, m400_replies) = emu.feed(flushed, "M400")
+  m400_replies |> should.equal(["ok"])
+}

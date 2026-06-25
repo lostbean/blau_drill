@@ -251,7 +251,11 @@ fn execute(
     Pause -> #(EmulatorState(..state, paused: True), [])
     // M112 emergency: ack. (Minimal: no halted flag needed by chunk 1.)
     Emergency -> #(state, ["ok"])
-    // Everything else (M3/M5/G4/G92/M6/unknown-but-harmless) -> ok.
+    // M410 quickstop: flush the planner — empty the motion queue (the abort the
+    // host's Quickstop relies on, ADR-0014), reusing `halt`. Ack with ["ok"].
+    FlushQueue -> #(halt(state), ["ok"])
+    // Everything else (M3/M5/G4/G92/M6/M400/unknown-but-harmless) -> ok. (M400 is
+    // wait-for-queue; after M410 the queue is already empty, so an immediate ok.)
     Other -> #(state, ["ok"])
   }
 }
@@ -263,6 +267,7 @@ type Command {
   ReportPosition
   Pause
   Emergency
+  FlushQueue
   Other
 }
 
@@ -298,7 +303,11 @@ fn classify(cmd: String) -> Command {
                             False ->
                               case has_word(cmd, "M112") {
                                 True -> Emergency
-                                False -> Other
+                                False ->
+                                  case has_word(cmd, "M410") {
+                                    True -> FlushQueue
+                                    False -> Other
+                                  }
                               }
                           }
                       }

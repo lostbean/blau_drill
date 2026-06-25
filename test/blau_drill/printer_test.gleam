@@ -14,8 +14,8 @@
 import blau_drill/control/printer.{
   type Command, type Event, type PrinterState, type Step, Accepted, Busy,
   CancelStream, Connect, Energize, Faulted, Faulting, Halt, Jog, MoveTo,
-  NotEnergized, PositionUpdate, Progress, PulseSpindle, Reconnect, Recovered,
-  Refused, Release, ResumeStream, Stream, StreamPausedAt, Where, X, Y,
+  NotEnergized, PositionUpdate, Progress, PulseSpindle, Quickstop, Reconnect,
+  Recovered, Refused, Release, ResumeStream, Stream, StreamPausedAt, Where, X, Y,
 }
 import blau_drill/control/protocol
 import blau_drill/domain/gcode_program
@@ -539,6 +539,71 @@ pub fn cancel_stream_while_disconnected_is_refused_test() {
   let step = cmd(printer.new(), CancelStream)
   step.writes |> should.equal([])
   step.state |> printer.state_name |> should.equal("disconnected")
+}
+
+// ── Quickstop (graceful planner flush — raw M410 + M400, ADR-0014) ────────────
+//
+// Quickstop is the planner flush CancelStream was wrongly assumed to be: it
+// emits RAW (unnumbered) `M410` (abort queued/buffered moves NOW, clear the
+// planner) + `M400` (wait for the now-empty queue), so they action immediately
+// rather than queue behind the very moves they must cancel. Valid from
+// Streaming / StreamPaused / Jogging → Jogging (motors stay energized, alignment
+// trust preserved). Distinct from CancelStream (host stop, no write) and Halt
+// (M112 → Faulted). The two writes are an order-dependent burst returned as ONE
+// `writes` list — they are RAW so `step.writes` equals exactly ["M410", "M400"]
+// (no N-prefix / checksum), asserted directly (not via stripped_writes).
+
+pub fn quickstop_from_streaming_flushes_raw_test() {
+  let program = ["G90", "G0 X1 Y1", "M400"]
+  let s0 = cmd(jogging(), Stream(program))
+  let s1 = feed(s0.state, "ok")
+  // Mid-stream Quickstop: flush the planner (RAW M410 + M400), land in Jogging.
+  let step = cmd(s1.state, Quickstop)
+  step.state |> printer.state_name |> should.equal("jogging")
+  step.writes |> should.equal(["M410", "M400"])
+  has_event(step.events, fn(e) { e == Accepted(Quickstop) }) |> should.be_true
+}
+
+pub fn quickstop_from_stream_paused_flushes_raw_test() {
+  let program = ["G90", pause, "G0 X1 Y1"]
+  let paused = feed(cmd(jogging(), Stream(program)).state, "ok").state
+  paused |> printer.state_name |> should.equal("stream_paused")
+  let step = cmd(paused, Quickstop)
+  step.state |> printer.state_name |> should.equal("jogging")
+  step.writes |> should.equal(["M410", "M400"])
+  has_event(step.events, fn(e) { e == Accepted(Quickstop) }) |> should.be_true
+}
+
+pub fn quickstop_from_jogging_flushes_raw_test() {
+  // Already jogging: a Quickstop is always a valid "stop motion now" — still
+  // flush, stay Jogging.
+  let step = cmd(jogging(), Quickstop)
+  step.state |> printer.state_name |> should.equal("jogging")
+  step.writes |> should.equal(["M410", "M400"])
+}
+
+pub fn quickstop_while_disconnected_is_refused_test() {
+  let step = cmd(printer.new(), Quickstop)
+  step.writes |> should.equal([])
+  step.state |> printer.state_name |> should.equal("disconnected")
+}
+
+pub fn quickstop_while_faulted_is_refused_test() {
+  let faulted = cmd(idle(), Halt).state
+  let step = cmd(faulted, Quickstop)
+  step.writes |> should.equal([])
+  step.state |> should.equal(Faulted)
+}
+
+// Idle = connected, motors OFF, nothing streaming: a Quickstop has nothing to
+// flush. Quickstop is a motion-control verb, so it is REFUSED here (NotEnergized,
+// consistent with motion being gated behind Jogging) and writes nothing.
+pub fn quickstop_in_idle_is_refused_test() {
+  let step = cmd(idle(), Quickstop)
+  step.writes |> should.equal([])
+  step.state |> printer.state_name |> should.equal("idle")
+  has_event(step.events, fn(e) { e == Refused(Quickstop, NotEnergized) })
+  |> should.be_true
 }
 
 pub fn energize_while_faulted_is_refused_test() {
