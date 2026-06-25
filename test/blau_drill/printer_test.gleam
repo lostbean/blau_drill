@@ -199,16 +199,18 @@ pub fn jog_is_unnumbered_raw_test() {
   step.writes |> should.equal(["G91", "G0 X1", "G90", "M114"])
 }
 
-// Click-to-jump (MoveTo) is a SAFE jump: retract to zsafe, THEN move XY, THEN
-// descend to the hover height — never a flat XY rapid at the current Z (which
-// could drag the bit across the board). Raw/unnumbered like other interactive
-// commands. zsafe/hover are passed in (from config) so the pure core stays
-// config-agnostic.
+// Click-to-jump (MoveTo) is a SAFE pre-fit jump (ADR-0011): LIFT Z by a RELATIVE
+// amount (G91 / G0 Z+<lift> / G90) FIRST, then travel XY at that lifted height,
+// and STOP — no absolute descend (pre-fit there is no surface datum, so an
+// absolute Z could plunge the bit DOWN into the board; a relative up-lift can't).
+// Raw/unnumbered like other interactive commands. The relative lift amount is
+// passed in (from config) so the pure core stays config-agnostic.
 pub fn move_to_is_unnumbered_raw_test() {
-  let step = cmd(jogging(), MoveTo(12.5, -3.0, 5.0, 0.2))
-  // Burst ends with M114 so the settled position is read in the same sequence.
+  let step = cmd(jogging(), MoveTo(12.5, -3.0, 5.0))
+  // Exact burst: G91, lift +5 (relative up), G90, travel XY, then M114 so the
+  // settled position is read in the same sequence. NO absolute Z retract/descend.
   step.writes
-  |> should.equal(["G0 Z5", "G0 X12.500 Y-3", "G0 Z0.200", "M114"])
+  |> should.equal(["G91", "G0 Z5", "G90", "G0 X12.500 Y-3", "M114"])
 }
 
 pub fn jog_fractional_mm_is_three_decimals_test() {
@@ -217,28 +219,41 @@ pub fn jog_fractional_mm_is_three_decimals_test() {
 }
 
 pub fn move_to_in_idle_writes_nothing_test() {
-  let step = cmd(idle(), MoveTo(10.0, 20.0, 5.0, 0.2))
+  let step = cmd(idle(), MoveTo(10.0, 20.0, 5.0))
   step.writes |> should.equal([])
   has_event(step.events, fn(e) {
-    e == Refused(MoveTo(10.0, 20.0, 5.0, 0.2), NotEnergized)
+    e == Refused(MoveTo(10.0, 20.0, 5.0), NotEnergized)
   })
   |> should.be_true
 }
 
-pub fn move_to_retracts_before_xy_test() {
-  // Safety: the retract (G0 Z<zsafe>) must come BEFORE the XY move, and the XY
-  // move before the descent — so the bit is never dragged across the board. The
-  // trailing M114 reads the settled position.
-  let step = cmd(jogging(), MoveTo(12.5, -3.0, 5.0, 0.2))
-  let assert [first, second, third, fourth] = stripped_writes(step)
-  string.starts_with(first, "G0 Z5") |> should.be_true
-  string.contains(second, "X12.500") |> should.be_true
-  string.contains(second, "Z") |> should.be_false
-  string.starts_with(third, "G0 Z0.200") |> should.be_true
-  fourth |> should.equal("M114")
-  // Absolute — must NOT switch to relative like jog does.
-  list.any(stripped_writes(step), fn(w) { string.contains(w, "G91") })
-  |> should.be_false
+pub fn move_to_lifts_relative_before_xy_test() {
+  // Safety (ADR-0011): the Z move is a RELATIVE lift framed by G91/G90 and comes
+  // BEFORE the XY travel, so the bit rises (never plunges) and is never dragged
+  // across the board at the current Z. The trailing M114 reads the settled head.
+  let step = cmd(jogging(), MoveTo(12.5, -3.0, 5.0))
+  let assert [first, second, third, fourth, fifth] = stripped_writes(step)
+  // Relative mode is switched ON before the Z lift...
+  first |> should.equal("G91")
+  string.starts_with(second, "G0 Z5") |> should.be_true
+  // ...and OFF again before the XY travel (relative wraps ONLY the lift).
+  third |> should.equal("G90")
+  string.contains(fourth, "X12.500") |> should.be_true
+  string.contains(fourth, "Z") |> should.be_false
+  fifth |> should.equal("M114")
+}
+
+// SAFETY (ADR-0011): a pre-fit jump can NEVER command the bit DOWN. The ONLY Z
+// move in the burst is the relative lift wrapped in G91/G90 — there is NO
+// absolute Z retract and NO descend line, so no datum-less absolute Z can plunge.
+pub fn move_to_has_no_absolute_z_move_test() {
+  let writes = stripped_writes(cmd(jogging(), MoveTo(12.5, -3.0, 5.0)))
+  // The relative lift is wrapped: G91 then G90 both present.
+  list.contains(writes, "G91") |> should.be_true
+  list.contains(writes, "G90") |> should.be_true
+  // Exactly ONE Z move in the whole burst (the lift) — no second Z (no descend).
+  let z_moves = list.filter(writes, fn(w) { string.starts_with(w, "G0 Z") })
+  z_moves |> should.equal(["G0 Z5"])
 }
 
 pub fn pulse_spindle_in_idle_writes_nothing_test() {

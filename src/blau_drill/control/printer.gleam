@@ -103,11 +103,15 @@ pub type Command {
   Release
   /// Relative jog of `axis` by `mm`. Only valid in `Jogging`.
   Jog(axis: Axis, mm: Float)
-  /// Click-to-jump to an absolute machine XY. A SAFE jump: retract to `z_safe`,
-  /// move XY at that height, then descend to `z_hover` — never a flat XY rapid at
-  /// the current Z (which could drag the bit across the board). `z_safe`/`z_hover`
-  /// are supplied by the caller from config so the core stays config-agnostic.
-  MoveTo(x: Float, y: Float, z_safe: Float, z_hover: Float)
+  /// Click-to-jump to an absolute machine XY. A SAFE jump (ADR-0011): lift Z by a
+  /// RELATIVE amount (`z_lift`) FIRST, then travel XY at that lifted height — and
+  /// STOP (no absolute descend). Pre-fit there is no surface datum, so an absolute
+  /// 'retract'/descend could plunge the bit into the board; a relative up-lift can
+  /// NEVER plunge regardless of the current Z. After the lift + travel the head is
+  /// left high and the operator jogs DOWN onto the target. `z_lift` is supplied by
+  /// the caller from config (the configured z-safe rise) so the core stays
+  /// config-agnostic.
+  MoveTo(x: Float, y: Float, z_lift: Float)
   /// Pulse the configured spindle: `on_cmd`, an `G4 P800` dwell, then `off_cmd`.
   /// Only valid in `Jogging` (gated like motion).
   PulseSpindle(on_cmd: String, off_cmd: String)
@@ -241,23 +245,29 @@ pub fn command(state: PrinterState, cmd: Command) -> Step {
     }
     _, Jog(_, _) -> refuse_motion(state, cmd)
 
-    Jogging(line_no, _pending), MoveTo(x, y, z_safe, z_hover) -> {
-      // SAFE jump (absolute / G90): retract to z_safe FIRST so the bit clears the
-      // board, then travel XY at that height, then descend to z_hover (just above
-      // the surface) — never a flat XY rapid at the current Z. The lines are
-      // written in order by the controller (one effect), so the retract always
-      // precedes the XY move. M114 is the LAST line of the SAME burst, so the
-      // position reply reflects the SETTLED head — no race with a separate query.
+    Jogging(line_no, _pending), MoveTo(x, y, z_lift) -> {
+      // SAFE pre-fit jump (ADR-0011): LIFT Z by a RELATIVE amount FIRST, then
+      // travel XY at that lifted height — and STOP. A relative up-lift (G91 / G0
+      // Z+<lift> / G90) can NEVER plunge the bit, regardless of the current Z or a
+      // missing surface datum; an ABSOLUTE retract/descend could (pre-fit there is
+      // no datum). So there is NO absolute descend here — after the lift + travel
+      // the head is left high and the operator jogs DOWN onto the target.
+      //
+      // ORDERING IS CRITICAL: G91 must wrap ONLY the lift (G91 → G0 Z+ → G90),
+      // then the XY travel runs in absolute mode (G90). The controller writes these
+      // in order in ONE effect (never effect.batch). M114 is the LAST line of the
+      // SAME burst, so the position reply reflects the SETTLED head — no race.
       let xy = "G0 X" <> protocol.format_mm(x) <> " Y" <> protocol.format_mm(y)
       let writes = [
-        "G0 Z" <> protocol.format_mm(z_safe),
+        "G91",
+        "G0 Z" <> protocol.format_mm(z_lift),
+        "G90",
         xy,
-        "G0 Z" <> protocol.format_mm(z_hover),
         "M114",
       ]
       accepted(Jogging(line_no: line_no, pending: PendingWhere), writes, cmd)
     }
-    _, MoveTo(_, _, _, _) -> refuse_motion(state, cmd)
+    _, MoveTo(_, _, _) -> refuse_motion(state, cmd)
 
     Jogging(line_no, pending), PulseSpindle(on_cmd, off_cmd) ->
       // Test the configured spindle: on, a short dwell, then off.

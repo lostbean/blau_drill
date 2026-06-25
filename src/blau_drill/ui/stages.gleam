@@ -278,6 +278,7 @@ pub fn align(model: Model) -> Element(model.Msg) {
       release_confirm_panel(model),
       motors_panel(motors_online),
       jog_panel(model, motors_online),
+      first_fiducial_hint(model, motors_online),
       h.button(
         [
           a.class("btn btn-primary btn-block btn-lg"),
@@ -325,6 +326,30 @@ pub fn align(model: Model) -> Element(model.Msg) {
       ),
     ]),
   ])
+}
+
+// ADR-0011: with motors energized but NOTHING captured yet, click-to-jump is a
+// strict no-op — there is no board↔machine relationship to jump on (the estimate
+// Errors on zero captures, so a jump would act on a phantom origin). Surface a
+// small, non-blocking hint telling the operator to JOG the head onto the first
+// fiducial and capture it before clicking other markers to jump. Informational
+// only — it blocks no button (Capture stays gated on Jogging, already). Shown
+// only while energized AND no captures exist; it disappears after the first
+// capture (when click-to-jump starts working).
+fn first_fiducial_hint(
+  model: Model,
+  motors_online: Bool,
+) -> Element(model.Msg) {
+  case motors_online && model.captured == [] {
+    False -> element.none()
+    True ->
+      h.p([a.class("panel-hint")], [
+        h.text(
+          "Jog the head onto fiducial 1 and capture it first — click-to-jump "
+          <> "needs at least one capture to know where the board is.",
+        ),
+      ])
+  }
 }
 
 // ADR-0011 anti-surprise confirm: a VOLUNTARY "Disable Motors" that would discard

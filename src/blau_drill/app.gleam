@@ -722,12 +722,19 @@ fn jump_to(model: Model, point: #(Float, Float)) -> #(Model, Effect(Msg)) {
     False -> noeff(model)
     True ->
       case bridge.board_to_machine(model.transform, model.captures, point) {
+        // ADR-0011: with NO captures and NoTransform the estimate Errors, so a
+        // jump is a strict no-op (no phantom origin) — the operator must jog to
+        // fiducial 1 and capture it first to establish the board↔machine relation.
         Error(_) -> noeff(model)
         Ok(#(mx, my)) -> {
-          // Safe jump: retract to zsafe, travel, descend to hover (config values).
-          // The burst ends with M114, so the settled position is read with no race.
+          // SAFE pre-fit jump (ADR-0011): lift Z by a RELATIVE amount (the
+          // configured z-safe rise), travel XY high, then STOP — no absolute
+          // descend (pre-fit there is no surface datum, so an absolute Z could
+          // plunge; a relative up-lift can't). The operator jogs down onto the
+          // target. The burst ends with M114, so the settled position reads
+          // without a race.
           let cfg = model.applied_config
-          issue(model, printer.MoveTo(mx, my, cfg.zsafe, cfg.hover))
+          issue(model, printer.MoveTo(mx, my, cfg.zsafe))
         }
       }
   }

@@ -374,6 +374,43 @@ pub fn confirm_default_streams_without_pausing_test() {
   controller.state(m2.controller) |> printer.is_streaming |> should.be_true
 }
 
+// ── ADR-0011: click-to-jump needs >=1 capture (no jump on a guessed origin) ───
+// SAFETY PROPERTY: with ZERO captures and NoTransform there is no board↔machine
+// relationship, so the estimate Errors and a jump is a STRICT no-op — the head
+// must NOT move to a phantom origin. The operator has to jog to fiducial 1 and
+// capture it first. Encoded at the app layer: a `JumpTo` while energized but with
+// no captures returns the model UNCHANGED (no MoveTo issued, no motion). The pure
+// seam (`bridge.board_to_machine(NoTransform, [], pt) -> Error`) is asserted in
+// bridge_test (board_to_machine_no_captures_errors_test).
+fn registering_jogging_model() -> Model {
+  let #(m1, _) =
+    app.update(
+      base_model(),
+      model.ControllerEvent(controller.Issue(printer.Connect)),
+    )
+  let #(m2, _) = app.update(m1, model.Energize)
+  let #(m3, _) = app.update(m2, model.StartRegistering)
+  m3
+}
+
+pub fn jump_with_no_captures_is_noop_test() {
+  let m = registering_jogging_model()
+  // Preconditions: energized (Jogging), on the Align screen, NOTHING captured and
+  // no solved transform — the only state from which a jump must no-op.
+  m.printer |> should.equal(Jogging)
+  m.screen |> should.equal(Align)
+  m.captures |> should.equal([])
+  m.transform |> should.equal(NoTransform)
+  // A click-to-jump to any board point writes nothing and moves nothing: the
+  // model is returned UNCHANGED (the estimate Errors → `noeff(model)`).
+  let #(m2, _e) = app.update(m, model.JumpTo(#(12.0, 34.0)))
+  m2.head |> should.equal(m.head)
+  m2.printer |> should.equal(Jogging)
+  m2.current_target |> should.equal(m.current_target)
+  // Nothing was streamed / the controller did not transition out of Jogging.
+  controller.state(m2.controller) |> printer.is_streaming |> should.be_false
+}
+
 // ── ADR-0011: de-energize structurally resets the alignment ───────────────────
 // THE INVARIANT: position/alignment is valid ONLY while motors stay continuously
 // energized. ANY de-energize — operator Release, fault, serial loss, disconnect —
