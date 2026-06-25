@@ -116,6 +116,7 @@ pub fn save_backend(kind: BackendKind) -> Nil {
   let v = case kind {
     model.SimBackend -> "sim"
     model.RealBackend -> "real"
+    model.EmuBackend -> "emu"
   }
   set_item(backend_key, v)
 }
@@ -124,6 +125,7 @@ pub fn save_backend(kind: BackendKind) -> Nil {
 pub fn load_backend() -> BackendKind {
   case get_item(backend_key) {
     "real" -> model.RealBackend
+    "emu" -> model.EmuBackend
     _ -> model.SimBackend
   }
 }

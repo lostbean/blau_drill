@@ -30,6 +30,21 @@ import gleam/option
 import gleam/regexp
 import gleam/string
 
+/// One admitted-but-not-yet-executed move (the planner buffer entry, per
+/// ADR-0013). `tx/ty/tz` is the ABSOLUTE target, resolved at admission time from
+/// the head position + abs/rel mode — so it is independent of any later G90/G91
+/// change. `remaining` is the distance (mm) still to travel to that target.
+pub type QueuedMove {
+  QueuedMove(tx: Float, ty: Float, tz: Float, remaining: Float)
+}
+
+/// The injected XYZ machine envelope (ADR-0013). Moves whose resolved target
+/// falls outside `[min, max]` on any axis are rejected, not admitted. Bounds are
+/// operator/hardware config — supplied at construction, never a product default.
+pub type Bounds {
+  Bounds(min: #(Float, Float, Float), max: #(Float, Float, Float))
+}
+
 /// The emulator's view of the machine. Only the state real bugs need is modelled.
 pub type EmulatorState {
   EmulatorState(
@@ -39,16 +54,29 @@ pub type EmulatorState {
     motors_on: Bool,
     /// G90 absolute (start True) vs G91 relative.
     abs: Bool,
-    /// Integrated machine position (mm).
+    /// Integrated machine position (mm). Advances ONLY on `tick`, never on `feed`.
     x: Float,
     y: Float,
     z: Float,
     /// True while halted on an `M0`/`M1` pause; blocks until `resume/1`.
     paused: Bool,
+    /// Admitted moves awaiting execution — the planner buffer. `feed` ENQUEUES;
+    /// `tick` DRAINS. Non-empty here = "physical motion still in flight".
+    queue: List(QueuedMove),
+    /// The injected XYZ envelope. A move past it is rejected at admission.
+    bounds: Bounds,
   )
 }
 
-/// A freshly powered emulator: nothing accepted, motors off, absolute, at origin.
+/// A generous default envelope so existing zero-arg `new()` call sites and tests
+/// are not constrained by the (operator-config) limits. NOT a product default for
+/// real motion limits — those are injected via `with_bounds`.
+fn default_bounds() -> Bounds {
+  Bounds(min: #(-1000.0, -1000.0, -1000.0), max: #(1000.0, 1000.0, 1000.0))
+}
+
+/// A freshly powered emulator: nothing accepted, motors off, absolute, at origin,
+/// empty queue, and the generous default envelope.
 pub fn new() -> EmulatorState {
   EmulatorState(
     last_line: 0,
@@ -58,6 +86,42 @@ pub fn new() -> EmulatorState {
     y: 0.0,
     z: 0.0,
     paused: False,
+    queue: [],
+    bounds: default_bounds(),
+  )
+}
+
+/// A freshly powered emulator with an explicit, test-injected envelope. Use this
+/// over `new()` whenever the test cares about the bounds (ADR-0013: limits are
+/// operator/hardware config, supplied — never defaulted — for real use).
+pub fn with_bounds(bounds: Bounds) -> EmulatorState {
+  EmulatorState(..new(), bounds: bounds)
+}
+
+/// Test seam (ADR-0013): construct an `EmulatorState` with arbitrary field values
+/// directly, so a test can drop the emulator into ANY condition without driving it
+/// there command by command.
+pub fn force(
+  last_line last_line: Int,
+  motors_on motors_on: Bool,
+  abs abs: Bool,
+  x x: Float,
+  y y: Float,
+  z z: Float,
+  paused paused: Bool,
+  queue queue: List(QueuedMove),
+  bounds bounds: Bounds,
+) -> EmulatorState {
+  EmulatorState(
+    last_line: last_line,
+    motors_on: motors_on,
+    abs: abs,
+    x: x,
+    y: y,
+    z: z,
+    paused: paused,
+    queue: queue,
+    bounds: bounds,
   )
 }
 
@@ -245,14 +309,20 @@ fn classify(cmd: String) -> Command {
   }
 }
 
-// Integrate X/Y/Z from a move line. If `abs`, set the coord to the word value;
-// otherwise add it. Missing words leave that axis unchanged.
+// ADMIT a move from a move line (ADR-0013: `feed` admits, `tick` drains). The
+// HEAD POSITION IS UNCHANGED here; a move is only ENQUEUED.
 //
-// MOTOR-ENABLE choice: when motors are off the move is REFUSED — acked with
-// `["ok"]` but position is unchanged. Real Marlin won't physically move with
-// steppers disabled; for our purposes the key invariant is that motion has no
-// effect when motors are off, so an e2e test can prove the host energized the
-// steppers (`M17`) before streaming.
+// MOTOR-ENABLE choice: when motors are off the move is IGNORED — acked with
+// `["ok"]`, nothing enqueued. Real Marlin won't physically move with steppers
+// disabled; the key invariant is that motion has no effect when motors are off,
+// so an e2e test can prove the host energized the steppers (`M17`) before
+// streaming.
+//
+// ENVELOPE choice (ADR-0013): if the resolved ABSOLUTE target lands outside the
+// injected `bounds` on any axis, the move is NOT admitted (queue + head
+// unchanged). The reply is `["Error:Out of bounds (axis)", "ok"]` — the `Error:`
+// line is observable by a test while the trailing `ok` keeps the stream
+// handshake alive (real Marlin with software endstops clamps and continues).
 fn apply_move(
   state: EmulatorState,
   cmd: String,
@@ -260,19 +330,162 @@ fn apply_move(
   case state.motors_on {
     False -> #(state, ["ok"])
     True -> {
-      let x = axis(cmd, "X")
-      let y = axis(cmd, "Y")
-      let z = axis(cmd, "Z")
-      let next =
-        EmulatorState(
-          ..state,
-          x: integrate(state.abs, state.x, x),
-          y: integrate(state.abs, state.y, y),
-          z: integrate(state.abs, state.z, z),
-        )
-      #(next, ["ok"])
+      // Resolve the absolute target now, so the queued move is independent of
+      // any later abs/rel-mode change.
+      //
+      // ORIGIN (ADR-0013 admit/drain): a move resolves against the END of the
+      // pending queue, NOT the live head. The head has not advanced yet for
+      // moves still queued ahead of this one, so a relative move chains off the
+      // last queued target (or the live head when the queue is empty), and a
+      // MISSING axis word carries the pending (queue-end) value.
+      let #(ox, oy, oz) = queue_end(state)
+      let tx = integrate(state.abs, ox, axis(cmd, "X"))
+      let ty = integrate(state.abs, oy, axis(cmd, "Y"))
+      let tz = integrate(state.abs, oz, axis(cmd, "Z"))
+      case out_of_bounds(state.bounds, tx, ty, tz) {
+        option.Some(axis_name) -> #(state, [
+          "Error:Out of bounds (" <> axis_name <> ")",
+          "ok",
+        ])
+        option.None -> {
+          // Distance is measured from the same queue-end origin to the new
+          // target so a multi-move queue's per-move distances stay correct.
+          let remaining = distance(#(ox, oy, oz), #(tx, ty, tz))
+          let move = QueuedMove(tx: tx, ty: ty, tz: tz, remaining: remaining)
+          #(EmulatorState(..state, queue: list_append_one(state.queue, move)), [
+            "ok",
+          ])
+        }
+      }
     }
   }
+}
+
+// The origin for resolving the NEXT admitted move: the target of the last
+// queued move if the queue is non-empty, else the live head. Moves admitted
+// ahead of the head have not drained yet, so chaining off the live head would
+// collapse them onto the same target (ADR-0013 admit/drain).
+fn queue_end(state: EmulatorState) -> #(Float, Float, Float) {
+  case last(state.queue) {
+    option.Some(move) -> #(move.tx, move.ty, move.tz)
+    option.None -> #(state.x, state.y, state.z)
+  }
+}
+
+// The last element of a list, or None if empty.
+fn last(xs: List(a)) -> option.Option(a) {
+  case xs {
+    [] -> option.None
+    [x] -> option.Some(x)
+    [_, ..rest] -> last(rest)
+  }
+}
+
+// The first axis whose target falls outside `[min, max]`, else None.
+fn out_of_bounds(
+  bounds: Bounds,
+  tx: Float,
+  ty: Float,
+  tz: Float,
+) -> option.Option(String) {
+  let Bounds(min: #(min_x, min_y, min_z), max: #(max_x, max_y, max_z)) = bounds
+  case tx <. min_x || tx >. max_x {
+    True -> option.Some("X")
+    False ->
+      case ty <. min_y || ty >. max_y {
+        True -> option.Some("Y")
+        False ->
+          case tz <. min_z || tz >. max_z {
+            True -> option.Some("Z")
+            False -> option.None
+          }
+      }
+  }
+}
+
+// Euclidean distance between two 3D points.
+fn distance(a: #(Float, Float, Float), b: #(Float, Float, Float)) -> Float {
+  let #(ax, ay, az) = a
+  let #(bx, by, bz) = b
+  let dx = bx -. ax
+  let dy = by -. ay
+  let dz = bz -. az
+  let sq = dx *. dx +. dy *. dy +. dz *. dz
+  case float.square_root(sq) {
+    Ok(d) -> d
+    Error(_) -> 0.0
+  }
+}
+
+// Append one element to the END of a list (queue order: FIFO).
+fn list_append_one(xs: List(a), x: a) -> List(a) {
+  case xs {
+    [] -> [x]
+    [head, ..rest] -> [head, ..list_append_one(rest, x)]
+  }
+}
+
+/// Advance the head by draining the queue (ADR-0013: `tick` DRAINS). `dt` is the
+/// distance budget (mm) to consume this tick. The head moves toward the head
+/// move's target; when a move completes (`remaining <= dt`) the head snaps
+/// exactly to that target and the LEFTOVER budget carries to the next queued
+/// move. A `tick` on an empty queue is a no-op. The head only ever advances here.
+pub fn tick(state: EmulatorState, dt: Float) -> EmulatorState {
+  case state.queue {
+    // Empty queue -> nothing to drain. No-op.
+    [] -> state
+    [move, ..rest] ->
+      case dt <=. 0.0 {
+        True -> state
+        False ->
+          case move.remaining <=. dt {
+            // This move completes: snap the head to its target, carry leftover
+            // budget into the rest of the queue.
+            True -> {
+              let landed =
+                EmulatorState(
+                  ..state,
+                  x: move.tx,
+                  y: move.ty,
+                  z: move.tz,
+                  queue: rest,
+                )
+              tick(landed, dt -. move.remaining)
+            }
+            // Partial progress: move the head a fraction toward the target and
+            // reduce the move's remaining distance.
+            False -> {
+              let fraction = dt /. move.remaining
+              let nx = state.x +. { move.tx -. state.x } *. fraction
+              let ny = state.y +. { move.ty -. state.y } *. fraction
+              let nz = state.z +. { move.tz -. state.z } *. fraction
+              EmulatorState(..state, x: nx, y: ny, z: nz, queue: [
+                QueuedMove(..move, remaining: move.remaining -. dt),
+                ..rest
+              ])
+            }
+          }
+      }
+  }
+}
+
+/// Drain the ENTIRE queue regardless of `dt` — advance fully so the head lands on
+/// the final queued target. A convenience for tests that want "advance fully".
+pub fn tick_all(state: EmulatorState) -> EmulatorState {
+  case state.queue {
+    [] -> state
+    [move, ..rest] -> {
+      let landed =
+        EmulatorState(..state, x: move.tx, y: move.ty, z: move.tz, queue: rest)
+      tick_all(landed)
+    }
+  }
+}
+
+/// Clear the queue — physical motion STOPS (ADR-0013: the abort). The head stays
+/// wherever the last completed `tick` left it.
+pub fn halt(state: EmulatorState) -> EmulatorState {
+  EmulatorState(..state, queue: [])
 }
 
 fn integrate(

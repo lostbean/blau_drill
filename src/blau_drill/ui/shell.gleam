@@ -3,13 +3,15 @@
 //// e-stop), and the bottom telemetry/data bar. Composed from the header,
 //// sidebar, connection-card and bottom-bar components.
 
+import blau_drill/control/controller
+import blau_drill/control/printer
 import blau_drill/ui/model.{
-  type Model, type PrinterState, type Screen, type StageId, Align, ConnectDevice,
-  DisconnectDevice, Disconnected, Done, Drill, DryRun, Faulted, GoToLog,
-  GoToSettings, Idle, Jogging, Load, Log, RealBackend, SelectBackend, Settings,
-  SimBackend, StageAlign, StageDone, StageDrill, StageDryRun, StageLoad,
-  Streaming,
+  type Model, type Screen, type StageId, Align, ConnectDevice, DisconnectDevice,
+  Done, Drill, DryRun, EmuBackend, GoToLog, GoToSettings, Load, Log, RealBackend,
+  SelectBackend, Settings, SimBackend, StageAlign, StageDone, StageDrill,
+  StageDryRun, StageLoad,
 }
+import blau_drill/ui/session
 import gleam/float
 import gleam/int
 import gleam/list
@@ -22,10 +24,31 @@ import lustre/event
 // The stepper / nav order.
 const stages = [StageLoad, StageAlign, StageDryRun, StageDrill, StageDone]
 
+// ── Session-derived reads (ADR-0012) ─────────────────────────────────────────
+// The screen + wire state are no longer stored on the model; they are projected
+// from the `Session` (the job + the controller's REAL `printer.PrinterState`).
+
+/// The current `Session`, derived from the app's real machines.
+fn sess(model: Model) -> session.Session {
+  session.of(model.job, model.board, controller.state(model.controller))
+}
+
+/// The current SCREEN, projected from the Session + overlay.
+fn screen_of(model: Model) -> Screen {
+  session.screen(sess(model), model.overlay)
+}
+
+/// The REAL wire state (the genuine `printer.PrinterState`, 6 cases) the badges
+/// and gates read off — `StreamPaused` is now visible (it was lost in the old
+/// 5-case mirror).
+fn wire(model: Model) -> printer.PrinterState {
+  session.printer_state(sess(model))
+}
+
 // ── header ──────────────────────────────────────────────────────────────────
 
 pub fn header(model: Model) -> Element(model.Msg) {
-  let current = screen_stage(model.screen)
+  let current = screen_stage(screen_of(model))
   h.header([a.class("header")], [
     brand(),
     h.ol([a.class("stepper")], stepper_nodes(current)),
@@ -102,21 +125,21 @@ pub fn sidebar(model: Model) -> Element(model.Msg) {
       h.h2([a.class("sidebar-title")], [h.text("Control Panel")]),
       h.p([a.class("sidebar-status")], [
         h.span([a.class("dot pulse-dot")], []),
-        h.text(control_status(model.printer)),
+        h.text(control_status(wire(model))),
       ]),
     ]),
     h.div([a.class("sidebar-body")], [
       // The 5-stage sequence is shown in the top-bar stepper; the sidebar no
       // longer duplicates it.
       connection_card(model),
-      h.div([a.class("sidebar-foot")], [estop(model.screen)]),
+      h.div([a.class("sidebar-foot")], [estop(screen_of(model))]),
     ]),
   ])
 }
 
 fn connection_card(model: Model) -> Element(model.Msg) {
-  let connected = model.printer != Disconnected
-  let #(state_cls, state_label) = conn_display(model.printer)
+  let connected = session.is_connected(sess(model))
+  let #(state_cls, state_label) = conn_display(wire(model))
   h.div([a.class("conn-card")], [
     h.div([a.class("conn-row")], [
       h.span([a.class("conn-label")], [h.text("Connection")]),
@@ -142,6 +165,7 @@ fn connection_card(model: Model) -> Element(model.Msg) {
           event.on_change(fn(v) {
             case v {
               "real" -> SelectBackend(RealBackend)
+              "emu" -> SelectBackend(EmuBackend)
               _ -> SelectBackend(SimBackend)
             }
           }),
@@ -154,6 +178,10 @@ fn connection_card(model: Model) -> Element(model.Msg) {
           h.option(
             [a.value("real"), a.selected(model.backend_kind == RealBackend)],
             "Web Serial (CNC)",
+          ),
+          h.option(
+            [a.value("emu"), a.selected(model.backend_kind == EmuBackend)],
+            "Emulator (faithful)",
           ),
         ],
       ),
@@ -172,7 +200,7 @@ fn connection_card(model: Model) -> Element(model.Msg) {
           [
             h.text(case model.backend_kind {
               RealBackend -> "Choose Port & Connect"
-              SimBackend -> "Connect"
+              SimBackend | EmuBackend -> "Connect"
             }),
           ],
         )
@@ -197,6 +225,7 @@ fn backend_label(kind: model.BackendKind) -> String {
   case kind {
     SimBackend -> "Simulator"
     RealBackend -> "Web Serial"
+    EmuBackend -> "Emulator"
   }
 }
 
@@ -219,9 +248,11 @@ fn estop(screen: Screen) -> Element(model.Msg) {
 // ── bottom data bar ───────────────────────────────────────────────────────────
 
 pub fn data_bar(model: Model) -> Element(model.Msg) {
-  let online = case model.printer {
-    Idle | Jogging | Streaming -> True
-    _ -> False
+  let state = wire(model)
+  // Online = a port is open and NOT faulted (Idle/Jogging/Streaming/StreamPaused).
+  let online = case state {
+    printer.Disconnected | printer.Faulted -> False
+    _ -> True
   }
   let status_cls = case online {
     True -> "data-bar-status online"
@@ -230,7 +261,7 @@ pub fn data_bar(model: Model) -> Element(model.Msg) {
   h.footer([a.class("data-bar")], [
     h.span([a.class(status_cls)], [
       h.span([a.class("dot")], []),
-      h.text(printer_label(model.printer)),
+      h.text(printer_label(state)),
     ]),
     h.div([a.class("data-bar-coords")], [
       h.span([], [h.text("X: " <> fmt(model.head.x))]),
@@ -303,33 +334,39 @@ fn stage_label(stage: StageId) -> String {
   }
 }
 
-fn control_status(state: PrinterState) -> String {
+// These render the REAL `printer.PrinterState` (6 cases). A stream halted at an
+// in-app pause (`StreamPaused`) reads as "PAUSED" — newly visible vs the old
+// 5-case mirror that collapsed it into Streaming.
+fn control_status(state: printer.PrinterState) -> String {
   case state {
-    Jogging -> "Motors Live"
-    Streaming -> "Streaming"
-    Faulted -> "Faulted"
-    Idle -> "Machine Ready"
-    Disconnected -> "Disconnected"
+    printer.Jogging(..) -> "Motors Live"
+    printer.Streaming(..) -> "Streaming"
+    printer.StreamPaused(..) -> "Paused"
+    printer.Faulted -> "Faulted"
+    printer.Idle(..) -> "Machine Ready"
+    printer.Disconnected -> "Disconnected"
   }
 }
 
-fn printer_label(state: PrinterState) -> String {
+fn printer_label(state: printer.PrinterState) -> String {
   case state {
-    Jogging -> "MOTORS LIVE"
-    Streaming -> "STREAMING"
-    Idle -> "CONNECTED"
-    Faulted -> "FAULTED"
-    Disconnected -> "DISCONNECTED"
+    printer.Jogging(..) -> "MOTORS LIVE"
+    printer.Streaming(..) -> "STREAMING"
+    printer.StreamPaused(..) -> "PAUSED"
+    printer.Idle(..) -> "CONNECTED"
+    printer.Faulted -> "FAULTED"
+    printer.Disconnected -> "DISCONNECTED"
   }
 }
 
-fn conn_display(state: PrinterState) -> #(String, String) {
+fn conn_display(state: printer.PrinterState) -> #(String, String) {
   case state {
-    Faulted -> #("fault", "FAULTED")
-    Disconnected -> #("offline", "DISCONNECTED")
-    Idle -> #("online", "CONNECTED")
-    Jogging -> #("online", "MOTORS LIVE")
-    Streaming -> #("online", "STREAMING")
+    printer.Faulted -> #("fault", "FAULTED")
+    printer.Disconnected -> #("offline", "DISCONNECTED")
+    printer.Idle(..) -> #("online", "CONNECTED")
+    printer.Jogging(..) -> #("online", "MOTORS LIVE")
+    printer.Streaming(..) -> #("online", "STREAMING")
+    printer.StreamPaused(..) -> #("online", "PAUSED")
   }
 }
 

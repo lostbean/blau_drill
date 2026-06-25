@@ -10,6 +10,8 @@ import blau_drill/control/marlin_emulator as emu
 import blau_drill/control/protocol
 import gleam/float
 import gleam/int
+import gleam/list
+import gleam/string
 import gleeunit
 import gleeunit/should
 
@@ -69,6 +71,7 @@ pub fn absolute_move_when_motors_on_test() {
   let #(s, _) = emu.feed(emu.new(), "M17")
   let #(s, _) = emu.feed(s, "G90")
   let #(s, replies) = emu.feed(s, "G0 X10 Y5")
+  let s = emu.tick_all(s)
   approx(s.x, 10.0) |> should.be_true
   approx(s.y, 5.0) |> should.be_true
   replies |> should.equal(["ok"])
@@ -79,7 +82,24 @@ pub fn relative_move_when_motors_on_test() {
   let #(s, _) = emu.feed(s, "G91")
   let #(s, _) = emu.feed(s, "G0 X1")
   let #(s, _) = emu.feed(s, "G0 X1")
+  let s = emu.tick_all(s)
   approx(s.x, 2.0) |> should.be_true
+}
+
+pub fn multiple_queued_relative_moves_chain_off_queue_end_test() {
+  // Several relative moves admitted before any drain must chain off the END of
+  // the pending queue, not the live head. A missing axis word holds the queued
+  // (pending) value rather than the live-head value.
+  let #(s, _) = emu.feed(emu.new(), "M17")
+  let #(s, _) = emu.feed(s, "G91")
+  // X: 0 -> 1 -> 3 -> 3 (last move omits X, holds pending 3).
+  // Y: 0 -> 0 -> 0 -> 2.5
+  let #(s, _) = emu.feed(s, "G0 X1")
+  let #(s, _) = emu.feed(s, "G0 X2")
+  let #(s, _) = emu.feed(s, "G0 Y2.5")
+  let s = emu.tick_all(s)
+  approx(s.x, 3.0) |> should.be_true
+  approx(s.y, 2.5) |> should.be_true
 }
 
 pub fn missing_axis_unchanged_test() {
@@ -88,6 +108,7 @@ pub fn missing_axis_unchanged_test() {
   let #(s, _) = emu.feed(s, "G0 X10 Y5")
   // Only Z given now -> X/Y hold, Z set.
   let #(s, _) = emu.feed(s, "G0 Z3")
+  let s = emu.tick_all(s)
   approx(s.x, 10.0) |> should.be_true
   approx(s.y, 5.0) |> should.be_true
   approx(s.z, 3.0) |> should.be_true
@@ -97,6 +118,7 @@ pub fn negative_axis_value_test() {
   let #(s, _) = emu.feed(emu.new(), "M17")
   let #(s, _) = emu.feed(s, "G90")
   let #(s, _) = emu.feed(s, "G0 X-3.5 Y2.25")
+  let s = emu.tick_all(s)
   approx(s.x, -3.5) |> should.be_true
   approx(s.y, 2.25) |> should.be_true
 }
@@ -105,6 +127,7 @@ pub fn g1_also_moves_test() {
   let #(s, _) = emu.feed(emu.new(), "M17")
   let #(s, _) = emu.feed(s, "G90")
   let #(s, _) = emu.feed(s, "G1 X4")
+  let s = emu.tick_all(s)
   approx(s.x, 4.0) |> should.be_true
 }
 
@@ -123,6 +146,7 @@ pub fn position_line_round_trips_test() {
   let #(s, _) = emu.feed(emu.new(), "M17")
   let #(s, _) = emu.feed(s, "G90")
   let #(s, _) = emu.feed(s, "G0 X12.34 Y-5.67 Z8.0")
+  let s = emu.tick_all(s)
   let line = emu.position_line(s)
   let assert Ok(pos) = protocol.parse_m114(line)
   approx(pos.x, 12.34) |> should.be_true
@@ -134,6 +158,7 @@ pub fn m114_reply_is_position_then_ok_test() {
   let #(s, _) = emu.feed(emu.new(), "M17")
   let #(s, _) = emu.feed(s, "G90")
   let #(s, _) = emu.feed(s, "G0 X1 Y2")
+  let s = emu.tick_all(s)
   let #(_, replies) = emu.feed(s, "M114")
   replies |> should.equal([emu.position_line(s), "ok"])
   // And the reply's position line parses back to the emulator's coords.
@@ -215,6 +240,7 @@ pub fn numbered_move_obeys_motor_gate_test() {
   let #(s, _) = emu.feed(s, numbered(2, "M17"))
   let #(s, _) = emu.feed(s, numbered(3, "G90"))
   let #(s, _) = emu.feed(s, numbered(4, "G0 X10"))
+  let s = emu.tick_all(s)
   approx(s.x, 10.0) |> should.be_true
 }
 
@@ -295,4 +321,176 @@ pub fn inline_comment_ignored_test() {
   let #(s, replies) = emu.feed(emu.new(), "M17 (energize)")
   s.motors_on |> should.equal(True)
   replies |> should.equal(["ok"])
+}
+
+// ── admit / drain split (ADR-0013): feed ADMITS, tick DRAINS ──────────────────
+
+fn motors_on() -> emu.EmulatorState {
+  let #(s, _) = emu.feed(emu.new(), "M17")
+  s
+}
+
+pub fn feed_admits_but_does_not_move_head_test() {
+  // Feed a long move; with NO tick the queue is non-empty and the head has NOT
+  // advanced — the "still moving / in-flight" state.
+  let #(s, replies) = emu.feed(motors_on(), "G0 X100 Y0")
+  replies |> should.equal(["ok"])
+  s.queue |> should.not_equal([])
+  approx(s.x, 0.0) |> should.be_true
+  approx(s.y, 0.0) |> should.be_true
+}
+
+pub fn tick_drains_to_target_test() {
+  // Feed a move, drain the queue fully -> head lands exactly on the target and
+  // the queue empties.
+  let #(s, _) = emu.feed(motors_on(), "G0 X10 Y0")
+  let s = emu.tick(s, 100.0)
+  approx(s.x, 10.0) |> should.be_true
+  s.queue |> should.equal([])
+}
+
+pub fn tick_partial_then_complete_test() {
+  // A move of length 10; a tick of 4 advances 4mm (still queued), then a tick of
+  // 10 finishes it exactly on target.
+  let #(s, _) = emu.feed(motors_on(), "G0 X10 Y0")
+  let s = emu.tick(s, 4.0)
+  approx(s.x, 4.0) |> should.be_true
+  s.queue |> should.not_equal([])
+  let s = emu.tick(s, 10.0)
+  approx(s.x, 10.0) |> should.be_true
+  s.queue |> should.equal([])
+}
+
+pub fn tick_carries_leftover_budget_across_moves_test() {
+  // Two queued 10mm X moves; a single big tick drains both, landing on X20.
+  let #(s, _) = emu.feed(motors_on(), "G0 X10")
+  let #(s, _) = emu.feed(s, "G0 X20")
+  let s = emu.tick(s, 100.0)
+  approx(s.x, 20.0) |> should.be_true
+  s.queue |> should.equal([])
+}
+
+pub fn tick_on_empty_queue_is_noop_test() {
+  let s = motors_on()
+  let after = emu.tick(s, 50.0)
+  after |> should.equal(s)
+}
+
+pub fn tick_all_drains_whole_queue_test() {
+  let #(s, _) = emu.feed(motors_on(), "G0 X3")
+  let #(s, _) = emu.feed(s, "G0 X9")
+  let s = emu.tick_all(s)
+  approx(s.x, 9.0) |> should.be_true
+  s.queue |> should.equal([])
+}
+
+// ── halt clears the queue (the abort-mid-move assertion) ──────────────────────
+
+pub fn halt_clears_queue_leaving_head_at_last_drained_pos_test() {
+  // Feed a long move, partially drain so the head is mid-flight, THEN halt:
+  // queue empties and the head stays where the last tick left it.
+  let #(s, _) = emu.feed(motors_on(), "G0 X100 Y0")
+  let s = emu.tick(s, 30.0)
+  approx(s.x, 30.0) |> should.be_true
+  s.queue |> should.not_equal([])
+  let s = emu.halt(s)
+  s.queue |> should.equal([])
+  approx(s.x, 30.0) |> should.be_true
+}
+
+pub fn halt_mid_move_stops_motion_test() {
+  // Feed a long move, do NOT tick (queue non-empty = "still moving"), halt ->
+  // queue empty. This is the "physical motion continues after abort" regression.
+  let #(s, _) = emu.feed(motors_on(), "G0 X500")
+  s.queue |> should.not_equal([])
+  let s = emu.halt(s)
+  s.queue |> should.equal([])
+  approx(s.x, 0.0) |> should.be_true
+}
+
+// ── envelope: out-of-bounds moves are rejected (Error reply), not admitted ─────
+
+fn small_envelope() -> emu.EmulatorState {
+  // A tight box: 0..50 on each axis.
+  let s =
+    emu.with_bounds(emu.Bounds(min: #(0.0, 0.0, 0.0), max: #(50.0, 50.0, 50.0)))
+  let #(s, _) = emu.feed(s, "M17")
+  s
+}
+
+pub fn out_of_bounds_move_rejected_not_enqueued_test() {
+  let s = small_envelope()
+  let #(after, replies) = emu.feed(s, "G0 X999")
+  // Error line observable, but an `ok` keeps the handshake alive.
+  list_contains_error(replies) |> should.be_true
+  replies |> ends_with_ok |> should.be_true
+  // NOT admitted: queue unchanged, head unchanged.
+  after.queue |> should.equal([])
+  approx(after.x, 0.0) |> should.be_true
+}
+
+pub fn negative_out_of_bounds_move_rejected_test() {
+  let s = small_envelope()
+  let #(after, replies) = emu.feed(s, "G0 X-5")
+  list_contains_error(replies) |> should.be_true
+  after.queue |> should.equal([])
+  approx(after.x, 0.0) |> should.be_true
+}
+
+pub fn in_bounds_move_with_explicit_bounds_admitted_test() {
+  let s = small_envelope()
+  let #(after, replies) = emu.feed(s, "G0 X25 Y10")
+  replies |> should.equal(["ok"])
+  after.queue |> should.not_equal([])
+  let after = emu.tick_all(after)
+  approx(after.x, 25.0) |> should.be_true
+  approx(after.y, 10.0) |> should.be_true
+}
+
+fn list_contains_error(replies: List(String)) -> Bool {
+  list.any(replies, fn(r) { string.starts_with(r, "Error:") })
+}
+
+fn ends_with_ok(replies: List(String)) -> Bool {
+  case list.last(replies) {
+    Ok("ok") -> True
+    _ -> False
+  }
+}
+
+// ── motors-off move: acked, nothing enqueued (unchanged behavior) ─────────────
+
+pub fn motors_off_move_acks_nothing_enqueued_test() {
+  let #(after, replies) = emu.feed(emu.new(), "G0 X10")
+  replies |> should.equal(["ok"])
+  after.queue |> should.equal([])
+  approx(after.x, 0.0) |> should.be_true
+}
+
+// ── force: drop the emulator into an exact state ──────────────────────────────
+
+pub fn force_constructs_exact_state_test() {
+  let b = emu.Bounds(min: #(-5.0, -5.0, -5.0), max: #(5.0, 5.0, 5.0))
+  let q = [emu.QueuedMove(tx: 1.0, ty: 2.0, tz: 3.0, remaining: 4.0)]
+  let s =
+    emu.force(
+      last_line: 7,
+      motors_on: True,
+      abs: False,
+      x: 1.5,
+      y: 2.5,
+      z: 3.5,
+      paused: True,
+      queue: q,
+      bounds: b,
+    )
+  s.last_line |> should.equal(7)
+  s.motors_on |> should.equal(True)
+  s.abs |> should.equal(False)
+  approx(s.x, 1.5) |> should.be_true
+  approx(s.y, 2.5) |> should.be_true
+  approx(s.z, 3.5) |> should.be_true
+  s.paused |> should.equal(True)
+  s.queue |> should.equal(q)
+  s.bounds |> should.equal(b)
 }

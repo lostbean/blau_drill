@@ -14,7 +14,14 @@
 // handshake stays genuinely async like a real serial port (and like the sim).
 
 import { Ok, Error } from "../../gleam.mjs";
-import { new$ as emuNew, feed, resume } from "./marlin_emulator.mjs";
+import {
+  new$ as emuNew,
+  feed,
+  resume,
+  tick,
+  tick_all,
+  halt,
+} from "./marlin_emulator.mjs";
 
 // A connection holds the live (immutable) core state plus the inbound callback.
 export function makeConn() {
@@ -50,11 +57,21 @@ function emitReplies(conn, replies) {
   });
 }
 
-// Write one (already-framed) line: feed it through the PURE core, advance the
-// stored state, then emit the core's reply lines. Returns Promise(Result(Nil)).
+// Write one (already-framed) line: feed it through the PURE core, then AUTO-PUMP
+// the motion queue so the move actually EXECUTES (the head lands on its target),
+// then emit the core's reply lines. Returns Promise(Result(Nil)).
+//
+// ADR-0013 ("one core, two drivers"): this live in-app Backend is the AUTO-PUMP
+// driver — a written move admitted to the queue by `feed` is immediately drained
+// by `tick_all`, so the simulator behaves like a real printer that runs the move
+// to completion. We pump synchronously on write (deterministic, no JS interval is
+// needed for the live sim) — this keeps existing wire-level position assertions
+// (emuX/emuY/emuZ) true. The DETERMINISTIC freeze-mid-move path (for the
+// abort-mid-move test) is a SEPARATE path exposed via the e2e tick/halt hooks
+// below; `write` must always fully drain so live moves execute.
 export async function write(conn, raw) {
   const [nextState, replies] = feed(conn.state, String(raw));
-  conn.state = nextState;
+  conn.state = tick_all(nextState); // AUTO-PUMP: drain the motion queue (ADR-0013)
   emitReplies(conn, replies);
   return new Ok(undefined);
 }
@@ -94,4 +111,37 @@ export function emuY(conn) {
 
 export function emuZ(conn) {
   return conn.state.z;
+}
+
+// ── deterministic motion-queue drive helpers (ADR-0013, e2e-only) ─────────────
+//
+// These expose the DETERMINISTIC pump path (the half NOT taken by `write`): a
+// test can `feed` a long move (admitted but undrained), inspect the queue, then
+// drive `tick`/`halt` by hand to assert the freeze-mid-move / abort-stops-the-head
+// regression. Like emuX/emuMotorsOn, they read/write `conn.state` directly and are
+// NOT part of the Backend seam.
+
+// Number of admitted-but-not-yet-executed moves in the planner buffer.
+export function emuQueueLen(conn) {
+  return [...conn.state.queue].length;
+}
+
+// Advance the head by a distance budget `dt` (mm), draining toward the queue
+// head. Used to step a move forward part-way (freeze-mid-move).
+export function emuTick(conn, dt) {
+  conn.state = tick(conn.state, dt);
+  return undefined;
+}
+
+// Drain the WHOLE queue: land the head on the final target.
+export function emuTickAll(conn) {
+  conn.state = tick_all(conn.state);
+  return undefined;
+}
+
+// Clear the queue: motion stops where the last completed tick left the head
+// (the `halt`/abort affordance).
+export function emuHalt(conn) {
+  conn.state = halt(conn.state);
+  return undefined;
 }
