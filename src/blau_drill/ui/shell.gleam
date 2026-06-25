@@ -132,6 +132,10 @@ pub fn sidebar(model: Model) -> Element(model.Msg) {
       // The 5-stage sequence is shown in the top-bar stepper; the sidebar no
       // longer duplicates it.
       connection_card(model),
+      // Dynamic, phase-scoped guidance: what to do in THIS stage, plus its
+      // caveats/warnings. Derived from the screen projection so it stays in
+      // lockstep with the Session lifecycle.
+      instructions_card(screen_of(model)),
       h.div([a.class("sidebar-foot")], [estop(screen_of(model))]),
     ]),
   ])
@@ -226,6 +230,127 @@ fn backend_label(kind: model.BackendKind) -> String {
     SimBackend -> "Simulator"
     RealBackend -> "Web Serial"
     EmuBackend -> "Emulator"
+  }
+}
+
+// ── instructions card (dynamic per-phase guidance) ───────────────────────────
+// A compact, phase-scoped "what to do here" panel that lives under the
+// connection card. The content is driven by the current `Screen` (the Session
+// projection), so it always matches the lifecycle stage. Space is tight (a
+// 320px sidebar), so each phase is one short title, a few numbered steps, and at
+// most one caveat + one warning — terse, scannable, monospaced.
+
+/// A single advisory line, by severity (drives the icon + accent colour).
+type Note {
+  // A neutral heads-up / clarification.
+  Caveat(String)
+  // A safety / data-loss warning — loud, red.
+  Warn(String)
+}
+
+/// The guidance for one phase: a heading, the ordered steps, and any notes.
+type Guidance {
+  Guidance(title: String, steps: List(String), notes: List(Note))
+}
+
+fn instructions_card(screen: Screen) -> Element(model.Msg) {
+  let Guidance(title:, steps:, notes:) = guidance_for(screen)
+  h.div([a.class("instr-card")], [
+    h.p([a.class("section-label instr-title")], [h.text(title)]),
+    h.ol(
+      [a.class("instr-steps")],
+      list.map(steps, fn(s) { h.li([], [h.text(s)]) }),
+    ),
+    ..list.map(notes, note_line)
+  ])
+}
+
+fn note_line(note: Note) -> Element(model.Msg) {
+  let #(cls, icon, text) = case note {
+    Caveat(t) -> #("instr-note caveat", "ℹ", t)
+    Warn(t) -> #("instr-note warn", "⚠", t)
+  }
+  h.p([a.class(cls)], [
+    h.span([a.class("instr-icon")], [h.text(icon)]),
+    h.span([], [h.text(text)]),
+  ])
+}
+
+/// The per-phase copy. Kept short by design — the full procedure lives in the
+/// main stage view; this is the at-a-glance "what now / what to watch".
+fn guidance_for(screen: Screen) -> Guidance {
+  case screen {
+    Load ->
+      Guidance(
+        title: "Load & Connect",
+        steps: [
+          "Drop the .drl (+ optional Edge.Cuts) to parse the board.",
+          "Pick a backend, then Connect.",
+        ],
+        notes: [
+          Caveat("Web Serial needs Chromium + a click to open the port."),
+        ],
+      )
+    Align ->
+      Guidance(
+        title: "Physical Alignment",
+        steps: [
+          "Energize, then jog the bit onto each fiducial.",
+          "Capture 3–4 non-collinear points.",
+          "Fit — check residuals are green before proceeding.",
+        ],
+        notes: [
+          Caveat("Capture with motors LIVE; jog the final nudge energized."),
+          Warn("De-energizing discards the alignment — you re-register."),
+        ],
+      )
+    DryRun ->
+      Guidance(
+        title: "Dry-run Rehearsal",
+        steps: [
+          "Watch the head trace every hole, spindle OFF.",
+          "Confirm the pattern lines up with the board.",
+          "Proceed to drill, or redo alignment.",
+        ],
+        notes: [
+          Caveat("Hovers +0.2 mm — it never plunges in dry-run."),
+          Warn("Confirm only if registration looks right — next pass cuts."),
+        ],
+      )
+    Drill ->
+      Guidance(
+        title: "Active Drilling",
+        steps: [
+          "Spindle on; the bit plunges each hole.",
+          "Swap the bit at each pause, then Resume.",
+        ],
+        notes: [
+          Warn("Stay at the bench. Emergency Stop halts motion instantly."),
+        ],
+      )
+    Done ->
+      Guidance(
+        title: "Completion",
+        steps: [
+          "Review the run summary.",
+          "Start a new board to run again.",
+        ],
+        notes: [],
+      )
+    Settings ->
+      Guidance(
+        title: "Settings",
+        steps: ["Tune Z heights, feeds, spindle G-code, and the backend."],
+        notes: [
+          Caveat("Saved per-operator in this browser. Locks once a run starts."),
+        ],
+      )
+    Log ->
+      Guidance(
+        title: "Serial Log",
+        steps: ["Every TX/RX line + connection notes, newest last."],
+        notes: [],
+      )
   }
 }
 
