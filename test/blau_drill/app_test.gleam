@@ -15,6 +15,7 @@ import blau_drill/control/printer
 import blau_drill/control/transport
 import blau_drill/domain/board_model.{Inputs}
 import blau_drill/domain/config
+import blau_drill/domain/correspondence.{Correspondence}
 import blau_drill/domain/job
 import blau_drill/ui/bridge
 import blau_drill/ui/mock
@@ -22,9 +23,9 @@ import blau_drill/ui/model.{
   type Model, Align, BBox, Board, CancelRelease, ConfNone, ConfirmReleaseMotors,
   Connection, Done, Drill, DryRun, Front, HaveBoard, HaveBoardModel, HaveJob,
   HaveTransform, Head, Load, Model, NoBitChange, NoBoard, NoDiagnostic,
-  NoFitDiag, NoHeadPos, NoOverlay, NoProgress, NoSummary, NoTransform, Release,
-  Settings,
+  NoHeadPos, NoOverlay, NoTransform, Release, Settings,
 }
+import blau_drill/ui/projection
 import blau_drill/ui/sample
 import blau_drill/ui/session
 import gleam/float
@@ -174,23 +175,9 @@ fn base_model() -> Model {
     outline_file: "",
     upload_error: "",
     head: Head(0.0, 0.0, 0.0),
-    head_pos: NoHeadPos,
-    head_confidence: ConfNone,
     jog_step: 1.0,
-    captured: [],
     current_target: 0,
     fiducial_target: 4,
-    quality: -1,
-    residual_max: 0.0,
-    residual_rms: 0.0,
-    alignment_rejected: False,
-    fit_diag: NoFitDiag,
-    progress: NoProgress,
-    bit_change: NoBitChange,
-    summary: NoSummary,
-    telemetry_bit: "—",
-    telemetry_eta: "—",
-    telemetry_spindle: "OFF",
     zoom: 1.0,
     category: Connection,
     config: cfg,
@@ -201,10 +188,7 @@ fn base_model() -> Model {
     job: HaveJob(job.new(wm)),
     pending_drl: sample.drl(),
     pending_edge_cuts: "",
-    captures: [],
-    transform: NoTransform,
     applied_config: bridge.gcode_config(cfg, config.DryRun),
-    bit_changes_seen: 0,
     board_side: Front,
     release_confirm: False,
     comms_log: [],
@@ -219,10 +203,12 @@ fn base_model() -> Model {
 // proof), so a reload is a blank slate by construction: nothing to restore.
 pub fn base_model_has_no_alignment_test() {
   let m = base_model()
-  m.transform |> should.equal(NoTransform)
-  m.captures |> should.equal([])
-  m.captured |> should.equal([])
-  m.head_confidence |> should.equal(ConfNone)
+  // The alignment-derived values are PROJECTIONS now (ADR-0018) — a fresh,
+  // unregistered job projects to no transform / no captures / ConfNone.
+  projection.transform(m) |> should.equal(NoTransform)
+  projection.captures(m) |> should.equal([])
+  projection.captured(m) |> should.equal([])
+  projection.head_confidence(m) |> should.equal(ConfNone)
 }
 
 // Drive the LIVE alignment path from `base` to a genuine solved transform:
@@ -278,8 +264,9 @@ pub fn live_capture_records_head_z_test() {
   let m4 = Model(..m3, head: Head(m3.head.x, m3.head.y, -1.5))
   // Capture the current target.
   let #(m5, _) = app.update(m4, model.CaptureFiducial)
-  // Exactly one capture, and its machine_z is the head Z (-1.5), not 0.0.
-  case m5.captures {
+  // Exactly one capture (projected from the job's pending correspondences), and
+  // its machine_z is the head Z (-1.5), not 0.0.
+  case projection.captures(m5) {
     [c] -> approx(c.machine_z, -1.5) |> should.be_true
     _ -> should.fail()
   }
@@ -355,9 +342,10 @@ pub fn app_pause_pauses_at_first_bit_change_and_surfaces_panel_test() {
   let m = pump_to_pause(m0, 100)
   // The FSM is genuinely paused on the first sentinel (not streaming through).
   controller.state(m.controller) |> printer.is_stream_paused |> should.be_true
-  // `bit_change` is set — the dry-run aside's `pause_panel` renders off this, so
-  // the operator gets a Resume affordance on the dry-run screen.
-  case m.bit_change {
+  // The bit-change modal is PROJECTED from the FSM's paused state (ADR-0018) — the
+  // dry-run aside's `pause_panel` renders off `projection.bit_change`, so the
+  // operator gets a Resume affordance on the dry-run screen.
+  case projection.bit_change(m) {
     model.HaveBitChange(_) -> True
     model.NoBitChange -> False
   }
@@ -371,7 +359,8 @@ pub fn resume_drilling_continues_the_paused_stream_test() {
   // ResumeDrilling clears the modal AND resumes the stream: the FSM leaves the
   // paused state (back to Streaming — the next real line went out).
   let #(m2, _e2) = app.update(m, model.ResumeDrilling)
-  m2.bit_change |> should.equal(NoBitChange)
+  // Leaving the paused state clears the projected modal (no field to reset).
+  projection.bit_change(m2) |> should.equal(NoBitChange)
   controller.state(m2.controller) |> printer.is_stream_paused |> should.be_false
   controller.state(m2.controller) |> printer.is_streaming |> should.be_true
 }
@@ -422,8 +411,8 @@ pub fn jump_with_no_captures_is_noop_test() {
   // no solved transform — the only state from which a jump must no-op.
   is_jogging(m) |> should.be_true
   scr(m) |> should.equal(Align)
-  m.captures |> should.equal([])
-  m.transform |> should.equal(NoTransform)
+  projection.captures(m) |> should.equal([])
+  projection.transform(m) |> should.equal(NoTransform)
   // A click-to-jump to any board point writes nothing and moves nothing: the
   // model is returned UNCHANGED (the estimate Errors → `noeff(model)`).
   let #(m2, _e) = app.update(m, model.JumpTo(#(12.0, 34.0)))
@@ -456,7 +445,8 @@ pub fn release_while_aligned_sets_confirm_does_not_reset_test() {
   m2.release_confirm |> should.be_true
   is_jogging(m2) |> should.be_true
   job_state(m2) |> should.equal(job.Aligned)
-  case m2.transform {
+  // The transform is PROJECTED from the still-Aligned job — present (ADR-0018).
+  case projection.transform(m2) {
     HaveTransform(_) -> True
     NoTransform -> False
   }
@@ -464,19 +454,20 @@ pub fn release_while_aligned_sets_confirm_does_not_reset_test() {
 }
 
 // The confirmed release actually de-energizes AND resets the alignment in lockstep:
-// model fields cleared, job back to Parsed, confirm flag cleared.
+// the job goes back to Parsed (so every alignment PROJECTION resets), confirm flag
+// cleared.
 pub fn confirm_release_resets_alignment_test() {
   let m = aligned_jogging_model()
   let #(m1, _e1) = app.update(m, Release)
   m1.release_confirm |> should.be_true
   let #(m2, _e2) = app.update(m1, ConfirmReleaseMotors)
   m2.release_confirm |> should.be_false
-  m2.transform |> should.equal(NoTransform)
-  m2.captures |> should.equal([])
-  m2.captured |> should.equal([])
-  m2.head_confidence |> should.equal(ConfNone)
-  m2.head_pos |> should.equal(NoHeadPos)
-  m2.quality |> should.equal(-1)
+  projection.transform(m2) |> should.equal(NoTransform)
+  projection.captures(m2) |> should.equal([])
+  projection.captured(m2) |> should.equal([])
+  projection.head_confidence(m2) |> should.equal(ConfNone)
+  projection.head_pos(m2) |> should.equal(NoHeadPos)
+  projection.quality(m2) |> should.equal(-1)
   m2.current_target |> should.equal(0)
   job_state(m2) |> should.equal(job.Parsed)
 }
@@ -489,7 +480,8 @@ pub fn cancel_release_keeps_alignment_test() {
   let #(m2, _e2) = app.update(m1, CancelRelease)
   m2.release_confirm |> should.be_false
   job_state(m2) |> should.equal(job.Aligned)
-  case m2.transform {
+  // The transform is still projected from the kept Aligned job.
+  case projection.transform(m2) {
     HaveTransform(_) -> True
     NoTransform -> False
   }
@@ -518,10 +510,10 @@ pub fn disconnect_resets_alignment_test() {
   let m = aligned_jogging_model()
   job_state(m) |> should.equal(job.Aligned)
   let #(m2, _e) = app.update(m, model.DisconnectDevice)
-  m2.transform |> should.equal(NoTransform)
-  m2.captures |> should.equal([])
-  m2.captured |> should.equal([])
-  m2.head_confidence |> should.equal(ConfNone)
+  projection.transform(m2) |> should.equal(NoTransform)
+  projection.captures(m2) |> should.equal([])
+  projection.captured(m2) |> should.equal([])
+  projection.head_confidence(m2) |> should.equal(ConfNone)
   job_state(m2) |> should.equal(job.Parsed)
 }
 
@@ -536,4 +528,52 @@ pub fn backend_for_maps_each_kind_test() {
   app.backend_for(model.SimBackend).name |> should.equal("Simulator")
   app.backend_for(model.RealBackend).name |> should.equal("Web Serial")
   app.backend_for(model.EmuBackend).name |> should.equal("Emulator")
+}
+
+// ── ADR-0018: a degenerate fit guides via upload_error, never a stored shadow ──
+//
+// Regression for the behavior Chunk 3 changed: when ADR-0018 deleted the stored
+// `alignment_rejected` / `fit_diag` shadow fields, a degenerate fit (3+ collinear
+// board points) — which the job FSM REFUSES (`Error(FitDegenerate)`, the job
+// stays `Registering`, so there is NO `AlignmentRejected` state to project a
+// rejected box from) — surfaces its guidance through `upload_error` instead. This
+// path had no test; pin it. Three collinear board points (0,0),(1,1),(2,2) force
+// Degenerate (mirrors alignment_test.three_collinear_degenerate_test).
+fn degenerate_capture_job(base: Model) -> job.Job {
+  let assert HaveJob(j0) = base.job
+  let assert Ok(reg) = job.transition(j0, job.StartRegistering)
+  // Accumulate three COLLINEAR correspondences (board points on y = x). The
+  // machine points are arbitrary; degeneracy is judged on the BOARD points.
+  [
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: -1.0),
+    Correspondence(board: #(1.0, 1.0), machine: #(3.0, 7.0), machine_z: -1.0),
+    Correspondence(board: #(2.0, 2.0), machine: #(6.0, 14.0), machine_z: -1.0),
+  ]
+  |> list.fold(reg, fn(j, corr) {
+    let assert Ok(j2) = job.transition(j, job.Capture(corr))
+    j2
+  })
+}
+
+pub fn degenerate_fit_guides_via_upload_error_test() {
+  let base = base_model()
+  let j = degenerate_capture_job(base)
+  // Sanity: three captures are present (so the handler's >= 3 pre-check passes
+  // and we reach the real Fit transition, which is what rejects as Degenerate).
+  let m0 = Model(..base, job: HaveJob(j))
+  projection.captures(m0) |> list.length |> should.equal(3)
+
+  // Drive the REAL handler path.
+  let #(m, _) = app.update(m0, model.Fit)
+
+  // The degenerate-geometry guidance is surfaced (not a generic too-few message).
+  m.upload_error
+  |> should.equal("Capture at least 3 well-spread (non-collinear) fiducials.")
+
+  // The job did NOT transition: it stays Registering (a degenerate fit is refused
+  // by the FSM), so there is no solved/rejected alignment to project.
+  job_state(m) |> should.equal(job.Registering)
+  projection.alignment_rejected(m) |> should.be_false
+  projection.transform(m) |> should.equal(NoTransform)
+  projection.quality(m) |> should.equal(-1)
 }

@@ -15,10 +15,33 @@
 import blau_drill/control/backend.{type Backend, type Conn}
 import blau_drill/control/printer.{type PrinterState}
 import blau_drill/control/transport
+import blau_drill/domain/gcode_program.{
+  type RenderedLine, DrillHoleKind, LineOrigin, RenderedLine,
+}
 import gleam/javascript/promise.{type Promise}
 import gleam/list
+import gleam/option.{None}
 import gleam/string
 import gleeunit/should
+
+// Wrap a bare-string program into a `RenderedLine` program (ADR-0017): the FSM
+// streams `RenderedLine`s now. A benign non-pause origin — a literal `M0` here
+// (NOT the in-app sentinel) gets no pause origin, so the FSM streams it and the
+// emulator's own M0 stops the machine, exactly as before.
+fn prog(lines: List(String)) -> List(RenderedLine) {
+  list.map(lines, fn(l) {
+    RenderedLine(
+      wire: l,
+      origin: LineOrigin(
+        op_index: 0,
+        kind: DrillHoleKind,
+        tool: None,
+        hole_id: None,
+        pause: None,
+      ),
+    )
+  })
+}
 
 // ── mutable cell + deferred (test-only FFI, shared with control_test) ─────────
 
@@ -225,7 +248,8 @@ pub fn stream_completes_through_emulator_test() -> Promise(Nil) {
   |> promise.await(fn(_) {
     let assert Ok(conn) = ref_get(conn_ref)
     // Now kick off the stream: the pure command emits the first framed write.
-    let started = printer.command(ref_get(state_ref), printer.Stream(program))
+    let started =
+      printer.command(ref_get(state_ref), printer.Stream(prog(program)))
     let _ = ref_set(state_ref, started.state)
     perform_writes(b, conn, started.writes)
     deferred_promise(done)
@@ -251,7 +275,7 @@ fn on_stream_line(
   let progressed =
     list.any(step.events, fn(e) {
       case e {
-        printer.Progress(_, _, _) -> True
+        printer.Progress(_, _, _, _) -> True
         _ -> False
       }
     })
@@ -365,7 +389,8 @@ pub fn m0_blocks_until_resume_test() -> Promise(Nil) {
   |> promise.await(fn(_) {
     // Phase 3 — start the stream. Line 1 acks, then M0 STALLS (no ok).
     let assert Ok(conn) = ref_get(conn_ref)
-    let started = printer.command(ref_get(state_ref), printer.Stream(program))
+    let started =
+      printer.command(ref_get(state_ref), printer.Stream(prog(program)))
     let _ = ref_set(state_ref, started.state)
     perform_writes(b, conn, started.writes)
     tick()

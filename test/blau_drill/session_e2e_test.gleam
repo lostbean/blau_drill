@@ -46,9 +46,8 @@ import blau_drill/domain/job
 import blau_drill/ui/bridge
 import blau_drill/ui/mock
 import blau_drill/ui/model.{
-  type Model, ConfNone, Connection, Front, HaveBoard, HaveBoardModel, HaveJob,
-  Head, Model, NoBitChange, NoDiagnostic, NoFitDiag, NoHeadPos, NoOverlay,
-  NoProgress, NoSummary, NoTransform,
+  type Model, Connection, Front, HaveBoard, HaveBoardModel, HaveJob, Head, Model,
+  NoDiagnostic, NoOverlay,
 }
 import blau_drill/ui/sample
 import gleam/list
@@ -72,23 +71,9 @@ fn base_model() -> Model {
     outline_file: "",
     upload_error: "",
     head: Head(0.0, 0.0, 0.0),
-    head_pos: NoHeadPos,
-    head_confidence: ConfNone,
     jog_step: 1.0,
-    captured: [],
     current_target: 0,
     fiducial_target: 4,
-    quality: -1,
-    residual_max: 0.0,
-    residual_rms: 0.0,
-    alignment_rejected: False,
-    fit_diag: NoFitDiag,
-    progress: NoProgress,
-    bit_change: NoBitChange,
-    summary: NoSummary,
-    telemetry_bit: "—",
-    telemetry_eta: "—",
-    telemetry_spindle: "OFF",
     zoom: 1.0,
     category: Connection,
     config: cfg,
@@ -99,10 +84,7 @@ fn base_model() -> Model {
     job: HaveJob(job.new(wm)),
     pending_drl: sample.drl(),
     pending_edge_cuts: "",
-    captures: [],
-    transform: NoTransform,
     applied_config: bridge.gcode_config(cfg, config.DryRun),
-    bit_changes_seen: 0,
     board_side: Front,
     release_confirm: False,
     comms_log: [],
@@ -137,14 +119,16 @@ fn aligned_jogging_model_from(base: Model) -> Model {
 }
 
 // The DRILL program's streamed-line count for this model — built EXACTLY the way
-// `app.confirm_registration` builds it (same board, same alignment, Drill mode).
-// This is the length the wire SHOULD be running after ConfirmRegistration.
+// `app.confirm_registration` builds it (same board, same alignment, Drill mode):
+// the `Wire` render of `build_ops`, the form the app streams. This is the length
+// the wire SHOULD be running after ConfirmRegistration.
 fn drill_program_len(m: Model) -> Int {
   let assert HaveJob(j) = m.job
   let assert Some(al) = j.alignment
   let drill_cfg = config.GcodeConfig(..m.applied_config, mode: config.Drill)
-  gcode_program.build(j.board, al, drill_cfg)
-  |> gcode_program.stream_lines
+  let ops = gcode_program.build_ops(j.board, al, drill_cfg)
+  let ctx = gcode_program.render_context(j.board, al, drill_cfg)
+  gcode_program.render(ops, ctx, gcode_program.Wire)
   |> list.length
 }
 

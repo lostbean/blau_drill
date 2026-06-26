@@ -74,7 +74,7 @@ pub type CanvasData {
     zoom: Float,
     /// Per-captured-fiducial residuals from the last fit, keyed by the
     /// fiducial's `index`. Empty before a fit (no annotations drawn). Populated
-    /// from `model.fit_diag` by `stages.canvas_data`.
+    /// from the `projection.fit_diag` projection by `stages.canvas_data`.
     point_residuals: List(PointResidual),
     /// The fiducial index of the WORST residual, or -1 when none (no fit yet).
     /// The marker at this index is highlighted distinctly.

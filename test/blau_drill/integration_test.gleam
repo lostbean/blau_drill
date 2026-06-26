@@ -111,25 +111,34 @@ pub fn job_legal_path_test() {
 /// The built drill program emits spindle-on (M3 S..) before the first plunge
 /// (G1 Z-..) — the spindle-before-plunge structural invariant, unmodified.
 pub fn drill_program_spindle_before_plunge_test() {
-  let program = build_drill_program()
-  let spindle =
-    first_index(program.lines, fn(l) { string.starts_with(l, "M3 S") })
-  let plunge =
-    first_index(program.lines, fn(l) { string.starts_with(l, "G1 Z-") })
+  // The human-readable (`Rich`) render of the drill program — the M3/plunge
+  // ordering is identical to the streamed form (the filter only drops
+  // blank/comment lines, never reorders).
+  let lines =
+    build_drill_rendered(gcode_program.Rich) |> list.map(fn(rl) { rl.wire })
+  let spindle = first_index(lines, fn(l) { string.starts_with(l, "M3 S") })
+  let plunge = first_index(lines, fn(l) { string.starts_with(l, "G1 Z-") })
   case spindle, plunge {
     Ok(s), Ok(p) -> { s < p } |> should.equal(True)
     _, _ -> should.fail()
   }
 }
 
-fn build_drill_program() -> gcode_program.GcodeProgram {
+// The drill program as `RenderedLine`s (ADR-0017): `build_ops` +
+// `render(_, _, target)`. The `Wire` target is the exact form the app streams
+// through `printer.Stream`; the `Rich` target is the human-readable form.
+fn build_drill_rendered(
+  target: gcode_program.RenderTarget,
+) -> List(gcode_program.RenderedLine) {
   let bm = parse_sample()
   let corrs =
     bridge.feature_candidates(bm)
     |> list.map(fn(p) { Correspondence(board: p, machine: p, machine_z: 0.0) })
   let assert Ok(al) = alignment.fit(corrs)
   let cfg = config.GcodeConfig(..config.default(), mode: config.Drill)
-  gcode_program.build(bm, al, cfg)
+  let ops = gcode_program.build_ops(bm, al, cfg)
+  let ctx = gcode_program.render_context(bm, al, cfg)
+  gcode_program.render(ops, ctx, target)
 }
 
 // ── the end-to-end stream proof ──────────────────────────────────────────────
@@ -138,8 +147,8 @@ fn build_drill_program() -> gcode_program.GcodeProgram {
 /// machine reaches `StreamComplete` → `Idle` having confirmed every streamed
 /// line and drilled every hole (one `G1 X.. Y.. F..` travel move per hole).
 ///
-/// We stream `gcode_program.stream_lines(program)` — the exact form the app
-/// streams (`app.gleam`): the rich `.lines` minus blank lines and full-line
+/// We stream the `Wire` render (`render(_, _, Wire)`) — the exact form the app
+/// streams (`app.gleam`): the rendered program minus blank lines and full-line
 /// comments, which Marlin doesn't reliably `ok`. The sentinels survive the
 /// filter (they start with a command token), so the pause path is still
 /// exercised.
@@ -153,9 +162,13 @@ fn build_drill_program() -> gcode_program.GcodeProgram {
 /// real line and re-arm the handshake. So this proves the full streamed-WITH-
 /// pauses program runs straight through to `StreamComplete` + `Idle`.
 pub fn drill_program_streams_to_complete_test() -> Promise(Nil) {
-  let program = build_drill_program()
-  // The app streams the FILTERED view, not the rich `.lines`. Mirror that here.
-  let lines = gcode_program.stream_lines(program)
+  // The app streams `RenderedLine`s (ADR-0017): `render(_, _, Wire)` — each line
+  // pairs its framed wire text with the typed origin the FSM pauses on. The
+  // sentinel lines carry a REAL `origin.pause` (so the pause path runs through
+  // the origin check, not a string match). `lines` is the `.wire` projection of
+  // the `Wire` render, the streamed form, for the string asserts.
+  let rendered = build_drill_rendered(gcode_program.Wire)
+  let lines = list.map(rendered, fn(rl) { rl.wire })
   let total_lines = list.length(lines)
   // Count actual hole moves: the inter-hole XY travel is now a controlled
   // `G1 X.. Y.. F<xy_feed>` (ADR-0015; was a `G0 X..` rapid). The only `G0 X..`
@@ -198,7 +211,7 @@ pub fn drill_program_streams_to_complete_test() -> Promise(Nil) {
       fn(_reason) { Nil },
     )
 
-    let started = printer.command(ref_get(state_ref), Stream(lines))
+    let started = printer.command(ref_get(state_ref), Stream(rendered))
     let _ = ref_set(state_ref, started.state)
     perform_writes(b, conn, started.writes)
     Nil
@@ -240,7 +253,7 @@ fn on_inbound(
   let progressed =
     list.any(step.events, fn(e) {
       case e {
-        printer.Progress(_, _, _) -> True
+        printer.Progress(_, _, _, _) -> True
         _ -> False
       }
     })

@@ -32,9 +32,16 @@ pub type ToolId =
 pub type ToolTable =
   Dict(ToolId, Float)
 
-/// A single drill location in board space.
+/// A stable hole identity, assigned at parse time in **file-parse order**
+/// (ADR-0016). The first hole parsed is id 0. Tool grouping later reorders holes
+/// for drilling, but the id rides along, so "hole N done" is unambiguous and
+/// matches the board view's file-order walk.
+pub type HoleId =
+  Int
+
+/// A single drill location in board space, carrying its file-order `id`.
 pub type Hole {
-  Hole(x: Float, y: Float, tool: ToolId)
+  Hole(id: HoleId, x: Float, y: Float, tool: ToolId)
 }
 
 /// The kind of a registration-candidate reference mark.
@@ -159,7 +166,16 @@ fn scan(
     [] ->
       case state.holes {
         [] -> Error(NoHoles)
-        _ -> Ok(#(state.tools, list.reverse(state.holes)))
+        // `state.holes` is reverse-accumulated; reversing recovers file order.
+        // The file-order `id` is then assigned 0..n-1 over that ordered list
+        // (ADR-0016: hole identity is file-parse order). The placeholder id used
+        // during scan is overwritten here, the single place file order is known.
+        _ ->
+          Ok(#(
+            state.tools,
+            list.reverse(state.holes)
+              |> list.index_map(fn(h, i) { Hole(..h, id: i) }),
+          ))
       }
     [line, ..rest] -> {
       case is_comment(line) || line == "" {
@@ -183,7 +199,9 @@ fn scan(
                       case state.active {
                         None -> Error(HoleWithNoTool(line))
                         Some(tool) -> {
-                          let hole = Hole(x: x, y: y, tool: tool)
+                          // id is a placeholder here; the final file-order id is
+                          // assigned once over the reversed list (see [] case).
+                          let hole = Hole(id: 0, x: x, y: y, tool: tool)
                           scan(
                             rest,
                             ScanState(..state, holes: [hole, ..state.holes]),

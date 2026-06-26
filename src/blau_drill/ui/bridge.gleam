@@ -109,7 +109,8 @@ pub fn working_board_model(
   let holes =
     list.map(bm.holes, fn(h) {
       let #(x, y) = transform2d.apply(xf, #(h.x, h.y))
-      board_model.Hole(x:, y:, tool: h.tool)
+      // Re-projection preserves the file-order hole id (ADR-0016).
+      board_model.Hole(id: h.id, x:, y:, tool: h.tool)
     })
   let outline = case bm.outline {
     Some(pts) -> Some(list.map(pts, transform2d.apply(xf, _)))

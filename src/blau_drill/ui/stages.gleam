@@ -21,6 +21,7 @@ import blau_drill/ui/model.{
   SpindleControl, StartRegistering, TestSpindle, ToggleAppPause,
   ToggleAutoConnect,
 }
+import blau_drill/ui/projection
 import blau_drill/ui/session
 import gleam/float
 import gleam/int
@@ -46,15 +47,18 @@ fn screen_of(model: Model) -> model.Screen {
 // ── canvas data assembly (the Phase-4 seam for board/head/fiducials) ─────────
 
 fn canvas_data(model: Model) -> CanvasData {
-  let board = case model.board {
+  // The board's hole STATUS is projected from the run (ADR-0018), not stored.
+  let board = case projection.board(model) {
     model.HaveBoard(b) -> b
     model.NoBoard -> mock.board()
   }
-  // fiducials = captured + pending candidates not yet captured.
-  let fiducials = list.append(model.captured, pending_fiducials(model))
+  // fiducials = captured (projected from the job's pending captures) + pending
+  // candidates not yet captured.
+  let captured = projection.captured(model)
+  let fiducials = list.append(captured, pending_fiducials(model, captured))
   // Per-fiducial residuals from the last fit (empty / -1 before a fit), so the
   // canvas annotates each captured marker with its error and flags the worst.
-  let #(point_residuals, worst_index) = case model.fit_diag {
+  let #(point_residuals, worst_index) = case projection.fit_diag(model) {
     model.HaveFitDiag(d) -> #(d.points, board_canvas.worst_index_of(d.worst))
     model.NoFitDiag -> #([], -1)
   }
@@ -65,8 +69,8 @@ fn canvas_data(model: Model) -> CanvasData {
     tools: board.tools,
     bbox: board.bbox,
     head: model.head,
-    head_pos: model.head_pos,
-    head_confidence: model.head_confidence,
+    head_pos: projection.head_pos(model),
+    head_confidence: projection.head_confidence(model),
     stage: screen_of(model),
     zoom: model.zoom,
     point_residuals: point_residuals,
@@ -74,8 +78,11 @@ fn canvas_data(model: Model) -> CanvasData {
   )
 }
 
-fn pending_fiducials(model: Model) -> List(model.Fiducial) {
-  let captured_idx = list.map(model.captured, fn(f) { f.index })
+fn pending_fiducials(
+  model: Model,
+  captured: List(model.Fiducial),
+) -> List(model.Fiducial) {
+  let captured_idx = list.map(captured, fn(f) { f.index })
   let candidates = case model.board {
     model.HaveBoard(b) -> b.candidates
     model.NoBoard -> mock.candidates()
@@ -297,7 +304,8 @@ pub fn next_step(captured: Int, _target: Int) -> NextStep {
 
 pub fn align(model: Model) -> Element(model.Msg) {
   let motors_online = session.is_jogging(sess(model))
-  let captured_count = list.length(model.captured)
+  let captured_count = list.length(projection.captured(model))
+  let quality = projection.quality(model)
   let next = next_step(captured_count, model.fiducial_target)
   // Capture is done once we hit the target — you can't over-capture.
   let capture_done = captured_count >= model.fiducial_target
@@ -353,6 +361,10 @@ pub fn align(model: Model) -> Element(model.Msg) {
         ],
         [h.text("Fit Alignment")],
       ),
+      // A failed fit (too-few / degenerate) does NOT transition the job (so the
+      // rejected-box projection stays empty); its guidance rides `upload_error`,
+      // surfaced here in the Align aside.
+      align_error(model),
       h.button(
         [
           a.class("btn btn-outline btn-block"),
@@ -367,7 +379,7 @@ pub fn align(model: Model) -> Element(model.Msg) {
         [
           a.class("btn btn-primary btn-block btn-lg spacer"),
           a.attribute("type", "button"),
-          a.disabled(model.quality < 0 || model.alignment_rejected),
+          a.disabled(quality < 0 || projection.alignment_rejected(model)),
           event.on_click(RunDryRun),
         ],
         [h.text("Proceed to Dry-run →")],
@@ -388,7 +400,7 @@ fn first_fiducial_hint(
   model: Model,
   motors_online: Bool,
 ) -> Element(model.Msg) {
-  case motors_online && model.captured == [] {
+  case motors_online && projection.captured(model) == [] {
     False -> element.none()
     True ->
       h.p([a.class("panel-hint")], [
@@ -548,23 +560,32 @@ fn jog_btn(
   )
 }
 
+// The Align-aside error line (failed-fit guidance). Empty when there is none.
+fn align_error(model: Model) -> Element(model.Msg) {
+  case model.upload_error {
+    "" -> element.none()
+    err -> h.p([a.class("upload-error")], [h.text(err)])
+  }
+}
+
 fn quality_panel(model: Model) -> Element(model.Msg) {
-  case model.quality < 0 {
+  let quality = projection.quality(model)
+  case quality < 0 {
     True -> element.none()
     False -> {
-      let #(cls, label) = quality_class(model.quality)
+      let #(cls, label) = quality_class(quality)
       h.div([a.class("panel")], [
         h.div([a.class("panel-head")], [
           h.span([a.class("panel-head-label")], [h.text("Est. Quality")]),
           h.span([a.class("quality-value " <> cls)], [
-            h.text(int.to_string(model.quality) <> "% " <> label),
+            h.text(int.to_string(quality) <> "% " <> label),
           ]),
         ]),
         h.div([a.class("quality-track")], [
           h.div(
             [
               a.class("quality-fill " <> cls),
-              a.style("width", int.to_string(model.quality) <> "%"),
+              a.style("width", int.to_string(quality) <> "%"),
             ],
             [],
           ),
@@ -572,9 +593,9 @@ fn quality_panel(model: Model) -> Element(model.Msg) {
         h.p([a.class("residuals")], [
           h.text(
             "residual max "
-            <> fmt3(model.residual_max)
+            <> fmt3(projection.residual_max(model))
             <> " mm · rms "
-            <> fmt3(model.residual_rms)
+            <> fmt3(projection.residual_rms(model))
             <> " mm",
           ),
         ]),
@@ -592,10 +613,11 @@ fn quality_class(pct: Int) -> #(String, String) {
 }
 
 fn rejected_box(model: Model) -> Element(model.Msg) {
-  case model.alignment_rejected {
+  case projection.alignment_rejected(model) {
     False -> element.none()
     True -> {
-      let #(hint, points, can_override) = case model.fit_diag {
+      let residual_max = projection.residual_max(model)
+      let #(hint, points, can_override) = case projection.fit_diag(model) {
         model.HaveFitDiag(d) -> #(d.hint, fit_point_rows(d), d.can_override)
         model.NoFitDiag -> #(
           "Alignment rejected — residual over tolerance.",
@@ -629,7 +651,7 @@ fn rejected_box(model: Model) -> Element(model.Msg) {
                 h.p([a.class("override-warn")], [
                   h.text(
                     "Override: proceed on this fit despite "
-                    <> fmt3(model.residual_max)
+                    <> fmt3(residual_max)
                     <> " mm error. Holes may be off by this much. Only do this if "
                     <> "you understand the risk.",
                   ),
@@ -641,9 +663,7 @@ fn rejected_box(model: Model) -> Element(model.Msg) {
                     event.on_click(model.OverrideAlignment),
                   ],
                   [
-                    h.text(
-                      "Proceed anyway (" <> fmt3(model.residual_max) <> " mm)",
-                    ),
+                    h.text("Proceed anyway (" <> fmt3(residual_max) <> " mm)"),
                   ],
                 ),
               ]),
@@ -751,7 +771,7 @@ pub fn dry_run(model: Model) -> Element(model.Msg) {
 }
 
 fn progress_note(model: Model) -> Element(model.Msg) {
-  case model.progress {
+  case projection.progress(model) {
     model.HaveProgress(p) ->
       h.div([a.class("panel")], [
         h.text(
@@ -769,7 +789,7 @@ fn progress_note(model: Model) -> Element(model.Msg) {
 // ── Stage 4: Active Drilling ──────────────────────────────────────────────────
 
 pub fn drill(model: Model) -> Element(model.Msg) {
-  let #(pct, drilled, total) = case model.progress {
+  let #(pct, drilled, total) = case projection.progress(model) {
     model.HaveProgress(p) -> #(
       progress_pct(p.drilled, p.total),
       p.drilled,
@@ -795,9 +815,13 @@ pub fn drill(model: Model) -> Element(model.Msg) {
     h.aside([a.class("aside aside-280")], [
       h.div([a.class("panel panel-high")], [
         h.p([a.class("section-label")], [h.text("Telemetry")]),
-        telemetry_row("Current Bit", model.telemetry_bit, "primary"),
-        telemetry_row("Est. Time Remaining", model.telemetry_eta, "secondary"),
-        telemetry_row("Spindle", model.telemetry_spindle, ""),
+        telemetry_row("Current Bit", projection.telemetry_bit(model), "primary"),
+        telemetry_row(
+          "Est. Time Remaining",
+          projection.telemetry_eta(model),
+          "secondary",
+        ),
+        telemetry_row("Spindle", projection.telemetry_spindle(model), ""),
       ]),
       // Bit-change pause as a sidebar panel (consistent with dry-run; no pop-up).
       pause_panel(model, "▶ Resume Drilling"),
@@ -827,11 +851,11 @@ fn telemetry_row(
 }
 
 fn complete_button(model: Model) -> Element(model.Msg) {
-  let drilled_all = case model.progress {
+  let drilled_all = case projection.progress(model) {
     model.HaveProgress(p) -> p.drilled >= p.total && p.total > 0
     model.NoProgress -> False
   }
-  let has_modal = case model.bit_change {
+  let has_modal = case projection.bit_change(model) {
     model.HaveBitChange(_) -> True
     model.NoBitChange -> False
   }
@@ -856,7 +880,7 @@ fn complete_button(model: Model) -> Element(model.Msg) {
 // bit" (ADR-0010 removed the touch-off); later ones are per-tool swaps. `resume`
 // is the button label so it reads right per stage ("rehearsal" vs "drilling").
 fn pause_panel(model: Model, resume: String) -> Element(model.Msg) {
-  case model.bit_change {
+  case projection.bit_change(model) {
     model.HaveBitChange(bc) ->
       h.div([a.class("panel panel-warn")], [
         h.div([a.class("panel-head")], [
@@ -909,7 +933,7 @@ pub fn done(model: Model) -> Element(model.Msg) {
 }
 
 fn summary_grid(model: Model) -> Element(model.Msg) {
-  case model.summary {
+  case projection.summary(model) {
     model.HaveSummary(s) ->
       h.div([a.class("summary-grid")], [
         summary_cell(

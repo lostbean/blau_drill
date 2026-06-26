@@ -37,38 +37,31 @@ import blau_drill/domain/config
 import blau_drill/domain/correspondence.{Correspondence}
 import blau_drill/domain/gcode_program
 import blau_drill/domain/job
-import blau_drill/domain/transform2d
 import blau_drill/ui/bridge
 import blau_drill/ui/mock
 import blau_drill/ui/model.{
-  type BackendKind, type Head, type Model, type Msg, Align, ApplyConfig,
-  BitChange, CancelRelease, Capture, Captured, Complete, ConfAligned,
-  ConfEstimate, ConfNone, ConfRough, ConfirmRegistration, ConfirmReleaseMotors,
-  ConnectDevice, Connection, ControllerEvent, DisconnectDevice, Done, Drill,
-  DrillMode, DrlPicked, DryRun, DryRunMode, EmuBackend, Energize, Fiducial, Fit,
-  GoToSession, GoToSettings, HaveBitChange, HaveBoard, HaveBoardModel,
-  HaveDiagnostic, HaveFitDiag, HaveHeadPos, HaveJob, HaveProgress, HaveSummary,
-  HaveTransform, Head, HoleDone, Jog, JumpTo, Load, LoadSample, Model, NavStage,
-  NewBoard, NoBitChange, NoBoard, NoBoardModel, NoDiagnostic, NoFitDiag,
-  NoHeadPos, NoJob, NoOverlay, NoProgress, NoSummary, NoTransform, OutlinePicked,
-  ParseBoard, Progress, RealBackend, Recapture, Reconnect, RedoAlignment,
-  Release, ResetDefaults, ResetView, RestartAlignment, ResumeDrilling, RunDryRun,
+  type BackendKind, type Model, type Msg, Align, ApplyConfig, CancelRelease,
+  Complete, ConfirmRegistration, ConfirmReleaseMotors, ConnectDevice, Connection,
+  ControllerEvent, DisconnectDevice, Done, Drill, DrlPicked, DryRun, EmuBackend,
+  Energize, Fit, GoToSession, GoToSettings, HaveBoard, HaveBoardModel,
+  HaveDiagnostic, HaveJob, Head, Jog, JumpTo, Load, LoadSample, Model, NavStage,
+  NewBoard, NoBoard, NoBoardModel, NoDiagnostic, NoJob, NoOverlay, OutlinePicked,
+  ParseBoard, RealBackend, Recapture, Reconnect, RedoAlignment, Release,
+  ResetDefaults, ResetView, RestartAlignment, ResumeDrilling, RunDryRun,
   SelectBackend, SelectCategory, SelectFile, SelectOutline, SetConfigField,
-  SetCurrentTarget, SetJogStep, Settings, SimBackend, StartRegistering, Summary,
+  SetCurrentTarget, SetJogStep, Settings, SimBackend, StartRegistering,
   TestSpindle, ToggleAppPause, ToggleAutoConnect,
 }
+import blau_drill/ui/projection
 import blau_drill/ui/sample
 import blau_drill/ui/session
 import blau_drill/ui/shell
 import blau_drill/ui/stages
 import blau_drill/ui/storage
-import gleam/dict
 import gleam/float
-import gleam/int
 import gleam/javascript/promise
 import gleam/list
 import gleam/option.{None, Some}
-import gleam/string
 import lustre
 import lustre/attribute as a
 import lustre/effect.{type Effect}
@@ -102,23 +95,9 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       outline_file: session.outline_file,
       upload_error: "",
       head: Head(0.0, 0.0, 0.0),
-      head_pos: NoHeadPos,
-      head_confidence: ConfNone,
       jog_step: session.jog_step,
-      captured: [],
       current_target: 0,
       fiducial_target: 4,
-      quality: -1,
-      residual_max: 0.0,
-      residual_rms: 0.0,
-      alignment_rejected: False,
-      fit_diag: NoFitDiag,
-      progress: NoProgress,
-      bit_change: NoBitChange,
-      summary: NoSummary,
-      telemetry_bit: "—",
-      telemetry_eta: "—",
-      telemetry_spindle: "OFF · 0 RPM",
       zoom: session.zoom,
       category: Connection,
       config: cfg,
@@ -129,10 +108,7 @@ fn init(_flags) -> #(Model, Effect(Msg)) {
       job: NoJob,
       pending_drl: session.drl,
       pending_edge_cuts: session.edge_cuts,
-      captures: [],
-      transform: NoTransform,
       applied_config: bridge.gcode_config(cfg, config.DryRun),
-      bit_changes_seen: 0,
       board_side: model.Front,
       release_confirm: False,
       comms_log: [],
@@ -521,23 +497,30 @@ fn fold_events(
 
 fn fold_event(model: Model, ev: printer.Event) -> #(Model, Effect(Msg)) {
   case ev {
-    // The live position from an M114 reply: update the head readout + crosshair.
+    // The live position from an M114 reply: update the head readout (the crosshair
+    // + confidence are projections of it now, ADR-0018).
     printer.PositionUpdate(pos) -> noeff(apply_head(model, pos.x, pos.y, pos.z))
 
-    // One confirmed stream line: fold into the progress ring + per-hole status.
-    printer.Progress(sent, total, _line) ->
-      noeff(apply_progress(model, sent, total))
+    // One confirmed stream line. The progress ring + per-hole board status + ETA
+    // are now PROJECTIONS of the FSM's `StreamJob` (ADR-0018): `projection.progress`
+    // / `projection.board` read the confirmed prefix's typed `DrillHoleKind` origins
+    // off `printer.stream_rendered`/`stream_progress` (ADR-0017). The FSM has
+    // already advanced its `idx` by the time this event folds, so there is nothing
+    // to hand-sync — the next render reads the new position straight from the FSM.
+    printer.Progress(_sent, _total, _line, _origin) -> noeff(model)
 
-    // The stream finished. In dry-run, leave the operator on the dry-run screen
-    // (the confirm gate is theirs); in drill, the run is done streaming but
-    // completion stays an explicit operator step (Mark Complete).
-    printer.StreamComplete -> noeff(stream_complete(model))
+    // The stream finished. The FSM has dropped to Idle (the standing "fully
+    // streamed" signal the progress/board projections read); completion stays an
+    // explicit operator step (Mark Complete on Drill; Confirm on DryRun). Nothing
+    // to fold.
+    printer.StreamComplete -> noeff(model)
 
     // The stream halted at an in-app pause point (app_pause on; a swapped-in
-    // sentinel where an M0 would be). Show the bit-change / resume modal so the
-    // operator swaps the bit and presses Resume (which issues ResumeStream).
-    printer.StreamPausedAt(pending, _total) ->
-      noeff(stream_paused(model, pending))
+    // sentinel where an M0 would be). The bit-change / resume modal is a PROJECTION
+    // of the FSM's standing `StreamPaused` state (ADR-0018) — `projection.bit_change`
+    // reads the paused line's typed `origin.pause` (ADR-0017) — so there is no
+    // event-driven field to set here.
+    printer.StreamPausedAt(_pending, _total, _reason) -> noeff(model)
 
     // The machine faulted (abort or serial loss): fault the job + show banner.
     printer.Faulting(_reason) -> noeff(fault(model))
@@ -730,22 +713,19 @@ fn disconnect_device(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 fn start_registering(model: Model) -> #(Model, Effect(Msg)) {
-  // Advance the job FSM Parsed → Registering, snapshot the config for the run,
-  // and reset capture state.
+  // Advance the job FSM Parsed → Registering and snapshot the config for the run.
+  // The alignment-derived values (captures, transform, quality, head pose, …) are
+  // PROJECTIONS of the job (ADR-0018), so the `StartRegistering` transition — which
+  // lands in a fresh `Registering` with an empty `pending` and no `alignment` —
+  // resets them by construction. No hand-sync needed. Only the operator's selected
+  // target (a parameter) is reset.
   let job2 = job_advance(model.job, job.StartRegistering)
   noeff(
     Model(
       ..model,
       job: job2,
       applied_config: bridge.gcode_config(model.config, config.DryRun),
-      captured: [],
-      captures: [],
       current_target: 0,
-      quality: -1,
-      alignment_rejected: False,
-      transform: NoTransform,
-      head_pos: NoHeadPos,
-      head_confidence: ConfNone,
     ),
   )
 }
@@ -826,7 +806,15 @@ fn jump_to(model: Model, point: #(Float, Float)) -> #(Model, Effect(Msg)) {
   {
     False -> noeff(model)
     True ->
-      case bridge.board_to_machine(model.transform, model.captures, point) {
+      // The best transform + the captures are PROJECTIONS of the job now
+      // (ADR-0018) — compute them for the estimate.
+      case
+        bridge.board_to_machine(
+          projection.transform(model),
+          projection.captures(model),
+          point,
+        )
+      {
         // ADR-0011: with NO captures and NoTransform the estimate Errors, so a
         // jump is a strict no-op (no phantom origin) — the operator must jog to
         // fiducial 1 and capture it first to establish the board↔machine relation.
@@ -857,15 +845,18 @@ fn capture(model: Model) -> #(Model, Effect(Msg)) {
           case list_at(board.candidates, idx) {
             Error(_) -> noeff(model)
             Ok(#(bx, by)) -> {
-              let already = list.any(model.captured, fn(f) { f.index == idx })
+              // Already captured? The captured set is PROJECTED from the job's
+              // pending correspondences (ADR-0018), so check those, not a shadow.
+              let already =
+                list.any(projection.captured(model), fn(f) { f.index == idx })
               case already {
                 True -> noeff(model)
                 False -> {
                   let machine = #(model.head.x, model.head.y)
                   // The live M114 head Z is the bit-down height the operator
                   // jogged to on the pad — exactly the surface Z the plane fit
-                  // wants. Carry it into both the correspondence and the model
-                  // capture (2.5D alignment).
+                  // wants. Carry it into the correspondence (2.5D alignment); the
+                  // job's `pending.captured` is now the SOLE home for captures.
                   let machine_z = model.head.z
                   let corr =
                     Correspondence(
@@ -877,29 +868,12 @@ fn capture(model: Model) -> #(Model, Effect(Msg)) {
                     Ok(jj) -> jj
                     Error(_) -> j
                   }
-                  let captured =
-                    list.append(model.captured, [
-                      Fiducial(bx, by, idx, Captured),
-                    ])
-                  let captures =
-                    list.append(model.captures, [
-                      Capture(
-                        board: #(bx, by),
-                        machine: machine,
-                        machine_z: machine_z,
-                      ),
-                    ])
-                  let next = next_uncaptured(board.candidates, captured)
-                  noeff(
-                    Model(
-                      ..model,
-                      job: HaveJob(j2),
-                      captured: captured,
-                      captures: captures,
-                      current_target: next,
-                    )
-                    |> refresh_head_conf(),
-                  )
+                  // Advance the operator's selected target to the next uncaptured
+                  // candidate (projected from the job's pending captures).
+                  let m2 = Model(..model, job: HaveJob(j2))
+                  let next =
+                    next_uncaptured(board.candidates, projection.captured(m2))
+                  noeff(Model(..m2, current_target: next))
                 }
               }
             }
@@ -914,14 +888,16 @@ fn can_capture(j: job.Job) -> Bool {
   job.can(j, job.CaptureE)
 }
 
-// Fit: drive the job FSM Fit(tol). On Aligned, store the transform + quality; on
-// AlignmentRejected, build actionable diagnostics (per-point residuals + worst
-// point + likely-cause hint) and offer the explicit override. A degenerate /
-// too-few fit no longer silently no-ops — it surfaces guidance.
+// Fit: drive the job FSM Fit(tol). The job FSM stores the solved alignment +
+// residuals + the resulting state (Aligned / AlignmentRejected) ITSELF, so this
+// handler just advances the job — quality, residuals, the rejected flag, the
+// fit diagnosis, the transform, and the head pose are all PROJECTIONS of the
+// job (ADR-0018), read by the views via `ui/projection`. A degenerate / too-few
+// fit does NOT transition the job; we surface guidance via `upload_error`.
 fn fit(model: Model) -> #(Model, Effect(Msg)) {
   case model.job {
     HaveJob(j) ->
-      case list.length(model.captures) >= 3 {
+      case list.length(projection.captures(model)) >= 3 {
         False ->
           noeff(
             Model(
@@ -931,50 +907,19 @@ fn fit(model: Model) -> #(Model, Effect(Msg)) {
           )
         True ->
           case job.transition(j, job.Fit(j.tol)) {
-            Ok(j2) ->
-              case j2.state {
-                job.Aligned ->
-                  case j2.alignment {
-                    Some(al) -> noeff(apply_fit(model, j2, al, False))
-                    None -> noeff(Model(..model, job: HaveJob(j2)))
-                  }
-                job.AlignmentRejected -> {
-                  let #(rmax, rrms) = residuals_of(j2)
-                  // Per-point residuals from the (kept) solved transform.
-                  let diag = case j2.alignment {
-                    Some(al) -> {
-                      let errs =
-                        alignment.point_errors(
-                          al.transform,
-                          j2.pending.captured,
-                        )
-                      HaveFitDiag(bridge.diagnose_fit(errs, j.tol))
-                    }
-                    None -> NoFitDiag
-                  }
-                  noeff(
-                    Model(
-                      ..model,
-                      job: HaveJob(j2),
-                      quality: quality_pct(rmax, j.tol),
-                      residual_max: rmax,
-                      residual_rms: rrms,
-                      alignment_rejected: True,
-                      fit_diag: diag,
-                      upload_error: "",
-                    ),
-                  )
-                }
-                _ -> noeff(Model(..model, job: HaveJob(j2)))
-              }
+            // Aligned or AlignmentRejected: store the advanced job; the rejected
+            // box + quality panel project off `job.state` / `job.alignment` /
+            // `job.residuals`.
+            Ok(j2) -> noeff(Model(..model, job: HaveJob(j2), upload_error: ""))
             // A failed fit no longer silently does nothing: degenerate → geometry
-            // guidance; too-few → count guidance.
+            // guidance; too-few → count guidance. (The job stays Registering, so
+            // the rejected-box projection is empty — the guidance rides the
+            // upload-error path.)
             Error(job.FitDegenerate) ->
               noeff(
                 Model(
                   ..model,
-                  alignment_rejected: True,
-                  fit_diag: HaveFitDiag(bridge.degenerate_diagnosis()),
+                  upload_error: "Capture at least 3 well-spread (non-collinear) fiducials.",
                 ),
               )
             Error(_) ->
@@ -990,76 +935,24 @@ fn fit(model: Model) -> #(Model, Effect(Msg)) {
   }
 }
 
-fn apply_fit(
-  model: Model,
-  j: job.Job,
-  al: alignment.Alignment,
-  _rejected: Bool,
-) -> Model {
-  let r = al.residuals
-  let pct = quality_pct(r.max, j.tol)
-  Model(
-    ..model,
-    job: HaveJob(j),
-    quality: pct,
-    residual_max: r.max,
-    residual_rms: r.rms,
-    alignment_rejected: False,
-    transform: HaveTransform(al.transform),
-    head_confidence: ConfAligned,
-    head_pos: HaveHeadPos(project_head(al.transform, model.head)),
-  )
-}
-
-fn residuals_of(j: job.Job) -> #(Float, Float) {
-  case j.residuals {
-    Some(r) -> #(r.max, r.rms)
-    None -> #(0.0, 0.0)
-  }
-}
-
-// Quality 0..100 from residual_max vs the tolerance: residual 0 → 100%, residual
-// == tol → ~50% threshold (GOOD above 80, fair, poor), residual >> tol → 0.
-// A tolerance-relative quality mapping.
-fn quality_pct(residual_max: Float, tol: Float) -> Int {
-  let t = float.max(tol, 1.0e-6)
-  // 100 at residual 0, falling to 0 at residual 2*tol.
-  let frac = 1.0 -. residual_max /. { 2.0 *. t }
-  let clamped = float.min(float.max(frac, 0.0), 1.0)
-  float.round(clamped *. 100.0)
-}
-
 fn recapture(model: Model) -> #(Model, Effect(Msg)) {
+  // AlignmentRejected → Registering (a clean slate on the job: pending/alignment/
+  // residuals wiped by the FSM). The alignment-derived projections follow; only
+  // the operator's selected target is reset here.
   let job2 = job_advance(model.job, job.Recapture)
-  noeff(
-    Model(
-      ..model,
-      job: job2,
-      captured: [],
-      captures: [],
-      current_target: 0,
-      quality: -1,
-      alignment_rejected: False,
-      fit_diag: NoFitDiag,
-      transform: NoTransform,
-      head_pos: NoHeadPos,
-      head_confidence: ConfNone,
-    ),
-  )
+  noeff(Model(..model, job: job2, current_target: 0, upload_error: ""))
 }
 
 // Explicit acknowledged override: promote the rejected (over-tolerance) fit to
-// Aligned on its solved transform, then apply it like a normal fit. The UI gates
-// this behind a deliberate confirm, so reaching here IS the acknowledgement.
+// Aligned on its already-solved transform. The UI gates this behind a deliberate
+// confirm, so reaching here IS the acknowledgement. The job FSM carries the solved
+// alignment forward; quality/transform/head-pose are projections of the now-Aligned
+// job (ADR-0018), so this handler just stores the advanced job.
 fn override_alignment(model: Model) -> #(Model, Effect(Msg)) {
   case model.job {
     HaveJob(j) ->
       case job.transition(j, job.OverrideAlignment) {
-        Ok(j2) ->
-          case j2.alignment {
-            Some(al) -> noeff(apply_fit(model, j2, al, True))
-            None -> noeff(model)
-          }
+        Ok(j2) -> noeff(Model(..model, job: HaveJob(j2)))
         Error(_) -> noeff(model)
       }
     NoJob -> noeff(model)
@@ -1067,22 +960,12 @@ fn override_alignment(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 fn restart_alignment(model: Model) -> #(Model, Effect(Msg)) {
+  // Start the whole alignment over. The FSM's `RestartAlignment` lands in a fresh
+  // `Registering` (pending/alignment/residuals wiped), so every alignment-derived
+  // projection (captures, transform, quality, head pose, …) resets by
+  // construction (ADR-0018). Only the operator's selected target is reset here.
   let job2 = job_advance(model.job, job.RestartAlignment)
-  noeff(
-    Model(
-      ..model,
-      job: job2,
-      captured: [],
-      captures: [],
-      current_target: 0,
-      quality: -1,
-      alignment_rejected: False,
-      fit_diag: NoFitDiag,
-      transform: NoTransform,
-      head_pos: NoHeadPos,
-      head_confidence: ConfNone,
-    ),
-  )
+  noeff(Model(..model, job: job2, current_target: 0, upload_error: ""))
 }
 
 // ── Stage 3/4: dry-run + drilling (streaming) ────────────────────────────────
@@ -1098,20 +981,16 @@ fn run_dry_run(model: Model) -> #(Model, Effect(Msg)) {
         True, Some(al) -> {
           let cfg =
             config.GcodeConfig(..model.applied_config, mode: config.DryRun)
-          let program = gcode_program.build(j.board, al, cfg)
-          let lines = gcode_program.stream_lines(program)
-          let total = list.length(j.board.holes)
-          flow(model, session.RunDryRun(lines), fn(m) {
-            Model(
-              ..m,
-              board: reset_hole_status(m.board),
-              progress: HaveProgress(Progress(
-                drilled: 0,
-                total: total,
-                mode: DryRunMode,
-              )),
-            )
-          })
+          // Build the typed op list + render to Wire `RenderedLine`s (ADR-0017):
+          // each line carries its framed wire text + the typed origin the FSM
+          // pauses on and the app reads progress/tool from. NEVER a bare
+          // `List(String)` the consumers would have to re-parse.
+          let rendered = render_wire(j.board, al, cfg)
+          // The progress ring + per-hole board status are PROJECTIONS of the
+          // streaming FSM (ADR-0018): once the Session transition puts the FSM
+          // into Streaming, `projection.progress`/`projection.board` read 0/N and
+          // all-Pending off the StreamJob — no hand-reset of the board or progress.
+          flow(model, session.RunDryRun(rendered), fn(m) { m })
         }
         _, _ -> noeff(model)
       }
@@ -1124,8 +1003,9 @@ fn redo_alignment(model: Model) -> #(Model, Effect(Msg)) {
   // returns `Plan[CancelStream]`, which stops the in-flight dry-run stream
   // GRACEFULLY (→ Jogging, stay connected) — NOT an emergency Halt. The machine
   // hasn't moved, so the captured fiducials + fitted transform stay valid; the
-  // job rolls DryRun → Aligned and the screen derives back to Align.
-  flow(model, session.RedoAlignment, fn(m) { Model(..m, progress: NoProgress) })
+  // job rolls DryRun → Aligned and the screen derives back to Align. Progress is
+  // a projection — `Aligned` is not a streaming stage, so it reads `NoProgress`.
+  flow(model, session.RedoAlignment, fn(m) { m })
 }
 
 fn confirm_registration(model: Model) -> #(Model, Effect(Msg)) {
@@ -1141,36 +1021,14 @@ fn confirm_registration(model: Model) -> #(Model, Effect(Msg)) {
         True, Some(al) -> {
           let cfg =
             config.GcodeConfig(..model.applied_config, mode: config.Drill)
-          let program = gcode_program.build(j.board, al, cfg)
-          let drill_lines = gcode_program.stream_lines(program)
-          let total = list.length(j.board.holes)
-          // No pre-set modal: the in-app pause is DRIVEN by the stream FSM, which
-          // raises the bit-change pause at each tool boundary. `bit_label` is the
-          // first tool for the telemetry readout.
-          let #(bit_label, changes) = case program.tool_order {
-            [_first, ..] -> #(
-              fmt_mm(tool_diameter(j.board, first_tool(program.tool_order)))
-                <> "mm",
-              int.max(list.length(program.tool_order) - 1, 0),
-            )
-            _ -> #("—", 0)
-          }
-          flow(model, session.ConfirmRegistration(drill_lines), fn(m) {
-            Model(
-              ..m,
-              board: reset_hole_status(m.board),
-              progress: HaveProgress(Progress(
-                drilled: 0,
-                total: total,
-                mode: DrillMode,
-              )),
-              bit_change: NoBitChange,
-              bit_changes_seen: changes,
-              telemetry_bit: bit_label,
-              telemetry_spindle: spindle_label(model.config),
-              telemetry_eta: "—",
-            )
-          })
+          // Build the typed op list + render to Wire `RenderedLine`s (ADR-0017).
+          let rendered = render_wire(j.board, al, cfg)
+          // The progress ring, per-hole board status, the bit-change modal, the
+          // bit-change count, and the telemetry strings are all PROJECTIONS now
+          // (ADR-0018): once the Session transition puts the FSM into Streaming,
+          // `projection.*` read them off the StreamJob + the run's `applied_config`
+          // + `tool_order`. No hand-set modal, count, or telemetry here.
+          flow(model, session.ConfirmRegistration(rendered), fn(m) { m })
         }
         _, _ -> noeff(model)
       }
@@ -1179,35 +1037,24 @@ fn confirm_registration(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 fn resume_drilling(model: Model) -> #(Model, Effect(Msg)) {
-  // Clear the bit-change modal and RESUME the stream. With app_pause on, the FSM
-  // is genuinely paused at the bit-change sentinel (nothing in flight), so the
-  // app drives the continuation: ResumeStream sends the next real line and
-  // re-arms the handshake. When the printer is NOT paused (the default M0 path,
-  // where the modal is informational and the stream never stops), ResumeStream is
-  // a benign no-op in the pure core — so this is safe in both modes. Completion
-  // stays an explicit operator step.
-  let m = Model(..model, bit_change: NoBitChange)
-  issue(m, printer.ResumeStream)
+  // RESUME the stream. With app_pause on, the FSM is genuinely paused at the
+  // bit-change sentinel (nothing in flight), so the app drives the continuation:
+  // ResumeStream sends the next real line and re-arms the handshake. When the
+  // printer is NOT paused (the default M0 path, where the modal is informational
+  // and the stream never stops), ResumeStream is a benign no-op in the pure core
+  // — so this is safe in both modes. The bit-change modal is a PROJECTION of the
+  // FSM's paused state (ADR-0018): leaving the paused state clears it, with no
+  // field to reset. Completion stays an explicit operator step.
+  issue(model, printer.ResumeStream)
 }
 
 fn complete(model: Model) -> #(Model, Effect(Msg)) {
-  // Drilling → Completed (the screen derives to Done). Plan is empty.
-  let total = case model.board {
-    HaveBoard(b) -> list.length(b.holes)
-    NoBoard -> 0
-  }
-  // Total time = the full-run estimate (all holes), same per-hole model as ETA.
-  let total_time = fmt_mmss(per_hole_seconds(model) *. int.to_float(total))
-  flow(model, session.MarkComplete, fn(m) {
-    Model(
-      ..m,
-      summary: HaveSummary(Summary(
-        total_holes: total,
-        total_time: total_time,
-        bit_changes: m.bit_changes_seen,
-      )),
-    )
-  })
+  // Drilling → Completed (the screen derives to Done). Plan is empty. The
+  // completion summary is a PROJECTION of the now-`Done` job + the board hole
+  // count + `applied_config` (ADR-0018), so this handler just advances the job —
+  // `projection.summary` builds the totals/time/bit-changes off the standing
+  // `Done` state.
+  flow(model, session.MarkComplete, fn(m) { m })
 }
 
 // ── fault / recover / new board ──────────────────────────────────────────────
@@ -1236,6 +1083,11 @@ fn fault(model: Model) -> Model {
   //     the job reset through `Deenergize` (→ Parsed, alignment discarded).
   // Either path also clears the model alignment/position fields via
   // `deenergize_reset` below, so a later move can't act on a stale transform.
+  // The alignment-derived projections (transform/captures/quality/head pose/…)
+  // and the bit-change / progress projections all follow the job + FSM state, so
+  // routing the job to Faulted (mid-drill) or Parsed (de-energize from an
+  // alignment state) is the WHOLE reset — no fields to clear (ADR-0018). Only the
+  // confirm-gate parameter is dropped (a fault overrides any pending release).
   let job2 = case model.job {
     HaveJob(j) ->
       case job.transition(j, job.SerialLoss("abort")) {
@@ -1247,17 +1099,16 @@ fn fault(model: Model) -> Model {
       }
     NoJob -> NoJob
   }
-  deenergize_reset_fields(Model(..model, job: job2, bit_change: NoBitChange))
+  Model(..model, job: job2, release_confirm: False)
 }
 
 fn reconnect(model: Model) -> #(Model, Effect(Msg)) {
   // Controller Reconnect (Faulted → Idle) emits Recovered, which routes the job
   // Faulted → Parsed (ADR-0011: no trusted transform survives a fault; re-register
   // from a clean slate). The screen then DERIVES back to Load (ADR-0012: Faulted →
-  // Loading on reconnect). Clear stale progress + modal.
-  let #(m1, eff1) = issue(model, printer.Reconnect)
-  let m2 = Model(..m1, progress: NoProgress, bit_change: NoBitChange)
-  #(m2, eff1)
+  // Loading on reconnect). Progress + the bit-change modal are projections of the
+  // FSM/job, so reconnecting clears them by construction — nothing to hand-reset.
+  issue(model, printer.Reconnect)
 }
 
 fn recovered(model: Model) -> Model {
@@ -1278,6 +1129,10 @@ fn new_board(model: Model) -> #(Model, Effect(Msg)) {
   // subsequent reload also starts clean (the central persist on this update will
   // then write the now-empty board slice anyway, but clearing here is explicit).
   storage.clear_session_board()
+  // Clearing the board + the job (→ NoJob) resets every alignment/run PROJECTION
+  // by construction (ADR-0018) — captures, transform, quality, progress, the
+  // bit-change modal, the summary, telemetry all read NoJob/NoBoard. Only the
+  // genuine PARAMETERS are reset here.
   noeff(
     Model(
       ..model,
@@ -1290,21 +1145,7 @@ fn new_board(model: Model) -> #(Model, Effect(Msg)) {
       upload_error: "",
       pending_drl: "",
       pending_edge_cuts: "",
-      head_pos: NoHeadPos,
-      head_confidence: ConfNone,
-      captured: [],
-      captures: [],
       current_target: 0,
-      transform: NoTransform,
-      quality: -1,
-      residual_max: 0.0,
-      residual_rms: 0.0,
-      alignment_rejected: False,
-      fit_diag: NoFitDiag,
-      progress: NoProgress,
-      bit_change: NoBitChange,
-      summary: NoSummary,
-      bit_changes_seen: 0,
       board_side: model.Front,
     ),
   )
@@ -1337,267 +1178,61 @@ fn release_now(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 // PURE: whether there is a non-trivial alignment that a de-energize would discard
-// (so a voluntary Release must confirm first). True once registration has captured
-// anything OR a transform/fiducials are present.
+// (so a voluntary Release must confirm first). True once registration has started
+// (the job left `Parsed`) OR captures exist — both PROJECTED from the job now
+// (ADR-0018), not read off a shadow.
 fn has_alignment(model: Model) -> Bool {
   let job_has = case model.job {
     HaveJob(j) ->
       case j.state {
         // Parsed: not registering yet. Registering and beyond: captures exist.
         job.Parsed -> False
-        job.Registering -> True
-        job.Aligned -> True
-        job.AlignmentRejected -> True
-        job.DryRun -> True
-        job.Drilling -> True
-        job.Done -> True
-        job.Faulted -> True
+        _ -> True
       }
     NoJob -> False
   }
-  let transform_has = case model.transform {
-    HaveTransform(_) -> True
-    NoTransform -> False
-  }
-  job_has || transform_has || model.captured != [] || model.captures != []
+  job_has || projection.captures(model) != []
 }
 
 fn is_energized(model: Model) -> Bool {
   session.is_jogging(current_session(model))
 }
 
-// Drive a de-energize through the job FSM AND clear the model alignment/position
-// fields together, so a motors-off gap can never leave a stale alignment behind.
+// Drive a de-energize through the job FSM and clear the release-confirm gate. The
+// FSM's `Deenergize` lands the job in `Parsed` (alignment states) — a clean slate
+// — so every alignment/position PROJECTION resets by construction (ADR-0018);
+// `release_confirm` is the only parameter to reset (current_target is reset on the
+// next StartRegistering). No fields to hand-clear.
 fn deenergize_reset(model: Model) -> Model {
-  deenergize_reset_fields(
-    Model(..model, job: job_advance(model.job, job.Deenergize)),
-  )
-}
-
-// Clear the model alignment/position fields to their `init`/empty values (the job
-// transition is handled by the caller). Mirrors what `init` / `new_board` set.
-fn deenergize_reset_fields(model: Model) -> Model {
   Model(
     ..model,
-    transform: NoTransform,
-    captures: [],
-    captured: [],
-    head_confidence: ConfNone,
-    head_pos: NoHeadPos,
-    quality: -1,
-    fit_diag: NoFitDiag,
+    job: job_advance(model.job, job.Deenergize),
     current_target: 0,
-    alignment_rejected: False,
     release_confirm: False,
   )
 }
 
 // ── event folding helpers ────────────────────────────────────────────────────
 
-// Update the head readout + projected board crosshair from a live position.
+// Update the live head readout from an M114 reply. The head's PROJECTED board
+// crosshair + confidence are projections of `(transform, captures, head)` now
+// (ADR-0018, `ui/projection.head_pos`/`head_confidence`), recomputed each frame
+// — so this just stores the new live machine XYZ; nothing else to hand-sync.
 fn apply_head(model: Model, x: Float, y: Float, z: Float) -> Model {
-  let head = Head(x: x, y: y, z: z)
-  let m = Model(..model, head: head)
-  case model.transform {
-    // A solved transform is trusted: project the head through it for the
-    // crosshair and promote confidence to aligned. (ADR-0011: a transform only
-    // ever exists while the motors stay energized — a refresh discards it — so a
-    // live position always corresponds to a live, trusted alignment.)
-    HaveTransform(t) ->
-      Model(
-        ..m,
-        head_confidence: ConfAligned,
-        head_pos: HaveHeadPos(project_head(t, head)),
-      )
-    NoTransform -> refresh_head_conf(m)
-  }
+  Model(..model, head: Head(x: x, y: y, z: z))
 }
 
-// Fold a confirmed-line stream count into the progress ring + per-hole status.
-fn apply_progress(model: Model, sent: Int, _total: Int) -> Model {
-  case model.progress, model.job {
-    HaveProgress(p), HaveJob(j) -> {
-      let program = current_program(model, j)
-      let confirmed = list.take(program, sent)
-      let holes_done = count_holes(confirmed)
-      let board = mark_holes(model.board, holes_done)
-      let total_holes = case model.board {
-        HaveBoard(b) -> list.length(b.holes)
-        NoBoard -> p.total
-      }
-      Model(
-        ..model,
-        board: board,
-        progress: HaveProgress(
-          Progress(..p, drilled: holes_done, total: total_holes),
-        ),
-        telemetry_eta: eta_label(model, total_holes - holes_done),
-      )
-    }
-    _, _ -> model
-  }
-}
-
-// The program currently streaming (rebuilt from the job + applied config so the
-// confirmed-prefix hole count is exact). Cheap to rebuild; keeps the model flat.
-// MUST mirror exactly what was fed to `printer.Stream` — the sanitized
-// `stream_lines`, not the rich `.lines` — so `Progress.sent` indexes the same
-// list (`apply_progress` does `list.take(program, sent)`); otherwise the
-// confirmed-prefix hole count would desync from the handshake on real hardware.
-fn current_program(model: Model, j: job.Job) -> List(String) {
-  case j.alignment, model.progress {
-    Some(al), HaveProgress(p) -> {
-      let mode = case p.mode {
-        DrillMode -> config.Drill
-        DryRunMode -> config.DryRun
-      }
-      let cfg = config.GcodeConfig(..model.applied_config, mode: mode)
-      gcode_program.stream_lines(gcode_program.build(j.board, al, cfg))
-    }
-    _, _ -> []
-  }
-}
-
-// Every hole emits exactly one `G0 X..` rapid (the per-hole XY rapid format);
-// the postamble home is `G00 X..` and the tool lift is `G0 Z..`, so neither is
-// miscounted. The per-tool bit-exchange move is ALSO a `G0 X..` rapid, but it
-// carries the exchange comment, so it's excluded — it isn't a drilled hole.
-fn count_holes(lines: List(String)) -> Int {
-  list.count(lines, fn(l) {
-    string.starts_with(l, "G0 X")
-    && !string.contains(l, "bit-exchange position")
-  })
-}
-
-// Fold an in-app pause into the model: raise the bit-change / resume modal so the
-// operator swaps the bit before continuing. `pending` is the count of confirmed
-// lines at the pause point; the upcoming tool is the LAST `T<n>` token in that
-// confirmed prefix (the first pause at pending 0 has none yet → the FIRST tool's
-// bit change). The streamed program is rebuilt the same way `apply_progress`
-// does, so the prefix indexes the same list the handshake confirmed.
-fn stream_paused(model: Model, pending: Int) -> Model {
-  let diameter = case model.job {
-    HaveJob(j) -> {
-      let program = current_program(model, j)
-      let confirmed = list.take(program, pending)
-      let tool = upcoming_tool(confirmed, program, pending)
-      tool_diameter(j.board, tool)
-    }
-    NoJob -> 0.0
-  }
-  // Every pause is a bit change now (ADR-0010 removed the touch-off). The FIRST
-  // pause (`pending == 0`, nothing confirmed) is the first tool's bit change:
-  // mount its bit before the run begins; `diameter` is that tool's size.
-  Model(..model, bit_change: HaveBitChange(BitChange(diameter:)))
-}
-
-// The tool whose bit the operator should mount at this pause point: the most
-// recent `T<n>` token in the confirmed prefix. The first pause (nothing
-// confirmed, or no tool token yet) reports the FIRST tool token of the whole
-// program — that's the bit to load before the first block runs.
-fn upcoming_tool(
-  confirmed: List(String),
-  program: List(String),
-  pending: Int,
-) -> String {
-  case last_tool_token(confirmed) {
-    Ok(t) -> t
-    Error(_) ->
-      case pending == 0 {
-        True ->
-          case first_tool_token(program) {
-            Ok(t) -> t
-            Error(_) -> "T1"
-          }
-        False -> "T1"
-      }
-  }
-}
-
-// A bare `T<n>` tool token line (the change block emits the tool id on its own
-// line, e.g. "T1"). Distinct from `M6`/`G0` lines: it is exactly `T` followed by
-// an integer with nothing else, so `int.parse` of the suffix succeeds.
-fn is_tool_token(line: String) -> Bool {
-  let t = string.trim(line)
-  case string.starts_with(t, "T") {
-    True ->
-      case int.parse(string.drop_start(t, 1)) {
-        Ok(_) -> True
-        Error(_) -> False
-      }
-    False -> False
-  }
-}
-
-fn first_tool_token(lines: List(String)) -> Result(String, Nil) {
-  case list.filter(lines, is_tool_token) {
-    [t, ..] -> Ok(string.trim(t))
-    [] -> Error(Nil)
-  }
-}
-
-fn last_tool_token(lines: List(String)) -> Result(String, Nil) {
-  case list.filter(lines, is_tool_token) |> list.reverse {
-    [t, ..] -> Ok(string.trim(t))
-    [] -> Error(Nil)
-  }
-}
-
-fn stream_complete(model: Model) -> Model {
-  // Mark the run fully streamed: all holes Done, progress at total. Completion
-  // stays an explicit operator step (Mark Complete on Drill; Confirm on DryRun).
-  let total = case model.board {
-    HaveBoard(b) -> list.length(b.holes)
-    NoBoard -> 0
-  }
-  let board = mark_holes(model.board, total)
-  case model.progress {
-    HaveProgress(p) ->
-      Model(
-        ..model,
-        board: board,
-        progress: HaveProgress(Progress(..p, drilled: total, total: total)),
-        telemetry_eta: "0:00",
-      )
-    NoProgress -> model
-  }
-}
-
-// ── head confidence (progressive trust) ──────────────────────────────────────
-
-fn refresh_head_conf(model: Model) -> Model {
-  case model.head_confidence == ConfAligned {
-    True ->
-      case model.transform {
-        HaveTransform(t) ->
-          Model(..model, head_pos: HaveHeadPos(project_head(t, model.head)))
-        NoTransform -> model
-      }
-    False -> {
-      let conf = case list.length(model.captures) {
-        0 -> ConfNone
-        1 -> ConfEstimate
-        _ -> ConfRough
-      }
-      let head_pos = case conf {
-        ConfNone -> NoHeadPos
-        _ ->
-          case bridge.board_to_machine_inverse(model.captures, model.head) {
-            Ok(p) -> HaveHeadPos(p)
-            Error(_) -> HaveHeadPos(#(model.head.x, model.head.y))
-          }
-      }
-      Model(..model, head_confidence: conf, head_pos: head_pos)
-    }
-  }
-}
-
-// Project the machine head back to a board position via the inverse transform.
-fn project_head(t: transform2d.Transform2D, head: Head) -> #(Float, Float) {
-  case transform2d.invert(t) {
-    Ok(inv) -> transform2d.apply(inv, #(head.x, head.y))
-    Error(_) -> #(head.x, head.y)
-  }
+// Render the typed op list to Wire `RenderedLine`s — the exact program fed to
+// `printer.Stream` (ADR-0017). The producers (`run_dry_run`,
+// `confirm_registration`) build the streamed program through this.
+fn render_wire(
+  board: board_model.BoardModel,
+  al: alignment.Alignment,
+  cfg: config.GcodeConfig,
+) -> List(gcode_program.RenderedLine) {
+  let ops = gcode_program.build_ops(board, al, cfg)
+  let ctx = gcode_program.render_context(board, al, cfg)
+  gcode_program.render(ops, ctx, gcode_program.Wire)
 }
 
 // ── job FSM helper ───────────────────────────────────────────────────────────
@@ -1610,98 +1245,6 @@ fn job_advance(j: model.JobOpt, event: job.Event) -> model.JobOpt {
         Error(_) -> HaveJob(jj)
       }
     NoJob -> NoJob
-  }
-}
-
-// ── telemetry helpers ────────────────────────────────────────────────────────
-
-fn spindle_label(c: model.Config) -> String {
-  "ON · " <> c.spindle_speed <> "/" <> c.pwm_max <> " PWM"
-}
-
-fn eta_label(model: Model, remaining: Int) -> String {
-  let secs = per_hole_seconds(model) *. int.to_float(int.max(remaining, 0))
-  fmt_mmss(secs)
-}
-
-fn per_hole_seconds(model: Model) -> Float {
-  let cfg = model.applied_config
-  let feed_per_s = float.max(cfg.drill_feed /. 60.0, 1.0e-6)
-  let z_travel = case cfg.mode {
-    config.Drill -> 2.0 *. { cfg.zsafe -. cfg.zdrill }
-    config.DryRun -> 2.0 *. float.max(cfg.hover, 0.0)
-  }
-  z_travel /. feed_per_s +. 0.5
-}
-
-fn fmt_mmss(seconds: Float) -> String {
-  let total = float.round(seconds)
-  let mm = total / 60
-  let ss = total % 60
-  int.to_string(mm) <> ":" <> pad2(ss)
-}
-
-fn pad2(n: Int) -> String {
-  case n < 10 {
-    True -> "0" <> int.to_string(n)
-    False -> int.to_string(n)
-  }
-}
-
-// ── board hole status helpers ────────────────────────────────────────────────
-
-fn reset_hole_status(board: model.BoardOpt) -> model.BoardOpt {
-  case board {
-    HaveBoard(b) -> {
-      let holes =
-        list.map(b.holes, fn(h) { model.Hole(..h, status: model.Pending) })
-      HaveBoard(model.Board(..b, holes: holes))
-    }
-    NoBoard -> NoBoard
-  }
-}
-
-fn mark_holes(board: model.BoardOpt, done_count: Int) -> model.BoardOpt {
-  case board {
-    HaveBoard(b) -> {
-      let holes =
-        b.holes
-        |> list.index_map(fn(hole, i) {
-          let status = case i < done_count, i == done_count {
-            True, _ -> HoleDone
-            False, True -> model.Active
-            False, False -> model.Pending
-          }
-          model.Hole(..hole, status: status)
-        })
-      HaveBoard(model.Board(..b, holes: holes))
-    }
-    NoBoard -> NoBoard
-  }
-}
-
-fn tool_diameter(board: board_model.BoardModel, tool: String) -> Float {
-  case list.key_find(dict_to_list(board.tools), tool) {
-    Ok(d) -> d
-    Error(_) -> 0.0
-  }
-}
-
-fn dict_to_list(d: board_model.ToolTable) -> List(#(String, Float)) {
-  d |> dict.to_list
-}
-
-fn first_tool(order: List(String)) -> String {
-  case order {
-    [t, ..] -> t
-    [] -> "T1"
-  }
-}
-
-fn fmt_mm(d: Float) -> String {
-  case d == 10.0 {
-    True -> "10"
-    False -> float.to_string(d)
   }
 }
 
@@ -1734,7 +1277,9 @@ fn set_config_field(model: Model, field: String, value: String) -> Model {
     "zdrill" -> model.Config(..c, zdrill: value)
     "zsafe" -> model.Config(..c, zsafe: value)
     "zchange" -> model.Config(..c, zchange: value)
-    "drill_feed" -> model.Config(..c, drill_feed: value)
+    "drill_plunge_feed" -> model.Config(..c, drill_plunge_feed: value)
+    "drill_xy_feed" -> model.Config(..c, drill_xy_feed: value)
+    "drill_retract_feed" -> model.Config(..c, drill_retract_feed: value)
     "hover" -> model.Config(..c, hover: value)
     _ -> c
   }

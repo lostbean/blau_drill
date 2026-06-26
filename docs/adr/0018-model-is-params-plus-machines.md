@@ -39,7 +39,12 @@ is a **pure projection**, computed each frame and stored nowhere.
   settings category, overlay, modal flags.
 - **Machines** (the authorities): the one `job`, the one `printer` (in the
   controller), `board_model`, the run-start `applied_config` snapshot, and the
-  **single run-state value `stream_index: Int`**.
+  **single run-state value `stream_index: Int`**. (As shipped: that index lives
+  inside the `printer` FSM's `StreamJob` — [ADR-0017](0017-typed-rendered-line-through-fsm.md#adr-0017)
+  made `StreamJob(rendered, idx, total)` the streaming authority — so it is read
+  via `printer.stream_rendered` / `printer.stream_progress` / `printer.stream_paused_reason`
+  rather than added as a separate `Model` field. The "one run-state authority"
+  intent holds; the index is not duplicated onto the Model.)
 - **Projections** (deleted as fields, added as functions): `progress`,
   `hole_status`, current `tool`, `eta`, `quality`, `residuals`,
   `alignment_rejected`, `fit_diag`, `captured` fiducials, `head_pose`,

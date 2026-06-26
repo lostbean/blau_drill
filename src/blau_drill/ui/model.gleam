@@ -1,34 +1,36 @@
 //// The UI model + messages for the blau-drill operator shell, rendered by a
-//// Lustre app. This is PHASE 3: every value here is MOCK data wired in by
-//// `app.gleam`.
+//// Lustre app. The model is fully wired to the real domain and control layers:
+//// it holds the operator's genuine parameters plus the machines (controller +
+//// job FSM), and every derived value is PROJECTED from those machines each frame
+//// by `ui/projection.gleam` (ADR-0018) — nothing here is a stored shadow.
 ////
-//// ## Phase 4 seams (where mocks get replaced by real domain/control)
+//// ## How the real state hangs together, by field
 ////
-//// The model is deliberately a flat record of plain data so the wiring is a
-//// drop-in. The seams, by field:
+//// The model is a flat record of plain data; the authority for each derived
+//// value lives on a machine, projected on demand:
 ////
-////   * `board: BoardOpt` — the parsed `.drl` (+ optional Edge.Cuts outline).
-////     Phase 4 builds this from `blau_drill/domain` (BoardModel parse) instead
-////     of `mock.board()`. Holes carry board coords + a tool id; the canvas fits
-////     them to view from `bbox`.
-////   * `head: Head` + `head_confidence` — the live machine-head XYZ and how much
-////     to trust its projected board position. Phase 4 reads this from the
-////     `control` layer (M114 over Web Serial) and the alignment solver; here it
-////     is a static mock that the demo nudges with the jog buttons.
+////   * `board: BoardOpt` — the parsed `.drl` (+ optional Edge.Cuts outline),
+////     built from `blau_drill/domain` (BoardModel parse). Holes carry board
+////     coords + a tool id; the canvas fits them to view from `bbox`.
+////   * `head: Head` — the live machine-head XYZ. Its projected board position and
+////     confidence are PROJECTIONS of the `job` FSM (the solved transform), not
+////     stored here.
 ////   * the wire state — the connection FSM — is owned by the controller (the
 ////     real `printer.PrinterState`) and projected through the `Session`
 ////     (`ui/session`). The motion gates (jog/spindle enabled only in `Jogging`)
 ////     read the REAL nested state via `session.is_jogging` etc. — there is no
 ////     stored UI mirror (ADR-0012 deleted it).
-////   * `progress: ProgressOpt` — live stream progress (sent/total holes, current
-////     tool). Phase 4 folds real per-`ok` events from `control` here.
-////   * `captured` / `current_target` / `quality` — alignment capture state.
-////     Phase 4 feeds these from `domain/pending_alignment` + the fit solver.
+////   * stream progress (sent/total holes, current tool) lives on the FSM's
+////     `StreamJob` and is projected via `printer.stream_progress` — there is no
+////     stored stream copy here.
+////   * `captured` / `current_target` / `quality` — the captures + target count are
+////     genuine operator parameters; the solved transform, quality, residuals, and
+////     fit diagnosis are PROJECTIONS of the `job` FSM (the fit solver).
 ////
 //// The `Msg` type is the event vocabulary (the operator-facing verbs:
 //// energize/jog/capture/jump_to/fit/run_dry_run/confirm/abort/...). `app.gleam`
-//// owns the `update` that maps these onto the mock state; Phase 4 reroutes the
-//// motion verbs through `control` effects.
+//// owns the `update` that maps these onto the real state, routing the motion
+//// verbs through `control` effects.
 
 import blau_drill/control/controller
 import blau_drill/domain/board_model
@@ -341,7 +343,7 @@ pub type Config {
   )
 }
 
-// ── Phase 4 backing values (real control + domain) ──────────────────────────
+// ── Backing values (real control + domain) ──────────────────────────────────
 
 /// Which transport the operator picked. `SimBackend` works with no hardware;
 /// `RealBackend` is the Web Serial port (Chromium-only, user-gesture connect);
@@ -354,7 +356,7 @@ pub type BackendKind {
 }
 
 /// The captured board <-> machine pairs accumulated during registration, in
-/// capture order. Phase 4 feeds these to `alignment.fit`. Each entry pairs the
+/// capture order. These feed `alignment.fit`. Each entry pairs the
 /// board candidate point with the machine head XY recorded when it was captured,
 /// plus the machine Z (`machine_z`) the bit was jogged down to onto the pad —
 /// the surface height that feeds the fitted board Z plane (2.5D alignment).
@@ -387,37 +389,24 @@ pub type Model {
     outline_file: String,
     upload_error: String,
     head: Head,
-    head_pos: HeadPosOpt,
-    head_confidence: HeadConfidence,
     jog_step: Float,
-    captured: List(Fiducial),
+    /// The operator's currently-selected registration candidate (a UI parameter,
+    /// NOT a shadow — genuine selection state). All ALIGNMENT-DERIVED values
+    /// (the captured fiducials, the solved transform, quality, residuals, the
+    /// rejected flag + fit diagnosis, the head pose/confidence) are PROJECTIONS of
+    /// the `job` FSM, recomputed each frame by `ui/projection` and stored nowhere
+    /// (ADR-0018) — so they cannot drift out of sync with the machine.
     current_target: Int,
+    /// The operator's target capture count (a UI parameter). Genuine state.
     fiducial_target: Int,
-    /// Alignment quality 0..100, or -1 when not yet fitted.
-    quality: Int,
-    residual_max: Float,
-    residual_rms: Float,
-    /// True when a fit produced residuals over tolerance (recapture path).
-    alignment_rejected: Bool,
-    /// Actionable diagnosis of the last fit (per-point residuals + worst point +
-    /// likely-cause hint), shown on the rejected-fit panel. `NoFitDiag` until a
-    /// fit has produced diagnostics.
-    fit_diag: FitDiagOpt,
-    progress: ProgressOpt,
-    bit_change: BitChangeOpt,
-    summary: SummaryOpt,
-    /// Stage-4 telemetry (current bit / eta / spindle), as display strings.
-    telemetry_bit: String,
-    telemetry_eta: String,
-    telemetry_spindle: String,
-    // canvas zoom (1.0 = whole board fits; up to 12). Pan is kept centred for
-    // the mock; Phase 4 can add drag-pan as a pair of fractions.
+    // canvas zoom (1.0 = whole board fits; up to 12). Pan is kept centred (no
+    // drag-pan today).
     zoom: Float,
     // settings
     category: SettingsCategory,
     config: Config,
     config_dirty: Bool,
-    // ── Phase 4: real backing state ─────────────────────────────────────────
+    // ── real backing state ──────────────────────────────────────────────────
     /// The serial control machine (pure core + chosen transport + live conn).
     controller: controller.Controller,
     /// Which transport is selected (drives the connect effect).
@@ -432,15 +421,14 @@ pub type Model {
     pending_drl: String,
     /// The raw Edge.Cuts SVG text awaiting a parse (optional).
     pending_edge_cuts: String,
-    /// The captured correspondences (board <-> machine), in capture order.
-    captures: List(Capture),
-    /// The solved alignment transform, once fitted.
-    transform: TransformOpt,
-    /// The config snapshot applied for the current run (immutable per run),
-    /// taken when the run starts.
+    /// The config snapshot applied for the current run (immutable per run), taken
+    /// when the run starts. A MACHINE/authority per ADR-0018 (NOT a shadow): the
+    /// run-start parameters lock for the duration of a run, so the telemetry +
+    /// summary projections read it rather than the editable `config`. The
+    /// streamed program + its progress live on the FSM's `StreamJob`,
+    /// projected via `printer.stream_rendered`/`stream_progress` — there is no
+    /// stored stream copy, transform, captures, or bit-change count here.
     applied_config: config.GcodeConfig,
-    /// Count of bit changes seen so far in the active run (for the summary).
-    bit_changes_seen: Int,
     /// Which board face is up in the printer. Drives the board transform applied
     /// once upstream to the WORKING board model (canvas, alignment job, and G-code
     /// all derive from it). Locked once registration starts. See BoardSide.

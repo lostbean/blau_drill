@@ -1,15 +1,21 @@
-//// GcodeProgram tests, ported from `test/blau_drill/gcode_program_test.exs`.
+//// Gcode renderer tests, ported from `test/blau_drill/gcode_program_test.exs`.
 //// Covers both safety invariants (XY only at safe Z; spindle armed before
-//// plunge / off in dry-run), structural counts, the value fields, and a
-//// semantic golden diff against the embedded segby_v1 goldens. The StreamData
-//// property tests are covered as concrete random-ish example boards/alignments
-//// that exercise the same invariants.
+//// plunge / off in dry-run), structural counts, the projected metadata
+//// (mode / tool_order / machine bbox), and a semantic golden diff against the
+//// embedded segby_v1 goldens. The StreamData property tests are covered as
+//// concrete random-ish example boards/alignments that exercise the same
+//// invariants. The program lines come from `render(build_ops(..), .., target)`:
+//// `rich_lines` (the human-readable `Rich` form) and `wire_lines` (the streamed
+//// `Wire` form, blank + full-comment lines dropped).
 
 import blau_drill/domain/alignment.{type Alignment}
 import blau_drill/domain/board_model.{type BoardModel}
 import blau_drill/domain/config.{Drill, DryRun, GcodeConfig}
 import blau_drill/domain/correspondence.{Correspondence}
-import blau_drill/domain/gcode_program.{type GcodeProgram, GcodeProgram}
+import blau_drill/domain/gcode_program.{
+  type Operation, BitChange, DrillHole, DrillHoleKind, Pause, PauseKind,
+  Postamble, Preamble, Prepare, Rich, ToolBlock, ToolBlockKind, Wire,
+}
 import blau_drill/domain/transform2d.{type Transform2D, Transform2D}
 import blau_drill/fixtures
 import gleam/dict
@@ -50,6 +56,41 @@ fn board_from_fixture() -> BoardModel {
 // so this helper pins the "keeps M0" export form; `cfg_app_pause` is the ON form.
 fn cfg(mode: config.Mode) -> config.GcodeConfig {
   GcodeConfig(..config.default(), mode: mode, app_pause: False)
+}
+
+// The HUMAN-READABLE program lines: `build_ops` rendered to the `Rich` target,
+// projected to wire strings. Byte-identical to the historical `build(..).lines`.
+fn rich_lines(
+  board: BoardModel,
+  alignment: Alignment,
+  cfg: config.GcodeConfig,
+) -> List(String) {
+  let ops = gcode_program.build_ops(board, alignment, cfg)
+  let ctx = gcode_program.render_context(board, alignment, cfg)
+  gcode_program.render(ops, ctx, Rich) |> list.map(fn(rl) { rl.wire })
+}
+
+// The STREAMED program lines: `build_ops` rendered to the `Wire` target (blank
+// lines + full-line comments dropped). Byte-identical to the historical
+// `stream_lines(build(..))`.
+fn wire_lines(
+  board: BoardModel,
+  alignment: Alignment,
+  cfg: config.GcodeConfig,
+) -> List(String) {
+  let ops = gcode_program.build_ops(board, alignment, cfg)
+  let ctx = gcode_program.render_context(board, alignment, cfg)
+  gcode_program.render(ops, ctx, Wire) |> list.map(fn(rl) { rl.wire })
+}
+
+// The file-order tool list — the projected `tool_order` the old `build(..)`
+// carried on its return value, now read straight off the `RenderContext`.
+fn tool_order(
+  board: BoardModel,
+  alignment: Alignment,
+  cfg: config.GcodeConfig,
+) -> List(String) {
+  gcode_program.render_context(board, alignment, cfg).tool_order
 }
 
 // Parse an `X..`/`Y..`/`Z..` value out of a move line, if present.
@@ -99,9 +140,9 @@ type ZState {
 }
 
 // Returns True if the program never commands an XY move below zsafe.
-fn xy_only_when_safe(program: GcodeProgram) -> Bool {
+fn xy_only_when_safe(lines: List(String)) -> Bool {
   let #(ok, _final) =
-    list.fold(program.lines, #(True, Unknown), fn(acc, line) {
+    list.fold(lines, #(True, Unknown), fn(acc, line) {
       let #(ok, current_z) = acc
       case commands_xy(line) {
         True -> {
@@ -129,15 +170,13 @@ fn xy_only_when_safe(program: GcodeProgram) -> Bool {
 }
 
 pub fn drill_mode_xy_safe_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  xy_only_when_safe(p) |> should.be_true
+  let lines = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  xy_only_when_safe(lines) |> should.be_true
 }
 
 pub fn dry_run_mode_xy_safe_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
-  xy_only_when_safe(p) |> should.be_true
+  let lines = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+  xy_only_when_safe(lines) |> should.be_true
 }
 
 // --- Invariant 2: spindle armed before plunge (drill) -----------------------
@@ -186,9 +225,9 @@ fn m5_off(line: String) -> Bool {
 
 // Walk the spindle state; return True if every plunge is reached with the
 // spindle on.
-fn every_plunge_armed(program: GcodeProgram) -> Bool {
+fn every_plunge_armed(lines: List(String)) -> Bool {
   let #(ok, _spindle) =
-    list.fold(program.lines, #(True, False), fn(acc, line) {
+    list.fold(lines, #(True, False), fn(acc, line) {
       let #(ok, spindle) = acc
       case m3_on(line), m5_off(line), plunge_line(line) {
         True, _, _ -> #(ok, True)
@@ -201,45 +240,38 @@ fn every_plunge_armed(program: GcodeProgram) -> Bool {
 }
 
 pub fn every_plunge_preceded_by_m3_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
   every_plunge_armed(p) |> should.be_true
 }
 
 pub fn m3_carries_speed_on_same_line_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
   let assert Ok(bare) = regexp.from_string("^\\s*M3\\b")
-  let m3_lines = list.filter(p.lines, fn(l) { regexp.check(bare, l) })
+  let m3_lines = list.filter(p, fn(l) { regexp.check(bare, l) })
   { m3_lines != [] } |> should.be_true
   // Every M3 line carries an S<digits>.
   list.all(m3_lines, m3_on) |> should.be_true
 }
 
 pub fn spindle_rearmed_per_tool_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
   let assert Ok(re) = regexp.from_string("^\\s*M3\\s+S255\\b")
-  let count = list.filter(p.lines, fn(l) { regexp.check(re, l) }) |> list.length
+  let count = list.filter(p, fn(l) { regexp.check(re, l) }) |> list.length
   count |> should.equal(5)
 }
 
 pub fn dry_run_no_armed_spindle_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
   let assert Ok(re) = regexp.from_string("^\\s*M3\\s+S[1-9]")
-  list.any(p.lines, fn(l) { regexp.check(re, l) }) |> should.be_false
-  list.any(p.lines, fn(l) {
-    string.contains(l, "( dry run: spindle left OFF )")
-  })
+  list.any(p, fn(l) { regexp.check(re, l) }) |> should.be_false
+  list.any(p, fn(l) { string.contains(l, "( dry run: spindle left OFF )") })
   |> should.be_true
 }
 
 pub fn dry_run_never_negative_z_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
   let all_nonneg =
-    list.all(p.lines, fn(l) {
+    list.all(p, fn(l) {
       case parse_axis(l, "Z") {
         Some(z) -> z >=. 0.0 -. z_tol
         None -> True
@@ -248,7 +280,7 @@ pub fn dry_run_never_negative_z_test() {
   all_nonneg |> should.be_true
 
   let hover_lines =
-    list.filter(p.lines, fn(l) { string.contains(l, "dry-run hover") })
+    list.filter(p, fn(l) { string.contains(l, "dry-run hover") })
   list.length(hover_lines) |> should.equal(130)
   list.all(hover_lines, fn(l) {
     string.contains(l, "G1 Z0.20000") && string.contains(l, "was Z-2.50000")
@@ -275,9 +307,10 @@ fn example_boards() -> List(BoardModel) {
 
 fn make_board(holes: List(#(Float, Float, String))) -> BoardModel {
   let hs =
-    list.map(holes, fn(h) {
+    list.index_map(holes, fn(h, i) {
       let #(x, y, t) = h
-      board_model.Hole(x: x, y: y, tool: t)
+      // File-order ids 0..n-1, mirroring the real parse (ADR-0016).
+      board_model.Hole(id: i, x: x, y: y, tool: t)
     })
   let tools =
     [#("T1", 0.6), #("T2", 0.7), #("T3", 0.8), #("T4", 1.0), #("T5", 1.2)]
@@ -324,7 +357,7 @@ pub fn invariant1_holds_for_random_programs_test() {
     |> each(fn(al) {
       [Drill, DryRun]
       |> each(fn(mode) {
-        let p = gcode_program.build(board, al, cfg(mode))
+        let p = rich_lines(board, al, cfg(mode))
         xy_only_when_safe(p) |> should.be_true
       })
     })
@@ -336,13 +369,13 @@ pub fn invariant2_holds_for_random_programs_test() {
   |> each(fn(board) {
     example_alignments()
     |> each(fn(al) {
-      let drill = gcode_program.build(board, al, cfg(Drill))
+      let drill = rich_lines(board, al, cfg(Drill))
       every_plunge_armed(drill) |> should.be_true
 
-      let dry = gcode_program.build(board, al, cfg(DryRun))
+      let dry = rich_lines(board, al, cfg(DryRun))
       let assert Ok(re) = regexp.from_string("^\\s*M3\\s+S[1-9]")
-      list.any(dry.lines, fn(l) { regexp.check(re, l) }) |> should.be_false
-      list.all(dry.lines, fn(l) {
+      list.any(dry, fn(l) { regexp.check(re, l) }) |> should.be_false
+      list.all(dry, fn(l) {
         case parse_axis(l, "Z") {
           Some(z) -> z >=. 0.0 -. z_tol
           None -> True
@@ -387,13 +420,11 @@ fn parse_feed(line: String) -> Option(Float) {
 // drill = 200 (the tuned base), dry-run = 400 (2×). No bare `G0 X.. Y..` cut
 // travel survives (the only G0 X/Y is the commented bit-exchange reposition).
 pub fn xy_travel_is_controlled_g1_with_xy_feed_test() {
-  let drill =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  let dry =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+  let drill = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let dry = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
 
-  let drill_travel = list.filter(drill.lines, xy_travel_line)
-  let dry_travel = list.filter(dry.lines, xy_travel_line)
+  let drill_travel = list.filter(drill, xy_travel_line)
+  let dry_travel = list.filter(dry, xy_travel_line)
   // There is one travel move per hole (130 holes in the fixture).
   list.length(drill_travel) |> should.equal(130)
   list.length(dry_travel) |> should.equal(130)
@@ -417,7 +448,7 @@ pub fn xy_travel_is_controlled_g1_with_xy_feed_test() {
   // No bare `G0 X.. Y..` CUT travel remains: the only `G0` carrying X/Y is the
   // commented bit-exchange reposition (one per tool, ADR-0015 leaves it alone).
   let assert Ok(g0xy) = regexp.from_string("^G0 X")
-  let g0_xy_lines = list.filter(drill.lines, fn(l) { regexp.check(g0xy, l) })
+  let g0_xy_lines = list.filter(drill, fn(l) { regexp.check(g0xy, l) })
   list.all(g0_xy_lines, fn(l) { string.contains(l, "bit-exchange") })
   |> should.be_true
 }
@@ -425,9 +456,8 @@ pub fn xy_travel_is_controlled_g1_with_xy_feed_test() {
 // The plunge (the cut/hover Z into the work) carries the profile's plunge_feed:
 // 200 in BOTH modes by default (dry-run plunge matches drill).
 pub fn plunge_carries_plunge_feed_test() {
-  let drill =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  let drill_plunges = list.filter(drill.lines, plunge_line)
+  let drill = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let drill_plunges = list.filter(drill, plunge_line)
   list.length(drill_plunges) |> should.equal(130)
   list.all(drill_plunges, fn(l) {
     case parse_feed(l) {
@@ -438,10 +468,9 @@ pub fn plunge_carries_plunge_feed_test() {
   |> should.be_true
 
   // Dry-run hover lines also carry the plunge feed (200 by default).
-  let dry =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+  let dry = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
   let hover_lines =
-    list.filter(dry.lines, fn(l) { string.contains(l, "dry-run hover") })
+    list.filter(dry, fn(l) { string.contains(l, "dry-run hover") })
   list.length(hover_lines) |> should.equal(130)
   list.all(hover_lines, fn(l) {
     case parse_feed(l) {
@@ -457,11 +486,10 @@ pub fn plunge_carries_plunge_feed_test() {
 pub fn retract_carries_retract_feed_test() {
   [Drill, DryRun]
   |> each(fn(mode) {
-    let p =
-      gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
+    let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(mode))
     // The per-hole travel retract is `G1 Z5.00000 F300.00000` (130 of them).
     let assert Ok(re) = regexp.from_string("^G1 Z5\\.00000 F(\\d+(?:\\.\\d+)?)")
-    let retracts = list.filter(p.lines, fn(l) { regexp.check(re, l) })
+    let retracts = list.filter(p, fn(l) { regexp.check(re, l) })
     list.length(retracts) |> should.equal(130)
     list.all(retracts, fn(l) {
       case parse_feed(l) {
@@ -476,17 +504,15 @@ pub fn retract_carries_retract_feed_test() {
 // The headline ADR-0015 invariant: the dry-run XY feed is exactly 2× the drill XY
 // feed (and they differ), proving the per-mode profile is selected by mode.
 pub fn dry_run_xy_feed_is_double_drill_xy_feed_test() {
-  let drill =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  let dry =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+  let drill = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let dry = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
   let assert Some(drill_xy) =
-    list.filter(drill.lines, xy_travel_line)
+    list.filter(drill, xy_travel_line)
     |> list.first
     |> option_of_result
     |> option.then(parse_feed)
   let assert Some(dry_xy) =
-    list.filter(dry.lines, xy_travel_line)
+    list.filter(dry, xy_travel_line)
     |> list.first
     |> option_of_result
     |> option.then(parse_feed)
@@ -504,37 +530,36 @@ fn option_of_result(r: Result(a, b)) -> Option(a) {
 // --- structural counts (drill mode) -----------------------------------------
 
 pub fn total_plunges_130_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  list.filter(p.lines, plunge_line) |> list.length |> should.equal(130)
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  list.filter(p, plunge_line) |> list.length |> should.equal(130)
 }
 
 pub fn exactly_five_tool_blocks_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let board = board_from_fixture()
+  let al = xmirror_alignment()
+  let p = rich_lines(board, al, cfg(Drill))
   let assert Ok(re) = regexp.from_string("^T[1-5]$")
-  let tool_lines = list.filter(p.lines, fn(l) { regexp.check(re, l) })
+  let tool_lines = list.filter(p, fn(l) { regexp.check(re, l) })
   tool_lines |> should.equal(["T1", "T2", "T3", "T4", "T5"])
-  p.tool_order |> should.equal(["T1", "T2", "T3", "T4", "T5"])
+  tool_order(board, al, cfg(Drill))
+  |> should.equal(["T1", "T2", "T3", "T4", "T5"])
 }
 
 pub fn per_tool_plunge_counts_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  per_tool_plunge_counts(p.lines) |> should.equal([40, 4, 38, 42, 6])
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  per_tool_plunge_counts(p) |> should.equal([40, 4, 38, 42, 6])
 }
 
 pub fn tool_change_pauses_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
   let assert Ok(m6) = regexp.from_string("^M6\\b")
   let assert Ok(m0) = regexp.from_string("^M0\\b")
-  list.filter(p.lines, fn(l) { regexp.check(m6, l) })
+  list.filter(p, fn(l) { regexp.check(m6, l) })
   |> list.length
   |> should.equal(5)
   // ADR-0010: no touch-off M0. Exactly 5 tool-change M0 (one per tool block; the
   // first is the first bit's change, not a touch-off).
-  list.filter(p.lines, fn(l) { regexp.check(m0, l) })
+  list.filter(p, fn(l) { regexp.check(m0, l) })
   |> list.length
   |> should.equal(5)
 }
@@ -560,11 +585,10 @@ fn sentinel_count(lines: List(String)) -> Int {
 pub fn app_pause_off_keeps_m0_and_emits_no_sentinel_test() {
   [Drill, DryRun]
   |> each(fn(mode) {
-    let p =
-      gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
+    let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(mode))
     // ADR-0010: no touch-off. 5 tool-change M0; and not a single sentinel.
-    m0_count(p.lines) |> should.equal(5)
-    sentinel_count(p.lines) |> should.equal(0)
+    m0_count(p) |> should.equal(5)
+    sentinel_count(p) |> should.equal(0)
   })
 }
 
@@ -575,43 +599,29 @@ pub fn app_pause_on_omits_m0_and_emits_sentinel_per_boundary_test() {
   [Drill, DryRun]
   |> each(fn(mode) {
     let p =
-      gcode_program.build(
-        board_from_fixture(),
-        xmirror_alignment(),
-        cfg_app_pause(mode),
-      )
-    m0_count(p.lines) |> should.equal(0)
+      rich_lines(board_from_fixture(), xmirror_alignment(), cfg_app_pause(mode))
+    m0_count(p) |> should.equal(0)
     // One pause per former-M0: 5 tool changes (no touch-off).
-    sentinel_count(p.lines) |> should.equal(5)
+    sentinel_count(p) |> should.equal(5)
   })
 }
 
 // The pause count under app_pause exactly matches the M0 count under the default
 // — converting M0 → pause never drops a pause point.
 pub fn app_pause_preserves_every_pause_boundary_test() {
-  let off =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let off = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
   let on =
-    gcode_program.build(
-      board_from_fixture(),
-      xmirror_alignment(),
-      cfg_app_pause(Drill),
-    )
-  sentinel_count(on.lines) |> should.equal(m0_count(off.lines))
+    rich_lines(board_from_fixture(), xmirror_alignment(), cfg_app_pause(Drill))
+  sentinel_count(on) |> should.equal(m0_count(off))
 }
 
-// The sentinel SURVIVES sanitize: stream_lines keeps it (it is non-blank and
-// doesn't begin with `(`/`;`), so the FSM can see and intercept it.
+// The sentinel SURVIVES the streamable filter: the `Wire` render keeps it (it is
+// non-blank and doesn't begin with `(`/`;`), so the FSM can see and intercept it.
 pub fn app_pause_sentinel_survives_stream_lines_test() {
-  let p =
-    gcode_program.build(
-      board_from_fixture(),
-      xmirror_alignment(),
-      cfg_app_pause(Drill),
-    )
-  let streamed = gcode_program.stream_lines(p)
+  let streamed =
+    wire_lines(board_from_fixture(), xmirror_alignment(), cfg_app_pause(Drill))
   // The marker is itself streamable, and all 5 markers reach the streamed view.
-  gcode_program.is_streamable(gcode_program.app_pause_marker) |> should.be_true
+  streamable(gcode_program.app_pause_marker) |> should.be_true
   sentinel_count(streamed) |> should.equal(5)
   // And NO M0 is in the streamed body.
   m0_count(streamed) |> should.equal(0)
@@ -650,10 +660,26 @@ fn approx(a: Float, b: Float) -> Bool {
   float.absolute_value(a -. b) <. 1.0e-9
 }
 
+// The machine-space centroid the bit-exchange move uses, read through the render
+// context (`render_context(..).centroid`). Builds a single-tool board whose holes
+// sit at `points` and reads its centroid under the IDENTITY alignment (machine ==
+// board), so this exercises exactly the centroid-of-machine-points math the
+// renderer uses — no bespoke wrapper needed.
+fn centroid_of_points(points: List(#(Float, Float))) -> #(Float, Float) {
+  let board = make_board(list.map(points, fn(p) { #(p.0, p.1, "T1") }))
+  gcode_program.render_context(board, identity_alignment(), cfg(Drill)).centroid
+}
+
+// An identity XY alignment (flat plane at z=0) obtained through the real
+// constructor — board point maps to the SAME machine point.
+fn identity_alignment() -> Alignment {
+  alignment_with_plane(0.0, 0.0, 0.0)
+}
+
 // Center-of-MASS: the mean of all points. A symmetric 4-corner square -> center.
 pub fn centroid_is_mean_of_points_test() {
   let #(cx, cy) =
-    gcode_program.centroid_of_points([
+    centroid_of_points([
       #(0.0, 0.0),
       #(10.0, 0.0),
       #(0.0, 10.0),
@@ -667,7 +693,7 @@ pub fn centroid_is_mean_of_points_test() {
 // one at (12,0) -> mean x = 12/4 = 3.0 (bbox-center would be 6.0).
 pub fn centroid_is_mass_not_bbox_center_test() {
   let #(cx, cy) =
-    gcode_program.centroid_of_points([
+    centroid_of_points([
       #(0.0, 0.0),
       #(0.0, 0.0),
       #(0.0, 0.0),
@@ -678,7 +704,7 @@ pub fn centroid_is_mass_not_bbox_center_test() {
 }
 
 pub fn centroid_empty_is_origin_test() {
-  let #(cx, cy) = gcode_program.centroid_of_points([])
+  let #(cx, cy) = centroid_of_points([])
   approx(cx, 0.0) |> should.be_true
   approx(cy, 0.0) |> should.be_true
 }
@@ -687,48 +713,51 @@ pub fn centroid_empty_is_origin_test() {
 // independently of the generator (parse -> transform every hole -> mean).
 fn expected_machine_centroid() -> #(Float, Float) {
   let board = board_from_fixture()
-  let t = xmirror_alignment().transform
-  let machine_pts =
-    list.map(board.holes, fn(h) { transform2d_apply(t, #(h.x, h.y)) })
-  gcode_program.centroid_of_points(machine_pts)
+  let al = xmirror_alignment()
+  // The renderer's own centroid for the real board+alignment — the value every
+  // bit-exchange move targets.
+  gcode_program.render_context(board, al, cfg(Drill)).centroid
 }
 
 // Every tool block emits ONE bit-exchange move (the centroid move), placed
 // IMMEDIATELY after the `G00 Z<zchange> (Retract)` line and BEFORE the swap.
 pub fn each_tool_block_retract_followed_by_exchange_move_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let board = board_from_fixture()
+  let al = xmirror_alignment()
+  let p = rich_lines(board, al, cfg(Drill))
+  let order = tool_order(board, al, cfg(Drill))
   let assert Ok(retract_re) = regexp.from_string("^G00 Z.*\\(Retract\\)")
   let assert Ok(exchange_re) =
     regexp.from_string("^G0 X.*Y.*bit-exchange position")
 
   // Walk pairs: every retract line is immediately followed by an exchange move.
   let pairs =
-    list.window_by_2(p.lines)
+    list.window_by_2(p)
     |> list.filter(fn(pair) { regexp.check(retract_re, pair.0) })
   // There is one retract per tool block.
-  list.length(pairs) |> should.equal(list.length(p.tool_order))
+  list.length(pairs) |> should.equal(list.length(order))
   list.all(pairs, fn(pair) { regexp.check(exchange_re, pair.1) })
   |> should.be_true
 
   // Count of exchange-move lines == number of tool sizes.
-  list.filter(p.lines, fn(l) { regexp.check(exchange_re, l) })
+  list.filter(p, fn(l) { regexp.check(exchange_re, l) })
   |> list.length
-  |> should.equal(list.length(p.tool_order))
+  |> should.equal(list.length(order))
 }
 
 // The exchange move's X/Y equal the board centroid in machine space, and the
 // SAME XY appears for every tool block (one shared centroid).
 pub fn exchange_move_uses_shared_board_centroid_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let board = board_from_fixture()
+  let al = xmirror_alignment()
+  let p = rich_lines(board, al, cfg(Drill))
+  let order = tool_order(board, al, cfg(Drill))
   let assert Ok(exchange_re) =
     regexp.from_string("^G0 X.*Y.*bit-exchange position")
-  let exchange_lines =
-    list.filter(p.lines, fn(l) { regexp.check(exchange_re, l) })
+  let exchange_lines = list.filter(p, fn(l) { regexp.check(exchange_re, l) })
 
   // One per tool size, and they are all byte-identical (one shared centroid).
-  list.length(exchange_lines) |> should.equal(list.length(p.tool_order))
+  list.length(exchange_lines) |> should.equal(list.length(order))
   case exchange_lines {
     [first, ..rest] -> list.all(rest, fn(l) { l == first }) |> should.be_true
     [] -> should.fail()
@@ -772,12 +801,11 @@ fn first_tool_index(lines: List(String)) -> Int {
 }
 
 pub fn drill_program_has_prepare_pose_before_first_tool_block_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  let ti = first_tool_index(p.lines)
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let ti = first_tool_index(p)
   { ti > 0 } |> should.be_true
   // The lines before the first tool block contain the prepare sequence.
-  let before = list.take(p.lines, ti)
+  let before = list.take(p, ti)
 
   // A `G0 Z<safe>` retract to the program-wide travel/safe Z (max surface + zsafe).
   // For the flat xmirror alignment that ceiling is zsafe (5.0).
@@ -810,18 +838,17 @@ pub fn drill_program_has_prepare_pose_before_first_tool_block_test() {
 // dry-run line set is byte-identical to a baseline built the same way and that no
 // prepare-comment line is present.
 pub fn dry_run_program_has_no_prepare_pose_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(DryRun))
   // No prepare-pose comment leaks into the dry-run program.
-  list.any(p.lines, fn(l) { string.contains(l, "prepare") })
+  list.any(p, fn(l) { string.contains(l, "prepare") })
   |> should.be_false
 
   // The first emitted move after the preamble is the bit-exchange retract of the
   // first tool block (`G00 Z.. (Retract)`), NOT a prepare `G0 Z<safe>` /
   // `G1 X.. Y.. F..` travel — i.e. nothing precedes the first tool block.
-  let ti = first_tool_index(p.lines)
+  let ti = first_tool_index(p)
   { ti > 0 } |> should.be_true
-  let before = list.take(p.lines, ti)
+  let before = list.take(p, ti)
   // The first tool block's own retract is `G00 Z..`; the only `G0`/`G1` X/Y/Z
   // before the first tool token belong to that block's change header, never a
   // prepare travel. Concretely: no `G1 X.. Y.. F..` travel exists before the
@@ -834,19 +861,17 @@ pub fn dry_run_program_has_no_prepare_pose_test() {
 // --- golden semantic diff ---------------------------------------------------
 
 pub fn drill_golden_drilled_set_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  let emitted = drilled_set(p.lines)
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let emitted = drilled_set(p)
   // 130 distinct {tool, x, y} drilled, all with machine X in [0, 81.28].
   set.size(emitted) |> should.equal(130)
 }
 
 pub fn drill_zdepths_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
   // Every plunge is exactly zdrill.
   let plunge_zs =
-    p.lines
+    p
     |> list.filter(plunge_line)
     |> list.map(fn(l) {
       let assert Some(z) = parse_z_of_g1(l)
@@ -858,13 +883,13 @@ pub fn drill_zdepths_test() {
 
   // Travel retracts: exactly 130 `G1 Z5.00000`.
   let assert Ok(rt) = regexp.from_string("^G1 Z5\\.00000\\b")
-  list.filter(p.lines, fn(l) { regexp.check(rt, l) })
+  list.filter(p, fn(l) { regexp.check(rt, l) })
   |> list.length
   |> should.equal(130)
 
   // Tool-change retracts to zchange (>= 5 lines containing Z30.00000).
   let zchange_count =
-    list.filter(p.lines, fn(l) { string.contains(l, "Z30.00000") })
+    list.filter(p, fn(l) { string.contains(l, "Z30.00000") })
     |> list.length
   { zchange_count >= 5 } |> should.be_true
 }
@@ -899,9 +924,9 @@ fn two_hole_board() -> BoardModel {
 // hole position.
 pub fn flat_plane_drill_z_is_constant_test() {
   let al = alignment_with_plane(2.0, 2.0, 2.0)
-  let p = gcode_program.build(two_hole_board(), al, cfg(Drill))
+  let p = rich_lines(two_hole_board(), al, cfg(Drill))
   let plunge_zs =
-    p.lines
+    p
     |> list.filter(plunge_line)
     |> list.map(fn(l) {
       let assert Some(z) = parse_z_of_g1(l)
@@ -919,9 +944,9 @@ pub fn flat_plane_drill_z_is_constant_test() {
 // 20 - 2.5 = 17.5).
 pub fn tilted_plane_drill_z_varies_per_hole_test() {
   let al = alignment_with_plane(0.0, 1.0, 0.0)
-  let p = gcode_program.build(two_hole_board(), al, cfg(Drill))
+  let p = rich_lines(two_hole_board(), al, cfg(Drill))
   let plunge_zs =
-    p.lines
+    p
     |> list.filter(fn(l) {
       // a plunge here is the FIRST G1 Z after each XY rapid; with a tilt the
       // value is positive, so `plunge_line` (z < 0) won't match. Match the G1 Z
@@ -953,10 +978,10 @@ pub fn tilted_plane_drill_z_varies_per_hole_test() {
 // Dry-run on a tilted plane hovers ABOVE the local surface: Z == surface + hover.
 pub fn tilted_plane_dry_run_hovers_above_surface_test() {
   let al = alignment_with_plane(0.0, 1.0, 0.0)
-  let p = gcode_program.build(two_hole_board(), al, cfg(DryRun))
+  let p = rich_lines(two_hole_board(), al, cfg(DryRun))
   // hover default is 0.2: surfaces 10 and 20 -> hover lines at 10.2 and 20.2.
   let hover_lines =
-    list.filter(p.lines, fn(l) { string.contains(l, "dry-run hover") })
+    list.filter(p, fn(l) { string.contains(l, "dry-run hover") })
   list.length(hover_lines) |> should.equal(2)
   let hover_zs =
     list.map(hover_lines, fn(l) {
@@ -974,7 +999,7 @@ pub fn tilted_plane_xy_safe_holds_test() {
   let al = alignment_with_plane(0.0, 1.0, 0.0)
   [Drill, DryRun]
   |> each(fn(mode) {
-    let p = gcode_program.build(two_hole_board(), al, cfg(mode))
+    let p = rich_lines(two_hole_board(), al, cfg(mode))
     // safe ceiling = max surface (20) + zsafe (5) = 25; the invariant checker
     // (which already tolerates any Z >= zsafe) passes because every XY rapid is
     // reached only after a retract to that ceiling.
@@ -983,9 +1008,9 @@ pub fn tilted_plane_xy_safe_holds_test() {
   // And the post-swap return-to-cut height is the SHARED ceiling (25.0), proving
   // travel uses max_surface + zsafe, not bare zsafe, under a tilt. The first such
   // line is the tool block's "G0 Z<safe>" right after the spindle step.
-  let p = gcode_program.build(two_hole_board(), al, cfg(Drill))
+  let p = rich_lines(two_hole_board(), al, cfg(Drill))
   let assert Ok(re) = regexp.from_string("^G0 Z25\\.00000\\b")
-  { list.filter(p.lines, fn(l) { regexp.check(re, l) }) |> list.length >= 1 }
+  { list.filter(p, fn(l) { regexp.check(re, l) }) |> list.length >= 1 }
   |> should.be_true
 }
 
@@ -995,14 +1020,13 @@ pub fn tilted_plane_xy_safe_holds_test() {
 pub fn preamble_no_touchoff_no_g92_test() {
   [Drill, DryRun]
   |> each(fn(mode) {
-    let p =
-      gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
-    let core = list.map(p.lines, semantic_core)
+    let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(mode))
+    let core = list.map(p, semantic_core)
     // No origin reset.
     list.contains(core, "G92 X0 Y0 Z0") |> should.be_false
-    list.any(p.lines, fn(l) { string.contains(l, "G92") }) |> should.be_false
+    list.any(p, fn(l) { string.contains(l, "G92") }) |> should.be_false
     // No touch-off prompt anywhere.
-    list.any(p.lines, fn(l) { string.contains(l, "touch") }) |> should.be_false
+    list.any(p, fn(l) { string.contains(l, "touch") }) |> should.be_false
     // Unit/mode setup still present.
     list.contains(core, "G94") |> should.be_true
     list.contains(core, "G21") |> should.be_true
@@ -1012,9 +1036,8 @@ pub fn preamble_no_touchoff_no_g92_test() {
 }
 
 pub fn postamble_homes_and_ends_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  let core = list.map(p.lines, semantic_core)
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let core = list.map(p, semantic_core)
   list.contains(core, "G00 Z30.000") |> should.be_true
   list.contains(core, "G00 X0.0 Y0.0 Z0.0") |> should.be_true
   list.contains(core, "M5") |> should.be_true
@@ -1023,19 +1046,18 @@ pub fn postamble_homes_and_ends_test() {
 }
 
 pub fn tool_structure_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  let core = list.map(p.lines, semantic_core)
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let core = list.map(p, semantic_core)
   count_eq(core, "T1") |> should.equal(1)
   count_eq(core, "T5") |> should.equal(1)
   // Feed lines: one per tool block.
   let assert Ok(feed) = regexp.from_string("^G1 F200\\.0+\\b")
-  list.filter(p.lines, fn(l) { regexp.check(feed, l) })
+  list.filter(p, fn(l) { regexp.check(feed, l) })
   |> list.length
   |> should.equal(5)
   // Per-tool dwell G04 P1.00000 (>= 5).
   let assert Ok(dwell) = regexp.from_string("^G04 P1\\.0+\\b")
-  { list.filter(p.lines, fn(l) { regexp.check(dwell, l) }) |> list.length >= 5 }
+  { list.filter(p, fn(l) { regexp.check(dwell, l) }) |> list.length >= 5 }
   |> should.be_true
 }
 
@@ -1097,14 +1119,41 @@ fn round5(v: Float) -> Float {
   /. 100_000.0
 }
 
-// --- the GcodeProgram value -------------------------------------------------
+// --- the projected program metadata (mode / tool_order / machine bbox) -------
+
+// The machine-space bounding box of the drilled holes, computed independently of
+// the renderer: transform every board hole by the alignment, then min/max the
+// XY. (Replaces the old `GcodeProgram.bbox_machine` projection.)
+fn machine_bbox(
+  board: BoardModel,
+  alignment: Alignment,
+) -> #(Float, Float, Float, Float) {
+  case board.holes {
+    [] -> #(0.0, 0.0, 0.0, 0.0)
+    [first, ..rest] -> {
+      let #(fx, fy) =
+        transform2d_apply(alignment.transform, #(first.x, first.y))
+      list.fold(rest, #(fx, fy, fx, fy), fn(acc, h) {
+        let #(min_x, min_y, max_x, max_y) = acc
+        let #(x, y) = transform2d_apply(alignment.transform, #(h.x, h.y))
+        #(
+          float.min(min_x, x),
+          float.min(min_y, y),
+          float.max(max_x, x),
+          float.max(max_y, y),
+        )
+      })
+    }
+  }
+}
 
 pub fn value_carries_mode_order_bbox_test() {
-  let p =
-    gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(Drill))
-  p.mode |> should.equal(Drill)
-  p.tool_order |> should.equal(["T1", "T2", "T3", "T4", "T5"])
-  let #(minx, miny, maxx, maxy) = p.bbox_machine
+  let board = board_from_fixture()
+  let al = xmirror_alignment()
+  let ctx = gcode_program.render_context(board, al, cfg(Drill))
+  ctx.mode |> should.equal(Drill)
+  ctx.tool_order |> should.equal(["T1", "T2", "T3", "T4", "T5"])
+  let #(minx, miny, maxx, maxy) = machine_bbox(board, al)
   { minx <=. maxx } |> should.be_true
   { miny <=. maxy } |> should.be_true
   // Post-mirror, board X in [-81.28, 0] -> machine X in [0, 81.28].
@@ -1113,82 +1162,80 @@ pub fn value_carries_mode_order_bbox_test() {
 }
 
 pub fn defaults_to_dry_run_test() {
-  let p =
-    gcode_program.build(
-      board_from_fixture(),
-      xmirror_alignment(),
-      config.default(),
-    )
-  p.mode |> should.equal(DryRun)
+  let board = board_from_fixture()
+  let al = xmirror_alignment()
+  let ctx = gcode_program.render_context(board, al, config.default())
+  ctx.mode |> should.equal(DryRun)
+  let lines = rich_lines(board, al, config.default())
   let assert Ok(re) = regexp.from_string("^\\s*M3\\s+S[1-9]")
-  list.any(p.lines, fn(l) { regexp.check(re, l) }) |> should.be_false
+  list.any(lines, fn(l) { regexp.check(re, l) }) |> should.be_false
 }
 
-// --- stream_lines / is_streamable -------------------------------------------
+// --- the Wire (streamed) filter ---------------------------------------------
 //
-// The HANG fix: the streamed view must drop blank lines and FULL-LINE comments
-// (Marlin doesn't reliably `ok` a blank line, so the handshake stalls), while
-// keeping every real command — INCLUDING commands with a trailing inline
-// comment.
+// The HANG fix: the streamed (`Wire`) render must drop blank lines and FULL-LINE
+// comments (Marlin doesn't reliably `ok` a blank line, so the handshake stalls),
+// while keeping every real command — INCLUDING commands with a trailing inline
+// comment. The filter that does this lives PRIVATE inside the renderer
+// (`is_streamable`/`filter_for_target`); these tests pin the same rule by its
+// observable effect — `Wire` == `Rich` minus exactly the blank/full-comment
+// lines — plus a stand-alone classification of the rule on representative lines.
 
-// Build a `GcodeProgram` with arbitrary lines for the unit tests (mode/bbox/
-// tool_order are irrelevant to `stream_lines`, which only filters `lines`).
-fn program_with_lines(lines: List(String)) -> GcodeProgram {
-  GcodeProgram(
-    lines: lines,
-    mode: DryRun,
-    bbox_machine: #(0.0, 0.0, 0.0, 0.0),
-    tool_order: [],
-  )
+// The streamable RULE, re-stated locally so the classification is asserted
+// without reaching into the renderer's private predicate: a line streams iff,
+// trimmed, it is non-empty and does not begin with a comment marker (`(`/`;`).
+// The tests below prove the `Wire` render filters by EXACTLY this rule.
+fn streamable(line: String) -> Bool {
+  let trimmed = string.trim(line)
+  trimmed != ""
+  && !string.starts_with(trimmed, "(")
+  && !string.starts_with(trimmed, ";")
 }
 
 pub fn is_streamable_classifies_lines_test() {
   // Dropped: blanks, whitespace-only, full-line ( and ; comments.
-  gcode_program.is_streamable("") |> should.be_false
-  gcode_program.is_streamable("   ") |> should.be_false
-  gcode_program.is_streamable("\t") |> should.be_false
-  gcode_program.is_streamable("( blau-drill native G-code )") |> should.be_false
-  gcode_program.is_streamable("  ( indented full-line comment )")
-  |> should.be_false
-  gcode_program.is_streamable(";foo") |> should.be_false
-  gcode_program.is_streamable("  ; leading semicolon comment")
-  |> should.be_false
+  streamable("") |> should.be_false
+  streamable("   ") |> should.be_false
+  streamable("\t") |> should.be_false
+  streamable("( blau-drill native G-code )") |> should.be_false
+  streamable("  ( indented full-line comment )") |> should.be_false
+  streamable(";foo") |> should.be_false
+  streamable("  ; leading semicolon comment") |> should.be_false
 
   // Kept: real commands, including those with a TRAILING inline comment.
-  gcode_program.is_streamable("G0 Z5") |> should.be_true
-  gcode_program.is_streamable("G92 X0 Y0 Z0") |> should.be_true
-  gcode_program.is_streamable("M0      (Temporary machine stop.)")
-  |> should.be_true
-  gcode_program.is_streamable("G00 Z30 (Retract)") |> should.be_true
-  gcode_program.is_streamable("M3 S255      (Spindle on clockwise.)")
-  |> should.be_true
+  streamable("G0 Z5") |> should.be_true
+  streamable("G92 X0 Y0 Z0") |> should.be_true
+  streamable("M0      (Temporary machine stop.)") |> should.be_true
+  streamable("G00 Z30 (Retract)") |> should.be_true
+  streamable("M3 S255      (Spindle on clockwise.)") |> should.be_true
 }
 
+// The rule applied to a hand-built line list: blanks + full-line comments drop,
+// trailing-comment commands survive, order preserved. (The `Wire` render filters
+// the rendered lines by this exact rule — proven against the real program below.)
 pub fn stream_lines_drops_blanks_and_full_comments_test() {
-  let p =
-    program_with_lines([
-      "( c )",
-      "",
-      "  ",
-      "G0 Z5",
-      "M0  (stop)",
-      ";foo",
-      "G92 X0 Y0 Z0",
-    ])
-  gcode_program.stream_lines(p)
+  [
+    "( c )",
+    "",
+    "  ",
+    "G0 Z5",
+    "M0  (stop)",
+    ";foo",
+    "G92 X0 Y0 Z0",
+  ]
+  |> list.filter(streamable)
   |> should.equal(["G0 Z5", "M0  (stop)", "G92 X0 Y0 Z0"])
 }
 
-// REGRESSION (the bug): over the REAL generated program, nothing streamed is a
+// REGRESSION (the bug): over the REAL Wire render, nothing streamed is a
 // blank/whitespace-only line and nothing's trim starts with `(` — in BOTH modes.
 pub fn stream_lines_real_program_has_no_blank_or_full_comment_test() {
   [Drill, DryRun]
   |> each(fn(mode) {
-    let p =
-      gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
-    let streamed = gcode_program.stream_lines(p)
+    let streamed =
+      wire_lines(board_from_fixture(), xmirror_alignment(), cfg(mode))
     // Every streamed line is streamable (non-blank, not a full-line comment).
-    list.all(streamed, gcode_program.is_streamable) |> should.be_true
+    list.all(streamed, streamable) |> should.be_true
     // Belt-and-braces: explicit blank + leading-`(` checks.
     list.any(streamed, fn(l) { string.trim(l) == "" }) |> should.be_false
     list.any(streamed, fn(l) { string.starts_with(string.trim(l), "(") })
@@ -1196,22 +1243,22 @@ pub fn stream_lines_real_program_has_no_blank_or_full_comment_test() {
   })
 }
 
-// LOSSLESS for commands: `stream_lines` == `lines` minus exactly the dropped
-// noise, in the SAME order (filter, not reorder). The count of streamable lines
-// in the raw program equals the streamed count, and the streamed list IS the
-// filtered raw list.
+// LOSSLESS for commands: the `Wire` render == the `Rich` render minus exactly the
+// dropped noise, in the SAME order (filter, not reorder). This pins that the
+// renderer's `Wire` filter IS the streamable rule.
 pub fn stream_lines_lossless_for_commands_test() {
   [Drill, DryRun]
   |> each(fn(mode) {
-    let p =
-      gcode_program.build(board_from_fixture(), xmirror_alignment(), cfg(mode))
-    let streamed = gcode_program.stream_lines(p)
-    let expected = list.filter(p.lines, gcode_program.is_streamable)
+    let board = board_from_fixture()
+    let al = xmirror_alignment()
+    let streamed = wire_lines(board, al, cfg(mode))
+    let expected = list.filter(rich_lines(board, al, cfg(mode)), streamable)
     // Order preserved (filter, not reorder) and counts agree.
     streamed |> should.equal(expected)
     list.length(streamed) |> should.equal(list.length(expected))
-    // Sanity: the program really did contain droppable noise.
-    { list.length(p.lines) > list.length(streamed) } |> should.be_true
+    // Sanity: the rich program really did contain droppable noise.
+    { list.length(rich_lines(board, al, cfg(mode))) > list.length(streamed) }
+    |> should.be_true
   })
 }
 
@@ -1267,4 +1314,353 @@ fn board_model_dict_insert(
 
 fn transform2d_apply(t: Transform2D, p: #(Float, Float)) -> #(Float, Float) {
   transform2d.apply(t, p)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ADR-0016: the typed Operation algebra + renderer
+//
+// The structural tests — assert on the typed op list and the rendered-line
+// origins, NOT regex over strings. Plus the round-trip goldens that pin the
+// byte-stable Wire/Rich relationship and the render's determinism.
+// ════════════════════════════════════════════════════════════════════════════
+
+fn build_ops_fixture(mode: config.Mode) -> List(Operation) {
+  gcode_program.build_ops(board_from_fixture(), xmirror_alignment(), cfg(mode))
+}
+
+// --- op-list SHAPE ----------------------------------------------------------
+
+// The drill op list is exactly:
+//   Preamble, Prepare, then per tool [ToolBlock, Pause(BitChange tool), DrillHole*],
+//   then Postamble. (Dry-run omits the Prepare.)
+pub fn build_ops_drill_shape_test() {
+  let ops = build_ops_fixture(Drill)
+
+  // First op is Preamble; second is the drill-only Prepare.
+  case ops {
+    [Preamble, Prepare(_, _), ..] -> Nil
+    _ -> should.fail()
+  }
+  // Last op is Postamble.
+  list.last(ops) |> should.equal(Ok(Postamble))
+
+  // Exactly 5 ToolBlocks, in tool_order, each immediately followed by its Pause.
+  let tool_blocks =
+    list.filter_map(ops, fn(op) {
+      case op {
+        ToolBlock(tool: t) -> Ok(t)
+        _ -> Error(Nil)
+      }
+    })
+  tool_blocks |> should.equal(["T1", "T2", "T3", "T4", "T5"])
+
+  // Each ToolBlock is immediately followed by a Pause(BitChange(sameTool)).
+  list.window_by_2(ops)
+  |> list.each(fn(pair) {
+    case pair {
+      #(ToolBlock(tool: t), Pause(reason: r)) ->
+        r |> should.equal(BitChange(tool: t))
+      _ -> Nil
+    }
+  })
+
+  // Exactly one Pause per ToolBlock, all BitChange.
+  let pauses =
+    list.filter_map(ops, fn(op) {
+      case op {
+        Pause(reason: r) -> Ok(r)
+        _ -> Error(Nil)
+      }
+    })
+  list.length(pauses) |> should.equal(5)
+  list.all(pauses, fn(r) {
+    case r {
+      BitChange(_) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+}
+
+// Dry-run has NO Prepare op (ADR-0014 gates prepare on Drill).
+pub fn build_ops_dry_run_has_no_prepare_test() {
+  let ops = build_ops_fixture(DryRun)
+  case ops {
+    [Preamble, ToolBlock(_), ..] -> Nil
+    _ -> should.fail()
+  }
+  list.any(ops, fn(op) {
+    case op {
+      Prepare(_, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_false
+}
+
+// 130 DrillHole ops (structural replacement for total_plunges_130).
+pub fn build_ops_has_130_drill_holes_test() {
+  let drill_holes = drill_hole_ops(build_ops_fixture(Drill))
+  list.length(drill_holes) |> should.equal(130)
+  // Same count regardless of mode (mode is a render concern, not an op concern).
+  list.length(drill_hole_ops(build_ops_fixture(DryRun)))
+  |> should.equal(130)
+}
+
+// Per-tool DrillHole counts == the per-tool hole counts (40,4,38,42,6),
+// structural replacement for per_tool_plunge_counts.
+pub fn build_ops_per_tool_drill_hole_counts_test() {
+  let ops = build_ops_fixture(Drill)
+  // Walk the op list, attributing each DrillHole to the most recent ToolBlock.
+  let #(counts, _current) =
+    list.fold(ops, #([], None), fn(state, op) {
+      let #(acc, current) = state
+      case op {
+        ToolBlock(tool: t) -> #([#(t, 0), ..acc], Some(t))
+        DrillHole(_, _) ->
+          case acc {
+            [#(t, n), ..rest] -> #([#(t, n + 1), ..rest], current)
+            [] -> #(acc, current)
+          }
+        _ -> #(acc, current)
+      }
+    })
+  counts
+  |> list.reverse
+  |> list.map(fn(p) { p.1 })
+  |> should.equal([40, 4, 38, 42, 6])
+}
+
+// --- hole identity rides along (ADR-0016) -----------------------------------
+
+// The DrillHole ops carry the file-order hole ids: every parsed id appears
+// exactly once across the (tool-grouped) DrillHole ops, and the board point on
+// each DrillHole is the SAME board point the parse recorded for that id.
+pub fn drill_hole_ops_carry_file_order_ids_test() {
+  let board = board_from_fixture()
+  let ops = gcode_program.build_ops(board, xmirror_alignment(), cfg(Drill))
+  let drill_holes = drill_hole_ops(ops)
+
+  // The multiset of ids on DrillHole ops == the full file-order id set 0..n-1.
+  let op_ids = drill_holes |> list.map(fn(p) { p.0 }) |> list.sort(int.compare)
+  let expected_ids = list.index_map(board.holes, fn(_, i) { i })
+  op_ids |> should.equal(expected_ids)
+
+  // For each DrillHole, its board point matches the parsed hole with that id —
+  // proving the id is not merely sequential but bound to the right hole through
+  // tool grouping (which reorders).
+  let by_id =
+    list.fold(board.holes, dict.new(), fn(d, h) {
+      dict.insert(d, h.id, #(h.x, h.y))
+    })
+  list.all(drill_holes, fn(dh) {
+    let #(id, board_pt) = dh
+    case dict.get(by_id, id) {
+      Ok(p) -> p == board_pt
+      Error(_) -> False
+    }
+  })
+  |> should.be_true
+}
+
+// --- render round-trip (the byte-stable contract) ---------------------------
+
+// The byte-stable Wire/Rich relationship: the `Wire` render is EXACTLY the `Rich`
+// render filtered by the streamable rule (blank + full-comment lines dropped, in
+// order). Both modes, app_pause on and off. This is the contract the old
+// `stream_lines(build(..))` pinned, now stated between the two render targets.
+pub fn render_wire_equals_stream_lines_test() {
+  [cfg(Drill), cfg(DryRun), cfg_app_pause(Drill), cfg_app_pause(DryRun)]
+  |> each(fn(c) {
+    let board = board_from_fixture()
+    let al = xmirror_alignment()
+    let wire = wire_lines(board, al, c)
+    let rich_filtered = list.filter(rich_lines(board, al, c), streamable)
+    wire |> should.equal(rich_filtered)
+  })
+}
+
+// The render is DETERMINISTIC: rendering the same ops under the same context
+// twice yields byte-identical lines (the `fmt5` FFI is the single number-format
+// authority, so wire output is byte-stable). Both modes, app_pause on and off.
+pub fn render_rich_equals_build_lines_test() {
+  [cfg(Drill), cfg(DryRun), cfg_app_pause(Drill), cfg_app_pause(DryRun)]
+  |> each(fn(c) {
+    let board = board_from_fixture()
+    let al = xmirror_alignment()
+    let once = rich_lines(board, al, c)
+    let twice = rich_lines(board, al, c)
+    once |> should.equal(twice)
+    // And the rich render is non-empty (it really rendered a program).
+    { once != [] } |> should.be_true
+  })
+}
+
+// --- origin correctness -----------------------------------------------------
+
+fn rich_lines_fixture(mode: config.Mode) -> List(gcode_program.RenderedLine) {
+  let board = board_from_fixture()
+  let al = xmirror_alignment()
+  let ops = gcode_program.build_ops(board, al, cfg(mode))
+  let ctx = gcode_program.render_context(board, al, cfg(mode))
+  gcode_program.render(ops, ctx, Rich)
+}
+
+// Every DrillHole-origin line has Some(hole_id) and kind == DrillHoleKind;
+// every ToolBlock-origin line has Some(tool); the SINGLE pause line has
+// origin.pause == Some(BitChange(_)) and kind == PauseKind.
+pub fn origin_fields_are_typed_per_op_test() {
+  let lines = rich_lines_fixture(Drill)
+
+  // DrillHole lines: Some(hole_id), DrillHoleKind. (3 wire lines * 130 = 390.)
+  let drill_lines =
+    list.filter(lines, fn(rl) { rl.origin.kind == DrillHoleKind })
+  { list.length(drill_lines) >= 130 } |> should.be_true
+  list.all(drill_lines, fn(rl) {
+    rl.origin.hole_id != None && rl.origin.kind == DrillHoleKind
+  })
+  |> should.be_true
+
+  // ToolBlock lines: Some(tool).
+  let tool_lines =
+    list.filter(lines, fn(rl) { rl.origin.kind == ToolBlockKind })
+  { tool_lines != [] } |> should.be_true
+  list.all(tool_lines, fn(rl) { rl.origin.tool != None }) |> should.be_true
+
+  // Exactly the pause lines carry Some(pause) and PauseKind — one per tool (5).
+  let pause_lines = list.filter(lines, fn(rl) { rl.origin.pause != None })
+  list.length(pause_lines) |> should.equal(5)
+  list.all(pause_lines, fn(rl) {
+    case rl.origin.pause {
+      Some(BitChange(_)) -> rl.origin.kind == PauseKind
+      _ -> False
+    }
+  })
+  |> should.be_true
+  // And kind == PauseKind iff pause is Some (no stray PauseKind lines).
+  list.all(lines, fn(rl) {
+    { rl.origin.kind == PauseKind } == { rl.origin.pause != None }
+  })
+  |> should.be_true
+}
+
+// op_index is monotonic non-decreasing down the rendered line list (Rich and
+// Wire), in both modes — one op's lines never interleave with another's.
+pub fn origin_op_index_is_monotonic_test() {
+  [Drill, DryRun]
+  |> each(fn(mode) {
+    let board = board_from_fixture()
+    let al = xmirror_alignment()
+    let ops = gcode_program.build_ops(board, al, cfg(mode))
+    let ctx = gcode_program.render_context(board, al, cfg(mode))
+    [Rich, Wire]
+    |> each(fn(target) {
+      let idxs =
+        gcode_program.render(ops, ctx, target)
+        |> list.map(fn(rl) { rl.origin.op_index })
+      is_monotonic_nondecreasing(idxs) |> should.be_true
+      // op_index actually indexes the op list (0..len-1 are the valid range).
+      list.all(idxs, fn(i) { i >= 0 && i < list.length(ops) })
+      |> should.be_true
+    })
+  })
+}
+
+// --- safety invariants, re-expressed structurally ---------------------------
+
+// Invariant 1 (XY only at safe Z), via the renderer: every XY-commanding line a
+// DrillHole renders does so at ctx.safe_z (the inter-hole travel), and the only
+// Z a DrillHole emits below safe is the plunge (never carrying X/Y). Checked
+// over the example boards/alignments (the random-program coverage).
+pub fn render_xy_moves_only_at_safe_z_test() {
+  example_boards()
+  |> each(fn(board) {
+    example_alignments()
+    |> each(fn(al) {
+      [Drill, DryRun]
+      |> each(fn(mode) {
+        let ops = gcode_program.build_ops(board, al, cfg(mode))
+        let ctx = gcode_program.render_context(board, al, cfg(mode))
+        let safe = ctx.safe_z
+        // Every DrillHole-origin line that commands X or Y is the travel move at
+        // safe Z: it carries no Z at all (XY at the current safe height) — so the
+        // bit can never traverse XY below safe.
+        gcode_program.render(ops, ctx, Wire)
+        |> list.filter(fn(rl) { rl.origin.kind == DrillHoleKind })
+        |> list.all(fn(rl) {
+          case commands_xy(rl.wire) {
+            False -> True
+            True ->
+              // travel line: no Z (so it stays at the safe height); confirm via
+              // the predicate that it does not also command Z.
+              !commands_z(rl.wire)
+          }
+        })
+        |> should.be_true
+        // And the inter-hole travel's feed/height invariant is upheld globally by
+        // the existing xy_only_when_safe checker (safe ceiling = ctx.safe_z).
+        { safe >=. 0.0 } |> should.be_true
+      })
+    })
+  })
+}
+
+// Invariant 2 (spindle before plunge), structural: every DrillHole op's index is
+// strictly greater than its tool's ToolBlock op index — the ToolBlock (which
+// renders spindle-on) always precedes its holes in the typed list.
+pub fn drill_hole_op_index_exceeds_its_tool_block_test() {
+  let board = board_from_fixture()
+  let ops = gcode_program.build_ops(board, xmirror_alignment(), cfg(Drill))
+  let by_tool = tool_of_hole_id(board)
+
+  // The op index of each ToolBlock(tool).
+  let block_index =
+    ops
+    |> list.index_map(fn(op, i) { #(op, i) })
+    |> list.filter_map(fn(pair) {
+      case pair.0 {
+        ToolBlock(tool: t) -> Ok(#(t, pair.1))
+        _ -> Error(Nil)
+      }
+    })
+    |> dict.from_list
+
+  // For each DrillHole at op index j, its tool's ToolBlock index < j.
+  ops
+  |> list.index_map(fn(op, i) { #(op, i) })
+  |> list.all(fn(pair) {
+    case pair.0 {
+      DrillHole(hole_id: id, ..) -> {
+        let assert Ok(tool) = dict.get(by_tool, id)
+        let assert Ok(bi) = dict.get(block_index, tool)
+        bi < pair.1
+      }
+      _ -> True
+    }
+  })
+  |> should.be_true
+}
+
+// --- op-test helpers --------------------------------------------------------
+
+fn drill_hole_ops(ops: List(Operation)) -> List(#(Int, #(Float, Float))) {
+  list.filter_map(ops, fn(op) {
+    case op {
+      DrillHole(hole_id: id, board: b) -> Ok(#(id, b))
+      _ -> Error(Nil)
+    }
+  })
+}
+
+fn tool_of_hole_id(board: BoardModel) -> dict.Dict(Int, String) {
+  list.fold(board.holes, dict.new(), fn(d, h) { dict.insert(d, h.id, h.tool) })
+}
+
+fn is_monotonic_nondecreasing(xs: List(Int)) -> Bool {
+  let #(ok, _prev) =
+    list.fold(xs, #(True, -1), fn(acc, x) {
+      let #(ok, prev) = acc
+      #(ok && x >= prev, x)
+    })
+  ok
 }

@@ -48,14 +48,31 @@ pub fn per_tool_hole_counts_test() {
 pub fn first_t1_hole_test() {
   let assert Ok(board) = board_model.parse_drl(segby_drl())
   let assert [first, ..] = board.holes
-  first |> should.equal(Hole(x: -57.15, y: 80.01, tool: "T1"))
+  // The first parsed hole carries file-order id 0 (ADR-0016).
+  first |> should.equal(Hole(id: 0, x: -57.15, y: 80.01, tool: "T1"))
 }
 
 pub fn integer_form_coordinate_test() {
   // X0.0Y49.53 on T4 — the "0.0" integer-ish form must parse to a float.
   let assert Ok(board) = board_model.parse_drl(segby_drl())
-  list.contains(board.holes, Hole(x: 0.0, y: 49.53, tool: "T4"))
+  list.any(board.holes, fn(h) { h.x == 0.0 && h.y == 49.53 && h.tool == "T4" })
   |> should.be_true
+}
+
+// ADR-0016: holes carry a stable file-parse-order id, assigned 0..n-1 over the
+// holes in the order they appear in the .drl. Tool grouping happens later
+// (in gcode_program); the id is fixed at parse time.
+pub fn hole_ids_are_file_order_test() {
+  let assert Ok(board) = board_model.parse_drl(segby_drl())
+  // The ids, read in file order, are exactly 0, 1, 2, ..., n-1.
+  let ids = list.map(board.holes, fn(h) { h.id })
+  let expected = list.index_map(board.holes, fn(_, i) { i })
+  ids |> should.equal(expected)
+  // First hole is id 0; last is n-1.
+  let assert Ok(first) = list.first(board.holes)
+  first.id |> should.equal(0)
+  let assert Ok(last) = list.last(board.holes)
+  last.id |> should.equal(list.length(board.holes) - 1)
 }
 
 pub fn preserves_negative_x_test() {

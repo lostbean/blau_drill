@@ -37,8 +37,11 @@
 //// entry action, so a de-energized jog cannot be expressed.
 
 import blau_drill/control/protocol
-import blau_drill/domain/gcode_program
+import blau_drill/domain/gcode_program.{
+  type LineOrigin, type PauseReason, type RenderedLine, RenderedLine,
+}
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
 
 // ── public types ─────────────────────────────────────────────────────────────
@@ -63,11 +66,12 @@ pub type PrinterState {
   Jogging(line_no: Int, pending: Pending)
   /// A G-code program is in flight via the ok-handshake — one line at a time.
   Streaming(line_no: Int, job: StreamJob)
-  /// A stream halted at an in-app pause point (a `M0_APP_PAUSE` sentinel — the
-  /// in-app pause workflow, ADR-0009). NOTHING is in flight: the FSM consumed
-  /// the sentinel (never wrote it to the port) and is waiting for the operator's
+  /// A stream halted at an in-app pause point (a line whose `origin.pause` is
+  /// `Some(_)` and whose `.wire` is the `M0_APP_PAUSE` sentinel — the in-app
+  /// pause workflow, ADR-0009/0017). NOTHING is in flight: the FSM consumed the
+  /// pause line (never wrote it to the port) and is waiting for the operator's
   /// `ResumeStream` to send the next real line and resume the handshake. `job.idx`
-  /// points AT the sentinel; resume sends `job.idx + 1`. `Halt` and
+  /// points AT the pause line; resume sends `job.idx + 1`. `Halt` and
   /// `CancelStream` stay reachable here (abort is never lost behind a pause).
   StreamPaused(line_no: Int, job: StreamJob)
   /// Aborted / serial-loss. Loud and reachable from any active state. Only
@@ -75,10 +79,15 @@ pub type PrinterState {
   Faulted
 }
 
-/// A streaming job: the program lines, the index of the line currently in
-/// flight (0-based), and the total.
+/// A streaming job: the rendered program lines (each pairing its framed wire
+/// text with a typed `origin`, ADR-0017), the index of the line currently in
+/// flight (0-based), and the total. The FSM reads `.wire` to frame and
+/// pattern-matches `.origin` to pause — it never parses the wire string. The
+/// `rendered` list is produced ONCE at run start and stored immutably; a
+/// `Resend: N` re-frames `rendered[N].wire` (the identical stored string), so
+/// the resend is byte-stable.
 pub type StreamJob {
-  StreamJob(lines: List(String), idx: Int, total: Int)
+  StreamJob(rendered: List(RenderedLine), idx: Int, total: Int)
 }
 
 /// A one-shot request an inbound line resolves. Only `where` (M114) is pending
@@ -117,8 +126,10 @@ pub type Command {
   PulseSpindle(on_cmd: String, off_cmd: String)
   /// Query live position (M114). Valid in `Idle`/`Jogging`.
   Where
-  /// Stream a G-code program with the ok-handshake. Valid in `Idle`/`Jogging`.
-  Stream(lines: List(String))
+  /// Stream a rendered G-code program with the ok-handshake. Each `RenderedLine`
+  /// carries its framed wire text plus the typed `origin` the FSM pauses on
+  /// (ADR-0017). Valid in `Idle`/`Jogging`.
+  Stream(rendered: List(RenderedLine))
   /// Resume a stream halted at an in-app pause point: `StreamPaused -> Streaming`.
   /// Consumes nothing new — it sends the next REAL line (the one after the
   /// already-consumed `M0_APP_PAUSE` sentinel) and re-arms the ok-handshake. A
@@ -167,17 +178,21 @@ pub type Event {
   /// A command was refused (and wrote nothing).
   Refused(Command, Refusal)
   /// One stream line was confirmed by its `ok`. `sent` is the count confirmed
-  /// so far (1..total), `line` is the just-confirmed raw line.
-  Progress(sent: Int, total: Int, line: String)
+  /// so far (1..total), `line` is the just-confirmed raw line (kept for the
+  /// comms log), and `origin` is that line's typed back-reference (ADR-0017) —
+  /// the app reads the op/hole/tool off it instead of grepping `line`.
+  Progress(sent: Int, total: Int, line: String, origin: LineOrigin)
   /// A `where`/M114 reply resolved to a position.
   PositionUpdate(protocol.Position)
   /// A stream finished (all lines ok'd) and the machine returned to `Idle`.
   StreamComplete
-  /// The stream halted at an in-app pause point (a `M0_APP_PAUSE` sentinel). The
-  /// UI surfaces the bit-change / resume modal; the operator's `ResumeStream`
-  /// continues the run. `pending` is the count of lines confirmed so far (the
-  /// sentinel does not count — it is never sent), `total` the program length.
-  StreamPausedAt(pending: Int, total: Int)
+  /// The stream halted at an in-app pause point. The UI surfaces the bit-change
+  /// / resume modal; the operator's `ResumeStream` continues the run. `pending`
+  /// is the count of lines confirmed so far (the pause line does not count — it
+  /// is never sent), `total` the program length, and `reason` is the paused
+  /// line's typed `origin.pause` (ADR-0017) — e.g. `BitChange(tool)`, which the
+  /// app maps to the bit diameter without grepping a `T<n>` token.
+  StreamPausedAt(pending: Int, total: Int, reason: PauseReason)
   /// The machine entered `Faulted`. `reason` describes why (abort, serial loss).
   Faulting(reason: String)
   /// The machine recovered from a fault to `Idle`.
@@ -443,8 +458,14 @@ fn feed_stream(line_no: Int, job: StreamJob, line: String) -> Step {
   case classify_reply(line) {
     ReplyOk -> {
       let next = job.idx + 1
-      let confirmed = line_at(job.lines, job.idx)
-      let progress = Progress(sent: next, total: job.total, line: confirmed)
+      let confirmed = line_at(job.rendered, job.idx)
+      let progress =
+        Progress(
+          sent: next,
+          total: job.total,
+          line: confirmed.wire,
+          origin: confirmed.origin,
+        )
       case next >= job.total {
         True ->
           // All lines accepted: a completed stream returns to Idle, NOT back to
@@ -459,15 +480,18 @@ fn feed_stream(line_no: Int, job: StreamJob, line: String) -> Step {
           // so resume continues with idx+1) and emit a pause event. The sentinel
           // is never framed and never written to the port.
           let job2 = StreamJob(..job, idx: next)
-          let next_line = line_at(job2.lines, next)
-          case is_pause_sentinel(next_line) {
-            True ->
+          let next_line = line_at(job2.rendered, next)
+          case in_app_pause(next_line) {
+            Some(reason) ->
               Step(StreamPaused(line_no: line_no, job: job2), [], [
                 progress,
-                StreamPausedAt(pending: next, total: job.total),
+                StreamPausedAt(pending: next, total: job.total, reason: reason),
               ])
-            False -> {
-              let #(payload, n) = protocol.frame(next_line, line_no)
+            // A real (non-intercepted) line — including a real `M0` line when
+            // app_pause is OFF: send it. Marlin's own M0 stops the machine
+            // (ADR-0009); we do NOT intercept it as an in-app pause.
+            _ -> {
+              let #(payload, n) = protocol.frame(next_line.wire, line_no)
               Step(Streaming(line_no: n, job: job2), [payload], [progress])
             }
           }
@@ -475,9 +499,10 @@ fn feed_stream(line_no: Int, job: StreamJob, line: String) -> Step {
       }
     }
     ReplyResend -> {
-      // NAK / recoverable Error: re-send the CURRENT line without advancing.
-      let cur = line_at(job.lines, job.idx)
-      let #(payload, n) = protocol.frame(cur, line_no)
+      // NAK / recoverable Error: re-send the CURRENT line WITHOUT advancing —
+      // the IDENTICAL stored `.wire` (byte-stability, ADR-0017: never re-render).
+      let cur = line_at(job.rendered, job.idx)
+      let #(payload, n) = protocol.frame(cur.wire, line_no)
       Step(Streaming(line_no: n, job: job), [payload], [])
     }
     // Position / busy / echo during a stream: informational, ignore.
@@ -504,24 +529,29 @@ fn classify_reply(line: String) -> Reply {
 
 // ── command helpers ──────────────────────────────────────────────────────────
 
-fn start_stream(line_no: Int, lines: List(String), cmd: Command) -> Step {
-  case lines {
+fn start_stream(
+  line_no: Int,
+  rendered: List(RenderedLine),
+  cmd: Command,
+) -> Step {
+  case rendered {
     // Empty program: nothing to stream — stay put, accept, no writes.
     [] -> accepted(Idle(line_no: line_no, pending: PendingNone), [], cmd)
     [first, ..] -> {
-      let job = StreamJob(lines: lines, idx: 0, total: list.length(lines))
+      let job =
+        StreamJob(rendered: rendered, idx: 0, total: list.length(rendered))
       // Entry action: send the first line — UNLESS it is the in-app pause
-      // sentinel (a program can OPEN with the touch-off pause), in which case
-      // pause immediately and wait for the operator's resume. The sentinel is
+      // sentinel (a program can OPEN with a pause), in which case pause
+      // immediately and wait for the operator's resume. The sentinel is
       // consumed (idx 0), never written; resume sends line 1.
-      case is_pause_sentinel(first) {
-        True ->
+      case in_app_pause(first) {
+        Some(reason) ->
           Step(StreamPaused(line_no: line_no, job: job), [], [
             Accepted(cmd),
-            StreamPausedAt(pending: 0, total: job.total),
+            StreamPausedAt(pending: 0, total: job.total, reason: reason),
           ])
-        False -> {
-          let #(payload, n) = protocol.frame(first, line_no)
+        _ -> {
+          let #(payload, n) = protocol.frame(first.wire, line_no)
           Step(Streaming(line_no: n, job: job), [payload], [Accepted(cmd)])
         }
       }
@@ -543,17 +573,29 @@ fn resume_stream(line_no: Int, job: StreamJob, cmd: Command) -> Step {
       ])
     False -> {
       let job2 = StreamJob(..job, idx: next)
-      let next_line = line_at(job2.lines, next)
-      let #(payload, n) = protocol.frame(next_line, line_no)
+      let next_line = line_at(job2.rendered, next)
+      let #(payload, n) = protocol.frame(next_line.wire, line_no)
       Step(Streaming(line_no: n, job: job2), [payload], [Accepted(cmd)])
     }
   }
 }
 
-/// True when a streamed line is the in-app pause sentinel (`M0_APP_PAUSE`): the
-/// FSM intercepts it (pause, write nothing) rather than sending it to the port.
-fn is_pause_sentinel(line: String) -> Bool {
-  trim(line) == gcode_program.app_pause_marker
+/// Whether a rendered line is an IN-APP pause the FSM intercepts (pauses, writes
+/// nothing) — returning its typed `PauseReason` if so (ADR-0017). The pause is
+/// recognized from the typed `origin.pause`, NOT the wire text.
+///
+/// NUANCE (app_pause OFF, ADR-0009): the `Pause` op renders to `origin.pause ==
+/// Some(_)` regardless of `cfg.app_pause`, but with app_pause OFF its `.wire` is
+/// a REAL `M0` line that must be STREAMED so Marlin's own M0 stops the machine —
+/// the FSM must NOT intercept it. So we intercept iff the origin is a pause AND
+/// the wire is the in-app sentinel; a real `M0` (app_pause off) falls through
+/// `None` and is sent like any other line. This preserves the historical
+/// app_pause-off behavior (see `app_test.confirm_default_streams_without_pausing`).
+fn in_app_pause(rl: RenderedLine) -> option.Option(PauseReason) {
+  case rl.origin.pause, trim(rl.wire) == gcode_program.app_pause_marker {
+    Some(reason), True -> Some(reason)
+    _, _ -> option.None
+  }
 }
 
 fn accepted(state: PrinterState, writes: List(String), cmd: Command) -> Step {
@@ -607,14 +649,38 @@ fn current_line_no(state: PrinterState) -> Int {
   }
 }
 
-fn line_at(lines: List(String), idx: Int) -> String {
-  case list.drop(lines, idx) {
+fn line_at(rendered: List(RenderedLine), idx: Int) -> RenderedLine {
+  case list.drop(rendered, idx) {
     [x, ..] -> x
-    [] -> ""
+    // Out of range: a benign empty line with no origin pause (never reached on a
+    // well-formed run — idx is always < total when this is called).
+    [] -> RenderedLine(wire: "", origin: empty_origin())
   }
 }
 
+fn empty_origin() -> LineOrigin {
+  gcode_program.LineOrigin(
+    op_index: 0,
+    kind: gcode_program.PostambleKind,
+    tool: option.None,
+    hole_id: option.None,
+    pause: option.None,
+  )
+}
+
 // ── inspection helpers (for the UI / integration layer) ──────────────────────
+
+/// The rendered program of the in-flight stream (the SINGLE authority, ADR-0017
+/// — the immutable list stored in `StreamJob` at run start). Empty when not
+/// streaming. The app reads the confirmed prefix's typed origins off this
+/// instead of rebuilding the program or grepping wire text.
+pub fn stream_rendered(state: PrinterState) -> List(RenderedLine) {
+  case state {
+    Streaming(_, job) -> job.rendered
+    StreamPaused(_, job) -> job.rendered
+    _ -> []
+  }
+}
 
 /// A short stable name for the current state (for badges / logs).
 pub fn state_name(state: PrinterState) -> String {
@@ -653,6 +719,18 @@ pub fn stream_progress(state: PrinterState) -> #(Int, Int) {
     Streaming(_, job) -> #(job.idx, job.total)
     StreamPaused(_, job) -> #(job.idx, job.total)
     _ -> #(0, 0)
+  }
+}
+
+/// The typed `PauseReason` the stream is currently halted on, or `None` when the
+/// machine is NOT stream-paused (ADR-0018: the bit-change modal is a PROJECTION
+/// of the FSM, not an event-driven field — read the standing paused line's typed
+/// `origin.pause` here). The paused line sits at `job.idx` (the sentinel that is
+/// never sent), so its origin carries the upcoming bit change.
+pub fn stream_paused_reason(state: PrinterState) -> Option(PauseReason) {
+  case state {
+    StreamPaused(_, job) -> in_app_pause(line_at(job.rendered, job.idx))
+    _ -> None
   }
 }
 

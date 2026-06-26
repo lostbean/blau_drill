@@ -18,8 +18,12 @@ import blau_drill/control/printer.{
   Recovered, Refused, Release, ResumeStream, Stream, StreamPausedAt, Where, X, Y,
 }
 import blau_drill/control/protocol
-import blau_drill/domain/gcode_program
+import blau_drill/domain/gcode_program.{
+  type PauseReason, type RenderedLine, BitChange, DrillHoleKind, LineOrigin,
+  PostambleKind, RenderedLine,
+}
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -76,6 +80,55 @@ fn feed(state: PrinterState, line: String) -> Step {
 
 fn has_event(events: List(Event), pred: fn(Event) -> Bool) -> Bool {
   list.any(events, pred)
+}
+
+// ── RenderedLine test helpers (ADR-0017) ─────────────────────────────────────
+// The FSM now streams `RenderedLine`s (wire + typed origin). These wrap the
+// bare-string programs the existing tests use into `RenderedLine` programs with
+// minimal churn: `rl` gives a benign (non-pause) origin; `rl_pause` tags a line
+// with `origin.pause = Some(reason)` AND keeps the sentinel `.wire`, so the FSM
+// intercepts it as an in-app pause exactly as before.
+
+/// A benign, non-pause rendered line — a synthetic `DrillHole`-ish origin (kind
+/// is incidental for the wire-byte protocol tests; only `.wire` is asserted).
+fn rl(wire: String) -> RenderedLine {
+  RenderedLine(
+    wire: wire,
+    origin: LineOrigin(
+      op_index: 0,
+      kind: DrillHoleKind,
+      tool: None,
+      hole_id: None,
+      pause: None,
+    ),
+  )
+}
+
+/// A pause line: carries `origin.pause = Some(reason)` and the sentinel `.wire`,
+/// so `in_app_pause` intercepts it (pauses, writes nothing).
+fn rl_pause(wire: String, reason: PauseReason) -> RenderedLine {
+  RenderedLine(
+    wire: wire,
+    origin: LineOrigin(
+      op_index: 0,
+      kind: PostambleKind,
+      tool: None,
+      hole_id: None,
+      pause: Some(reason),
+    ),
+  )
+}
+
+/// Wrap a bare-string program into a `RenderedLine` program: any line equal to
+/// the `pause` sentinel becomes an in-app pause (with a benign `BitChange`
+/// reason); every other line is a benign `rl`.
+fn prog(lines: List(String)) -> List(RenderedLine) {
+  list.map(lines, fn(l) {
+    case l == pause {
+      True -> rl_pause(l, BitChange(tool: "T1"))
+      False -> rl(l)
+    }
+  })
 }
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
@@ -304,7 +357,7 @@ pub fn where_ignores_bare_ok_keeps_pending_test() {
 
 pub fn stream_sends_first_line_only_test() {
   let program = ["G90", "G0 X1 Y1", "G0 X2 Y2", "M400"]
-  let step = cmd(idle(), Stream(program))
+  let step = cmd(idle(), Stream(prog(program)))
   // Entry action: send ONLY the first line — one in flight.
   stripped_writes(step) |> should.equal(["G90"])
   step.state |> printer.state_name |> should.equal("streaming")
@@ -344,7 +397,7 @@ pub fn stream_emits_one_progress_per_confirmed_line_test() {
 pub fn stream_resend_resends_current_without_advancing_test() {
   let program = ["G90", "G0 X1 Y1", "G0 X2 Y2"]
   // Start the stream (first line G90 is in flight).
-  let s0 = cmd(idle(), Stream(program))
+  let s0 = cmd(idle(), Stream(prog(program)))
   // Ack G90 -> sends G0 X1 Y1 (idx 1 now in flight).
   let s1 = feed(s0.state, "ok")
   stripped_writes(s1) |> should.equal(["G0 X1 Y1"])
@@ -362,7 +415,7 @@ pub fn stream_resend_resends_current_without_advancing_test() {
 
 pub fn stream_error_line_resends_current_test() {
   let program = ["G90", "G0 X1 Y1"]
-  let s0 = cmd(idle(), Stream(program))
+  let s0 = cmd(idle(), Stream(prog(program)))
   // An "Error..." line is treated like a resend of the current line (G90).
   let s1 = feed(s0.state, "Error:checksum mismatch")
   stripped_writes(s1) |> should.equal(["G90"])
@@ -371,7 +424,7 @@ pub fn stream_error_line_resends_current_test() {
 
 pub fn stream_ignores_informational_lines_test() {
   let program = ["G90", "M400"]
-  let s0 = cmd(idle(), Stream(program))
+  let s0 = cmd(idle(), Stream(prog(program)))
   // A position / busy / echo line during a stream is ignored: no write, no
   // advance.
   let s1 = feed(s0.state, "X:1.00 Y:2.00 Z:0.00 E:0 Count X:0 Y:0 Z:0")
@@ -402,16 +455,16 @@ pub fn empty_stream_stays_idle_test() {
 
 pub fn second_stream_while_streaming_is_refused_test() {
   let program = ["G90", "M400"]
-  let s0 = cmd(idle(), Stream(program))
-  let step = cmd(s0.state, Stream(["G91"]))
+  let s0 = cmd(idle(), Stream(prog(program)))
+  let step = cmd(s0.state, Stream(prog(["G91"])))
   step.writes |> should.equal([])
-  has_event(step.events, fn(e) { e == Refused(Stream(["G91"]), Busy) })
+  has_event(step.events, fn(e) { e == Refused(Stream(prog(["G91"])), Busy) })
   |> should.be_true
 }
 
 pub fn jog_while_streaming_is_refused_test() {
   let program = ["G90", "M400"]
-  let s0 = cmd(idle(), Stream(program))
+  let s0 = cmd(idle(), Stream(prog(program)))
   let step = cmd(s0.state, Jog(X, 1.0))
   step.writes |> should.equal([])
   has_event(step.events, fn(e) { e == Refused(Jog(X, 1.0), Busy) })
@@ -442,7 +495,7 @@ pub fn halt_from_jogging_faults_and_sends_m112_raw_test() {
 
 pub fn halt_from_streaming_faults_and_sends_m112_raw_test() {
   let program = ["G90", "G0 X1 Y1", "M400"]
-  let s0 = cmd(idle(), Stream(program))
+  let s0 = cmd(idle(), Stream(prog(program)))
   let s1 = feed(s0.state, "ok")
   // Abort mid-stream: M112 raw, machine faults, stream aborted.
   let step = cmd(s1.state, Halt)
@@ -452,7 +505,7 @@ pub fn halt_from_streaming_faults_and_sends_m112_raw_test() {
 
 pub fn serial_loss_mid_stream_faults_test() {
   let program = ["G90", "G0 X1 Y1", "M400"]
-  let s0 = cmd(idle(), Stream(program))
+  let s0 = cmd(idle(), Stream(prog(program)))
   let s1 = feed(s0.state, "ok")
   // Serial loss during a stream: abort and fault (no write).
   let step = printer.serial_lost(s1.state, "device disconnected")
@@ -487,7 +540,7 @@ pub fn motion_while_faulted_is_refused_test() {
 // connection. Contrast halt_from_streaming_*, which DOES fault.
 pub fn cancel_stream_returns_to_jogging_without_m112_test() {
   let program = ["G90", "G0 X1 Y1", "M400"]
-  let s0 = cmd(jogging(), Stream(program))
+  let s0 = cmd(jogging(), Stream(prog(program)))
   let s1 = feed(s0.state, "ok")
   // Mid-stream cancel: back to jogging (motors live), NO write at all (no M112,
   // no further lines).
@@ -510,11 +563,11 @@ pub fn cancel_stream_returns_to_jogging_without_m112_test() {
 // starts cleanly (line state is sound — the cancel did not corrupt the counter).
 pub fn cancel_stream_then_fresh_stream_works_test() {
   let program = ["G90", "G0 X1 Y1", "M400"]
-  let s0 = cmd(jogging(), Stream(program))
+  let s0 = cmd(jogging(), Stream(prog(program)))
   let s1 = feed(s0.state, "ok")
   let cancelled = cmd(s1.state, CancelStream).state
   // A new stream from the cancelled (Jogging) machine sends only its first line.
-  let again = cmd(cancelled, Stream(["G91", "M400"]))
+  let again = cmd(cancelled, Stream(prog(["G91", "M400"])))
   stripped_writes(again) |> should.equal(["G91"])
   again.state |> printer.state_name |> should.equal("streaming")
 }
@@ -555,7 +608,7 @@ pub fn cancel_stream_while_disconnected_is_refused_test() {
 
 pub fn quickstop_from_streaming_flushes_raw_test() {
   let program = ["G90", "G0 X1 Y1", "M400"]
-  let s0 = cmd(jogging(), Stream(program))
+  let s0 = cmd(jogging(), Stream(prog(program)))
   let s1 = feed(s0.state, "ok")
   // Mid-stream Quickstop: flush the planner (RAW M410 + M400), land in Jogging.
   let step = cmd(s1.state, Quickstop)
@@ -566,7 +619,7 @@ pub fn quickstop_from_streaming_flushes_raw_test() {
 
 pub fn quickstop_from_stream_paused_flushes_raw_test() {
   let program = ["G90", pause, "G0 X1 Y1"]
-  let paused = feed(cmd(jogging(), Stream(program)).state, "ok").state
+  let paused = feed(cmd(jogging(), Stream(prog(program))).state, "ok").state
   paused |> printer.state_name |> should.equal("stream_paused")
   let step = cmd(paused, Quickstop)
   step.state |> printer.state_name |> should.equal("jogging")
@@ -662,17 +715,24 @@ pub fn pause_marker_matches_generator_test() {
 // no write goes out, the sentinel is consumed, and a pause event is emitted.
 pub fn stream_pauses_at_sentinel_without_writing_it_test() {
   let program = ["G90", pause, "G0 X1 Y1", "M400"]
-  let s0 = cmd(idle(), Stream(program))
+  let s0 = cmd(idle(), Stream(prog(program)))
   // First line G90 is in flight; ack it → would advance onto the sentinel.
   let s1 = feed(s0.state, "ok")
   // PAUSED: nothing written (the sentinel is NOT sent to the port).
   s1.writes |> should.equal([])
   s1.state |> printer.state_name |> should.equal("stream_paused")
   // The progress for the just-confirmed G90 still fires, plus a pause event.
-  has_event(s1.events, fn(e) { e == Progress(1, 4, "G90") }) |> should.be_true
+  // (Progress now carries the line's typed origin; assert on sent/total/line.)
   has_event(s1.events, fn(e) {
     case e {
-      StreamPausedAt(_, _) -> True
+      Progress(1, 4, "G90", _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
+  has_event(s1.events, fn(e) {
+    case e {
+      StreamPausedAt(_, _, _) -> True
       _ -> False
     }
   })
@@ -683,7 +743,7 @@ pub fn stream_pauses_at_sentinel_without_writing_it_test() {
 // the sentinel to the port.
 pub fn paused_ignores_inbound_and_sends_nothing_test() {
   let program = ["G90", pause, "G0 X1 Y1"]
-  let paused = feed(cmd(idle(), Stream(program)).state, "ok").state
+  let paused = feed(cmd(idle(), Stream(prog(program))).state, "ok").state
   paused |> printer.state_name |> should.equal("stream_paused")
   let step = feed(paused, "ok")
   // Still paused, still nothing written — a spurious ok cannot resume.
@@ -695,7 +755,7 @@ pub fn paused_ignores_inbound_and_sends_nothing_test() {
 // and returns to Streaming — the handshake resumes from there.
 pub fn resume_stream_sends_next_real_line_test() {
   let program = ["G90", pause, "G0 X1 Y1", "M400"]
-  let paused = feed(cmd(idle(), Stream(program)).state, "ok").state
+  let paused = feed(cmd(idle(), Stream(prog(program))).state, "ok").state
   let step = cmd(paused, ResumeStream)
   // The sentinel is skipped; the next REAL line (G0 X1 Y1) goes out.
   stripped_writes(step) |> should.equal(["G0 X1 Y1"])
@@ -718,11 +778,17 @@ pub fn stream_with_sentinel_writes_every_real_line_once_test() {
 // the first line is never sent; resume sends the real first line.
 pub fn stream_pauses_immediately_when_first_line_is_sentinel_test() {
   let program = [pause, "G90", "M400"]
-  let step = cmd(idle(), Stream(program))
+  let step = cmd(idle(), Stream(prog(program)))
   // No write at all on start; straight into paused.
   step.writes |> should.equal([])
   step.state |> printer.state_name |> should.equal("stream_paused")
-  has_event(step.events, fn(e) { e == StreamPausedAt(0, 3) }) |> should.be_true
+  has_event(step.events, fn(e) {
+    case e {
+      StreamPausedAt(0, 3, _) -> True
+      _ -> False
+    }
+  })
+  |> should.be_true
   // Resume sends the first real line.
   let step2 = cmd(step.state, ResumeStream)
   stripped_writes(step2) |> should.equal(["G90"])
@@ -733,7 +799,7 @@ pub fn stream_pauses_immediately_when_first_line_is_sentinel_test() {
 // behind a pause.
 pub fn halt_from_paused_faults_and_sends_m112_test() {
   let program = ["G90", pause, "G0 X1 Y1"]
-  let paused = feed(cmd(idle(), Stream(program)).state, "ok").state
+  let paused = feed(cmd(idle(), Stream(prog(program))).state, "ok").state
   let step = cmd(paused, Halt)
   step.state |> should.equal(Faulted)
   step.writes |> should.equal(["M112"])
@@ -750,7 +816,7 @@ pub fn halt_from_paused_faults_and_sends_m112_test() {
 // to Jogging (motors live), no write, no fault.
 pub fn cancel_from_paused_returns_to_jogging_test() {
   let program = ["G90", pause, "G0 X1 Y1"]
-  let paused = feed(cmd(jogging(), Stream(program)).state, "ok").state
+  let paused = feed(cmd(jogging(), Stream(prog(program))).state, "ok").state
   let step = cmd(paused, CancelStream)
   step.state |> printer.state_name |> should.equal("jogging")
   step.writes |> should.equal([])
@@ -761,10 +827,10 @@ pub fn cancel_from_paused_returns_to_jogging_test() {
 // A second Stream while paused is refused (Busy) — a run is already in flight.
 pub fn second_stream_while_paused_is_refused_test() {
   let program = ["G90", pause, "G0 X1 Y1"]
-  let paused = feed(cmd(idle(), Stream(program)).state, "ok").state
-  let step = cmd(paused, Stream(["G91"]))
+  let paused = feed(cmd(idle(), Stream(prog(program))).state, "ok").state
+  let step = cmd(paused, Stream(prog(["G91"])))
   step.writes |> should.equal([])
-  has_event(step.events, fn(e) { e == Refused(Stream(["G91"]), Busy) })
+  has_event(step.events, fn(e) { e == Refused(Stream(prog(["G91"])), Busy) })
   |> should.be_true
 }
 
@@ -778,7 +844,7 @@ pub fn resume_stream_while_idle_is_noop_test() {
 
 pub fn resume_stream_while_streaming_is_noop_test() {
   let program = ["G90", "M400"]
-  let s0 = cmd(idle(), Stream(program))
+  let s0 = cmd(idle(), Stream(prog(program)))
   let step = cmd(s0.state, ResumeStream)
   // No extra write; still streaming on the same in-flight line.
   step.writes |> should.equal([])
@@ -799,7 +865,7 @@ fn run_stream_through_pauses(
   state: PrinterState,
   program: List(String),
 ) -> List(String) {
-  let s0 = printer.command(state, Stream(program))
+  let s0 = printer.command(state, Stream(prog(program)))
   drive_through(s0.state, stripped_writes(s0))
 }
 
@@ -824,7 +890,7 @@ fn drive_through(state: PrinterState, acc: List(String)) -> List(String) {
 /// the whole exchange in order. Data-driven on the real state so it can't
 /// over- or under-feed.
 fn run_stream(state: PrinterState, program: List(String)) -> List(String) {
-  let s0 = printer.command(state, Stream(program))
+  let s0 = printer.command(state, Stream(prog(program)))
   ack_collect(s0.state, stripped_writes(s0))
 }
 
@@ -843,7 +909,7 @@ fn run_stream_state(
   state: PrinterState,
   program: List(String),
 ) -> PrinterState {
-  let s0 = printer.command(state, Stream(program))
+  let s0 = printer.command(state, Stream(prog(program)))
   ack_to_done(s0.state)
 }
 
@@ -859,7 +925,7 @@ fn run_stream_progress(
   state: PrinterState,
   program: List(String),
 ) -> List(#(Int, Int, String)) {
-  let s0 = printer.command(state, Stream(program))
+  let s0 = printer.command(state, Stream(prog(program)))
   progress_collect(s0.state, [])
 }
 
@@ -884,7 +950,7 @@ fn run_stream_progress_with_resend(
   program: List(String),
   resend_after: Int,
 ) -> List(#(Int, Int, String)) {
-  let s0 = printer.command(state, Stream(program))
+  let s0 = printer.command(state, Stream(prog(program)))
   resend_collect(s0.state, [], 0, resend_after, False)
 }
 
@@ -923,7 +989,7 @@ fn resend_collect(
 fn progress_tuples(events: List(Event)) -> List(#(Int, Int, String)) {
   list.filter_map(events, fn(e) {
     case e {
-      Progress(sent, total, line) -> Ok(#(sent, total, line))
+      Progress(sent, total, line, _origin) -> Ok(#(sent, total, line))
       _ -> Error(Nil)
     }
   })

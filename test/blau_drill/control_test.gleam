@@ -16,9 +16,31 @@
 import blau_drill/control/backend.{type Backend, type Conn}
 import blau_drill/control/printer.{type PrinterState, Stream}
 import blau_drill/control/transport
+import blau_drill/domain/gcode_program.{
+  type RenderedLine, DrillHoleKind, LineOrigin, RenderedLine,
+}
 import gleam/javascript/promise.{type Promise}
 import gleam/list
+import gleam/option.{None}
 import gleeunit/should
+
+// Wrap a bare-string program into a `RenderedLine` program (ADR-0017): the FSM
+// streams `RenderedLine`s now. A benign non-pause origin — only `.wire` matters
+// for these wire-protocol e2e tests.
+fn prog(lines: List(String)) -> List(RenderedLine) {
+  list.map(lines, fn(l) {
+    RenderedLine(
+      wire: l,
+      origin: LineOrigin(
+        op_index: 0,
+        kind: DrillHoleKind,
+        tool: None,
+        hole_id: None,
+        pause: None,
+      ),
+    )
+  })
+}
 
 // ── mutable cell + deferred (test-only FFI) ──────────────────────────────────
 
@@ -76,7 +98,7 @@ pub fn stream_through_sim_reaches_idle_test() -> Promise(Nil) {
     )
 
     // Kick off the stream: the pure command emits the first framed write.
-    let started = printer.command(ref_get(state_ref), Stream(program))
+    let started = printer.command(ref_get(state_ref), Stream(prog(program)))
     let _ = ref_set(state_ref, started.state)
     perform_writes(b, conn, started.writes)
     Nil
@@ -107,7 +129,7 @@ fn on_inbound(
   let progressed =
     list.any(step.events, fn(e) {
       case e {
-        printer.Progress(_, _, _) -> True
+        printer.Progress(_, _, _, _) -> True
         _ -> False
       }
     })

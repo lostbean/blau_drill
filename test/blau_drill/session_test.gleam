@@ -14,13 +14,37 @@
 import blau_drill/control/printer
 import blau_drill/domain/board_model.{type BoardModel}
 import blau_drill/domain/correspondence.{type Correspondence, Correspondence}
+import blau_drill/domain/gcode_program.{
+  type RenderedLine, DrillHoleKind, LineOrigin, RenderedLine,
+}
 import blau_drill/domain/job.{type Job}
 import blau_drill/ui/model
 import blau_drill/ui/session
 import gleam/list
+import gleam/option.{None}
 import gleeunit/should
 
 const drl = "M48\nMETRIC\nT1C0.600\n%\nT1\nX0.0Y0.0\nM30\n"
+
+// ── RenderedLine test helpers (ADR-0017) ─────────────────────────────────────
+// The Stream/StreamJob payloads carry `RenderedLine`s now; the Session threads
+// them verbatim. These wrap the bare-string programs the existing tests use.
+fn rl(wire: String) -> RenderedLine {
+  RenderedLine(
+    wire: wire,
+    origin: LineOrigin(
+      op_index: 0,
+      kind: DrillHoleKind,
+      tool: None,
+      hole_id: None,
+      pause: None,
+    ),
+  )
+}
+
+fn prog(lines: List(String)) -> List(RenderedLine) {
+  list.map(lines, rl)
+}
 
 fn board() -> BoardModel {
   let assert Ok(b) = board_model.parse_drl(drl)
@@ -83,7 +107,7 @@ fn aligning_session() -> session.Session {
 
 fn rehearsing_session() -> session.Session {
   // A Rehearsing session has the dry-run stream in flight on the wire.
-  let job_lines = ["G0 X0", "G0 X1"]
+  let job_lines = prog(["G0 X0", "G0 X1"])
   let printer.Step(state: streaming, ..) =
     printer.command(
       printer.Jogging(line_no: 0, pending: printer.PendingNone),
@@ -97,7 +121,7 @@ fn drilling_session() -> session.Session {
     job: drilling_job(),
     printer: printer.Streaming(
       line_no: 1,
-      job: printer.StreamJob(lines: ["G0 X1"], idx: 0, total: 1),
+      job: printer.StreamJob(rendered: prog(["G0 X1"]), idx: 0, total: 1),
     ),
   )
 }
@@ -182,7 +206,7 @@ pub fn screen_log_overlay_overrides_all_test() {
 // ── ConfirmRegistration: the ONLY constructor of Drilling ────────────────────
 
 pub fn confirm_registration_from_rehearsing_builds_drilling_test() {
-  let drill_lines = ["M3", "G0 X10", "M5"]
+  let drill_lines = prog(["M3", "G0 X10", "M5"])
   let assert Ok(#(next, plan)) =
     session.transition(
       rehearsing_session(),
@@ -218,20 +242,29 @@ pub fn redo_alignment_from_rehearsing_quickstops_test() {
 
 // No OTHER action from any other state yields a Drilling session.
 pub fn confirm_registration_from_loading_rejected_test() {
-  session.transition(loading_session(), session.ConfirmRegistration(["G0 X0"]))
+  session.transition(
+    loading_session(),
+    session.ConfirmRegistration(prog(["G0 X0"])),
+  )
   |> is_rejected
   |> should.be_true
 }
 
 pub fn confirm_registration_from_aligning_rejected_test() {
   // Aligning is BEFORE the mandatory dry-run — confirm is illegal (no shortcut).
-  session.transition(aligning_session(), session.ConfirmRegistration(["G0 X0"]))
+  session.transition(
+    aligning_session(),
+    session.ConfirmRegistration(prog(["G0 X0"])),
+  )
   |> is_rejected
   |> should.be_true
 }
 
 pub fn confirm_registration_from_drilling_rejected_test() {
-  session.transition(drilling_session(), session.ConfirmRegistration(["G0 X0"]))
+  session.transition(
+    drilling_session(),
+    session.ConfirmRegistration(prog(["G0 X0"])),
+  )
   |> is_rejected
   |> should.be_true
 }
@@ -262,7 +295,7 @@ fn assert_abort_faults(s: session.Session) -> Nil {
 // ── RunDryRun: Aligned-job Aligning session → Rehearsing, Plan = [Stream(..)] ─
 
 pub fn run_dry_run_from_aligning_rehearses_and_streams_test() {
-  let dry_lines = ["G0 X0", "G0 Y0"]
+  let dry_lines = prog(["G0 X0", "G0 Y0"])
   let assert Ok(#(next, plan)) =
     session.transition(aligning_session(), session.RunDryRun(dry_lines))
   case next {
@@ -276,7 +309,7 @@ pub fn run_dry_run_from_aligning_rehearses_and_streams_test() {
 // ── illegal actions → Rejected, NO partial transition ────────────────────────
 
 pub fn run_dry_run_from_loading_rejected_test() {
-  session.transition(loading_session(), session.RunDryRun(["G0 X0"]))
+  session.transition(loading_session(), session.RunDryRun(prog(["G0 X0"])))
   |> is_rejected
   |> should.be_true
 }
@@ -368,7 +401,7 @@ pub fn is_streaming_covers_paused_test() {
 }
 
 fn streamjob() -> printer.StreamJob {
-  printer.StreamJob(lines: ["G0 X1"], idx: 0, total: 1)
+  printer.StreamJob(rendered: prog(["G0 X1"]), idx: 0, total: 1)
 }
 
 // ── small test helper ────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import blau_drill/ui/model.{
   SelectBackend, Settings, SimBackend, StageAlign, StageDone, StageDrill,
   StageDryRun, StageLoad,
 }
+import blau_drill/ui/projection
 import blau_drill/ui/session
 import gleam/float
 import gleam/int
@@ -393,7 +394,9 @@ pub fn data_bar(model: Model) -> Element(model.Msg) {
       h.span([], [h.text("Y: " <> fmt(model.head.y))]),
       h.span([], [h.text("Z: " <> fmt(model.head.z))]),
       h.span([a.class("sep")], [h.text("|")]),
-      h.span([a.class("bit")], [h.text("Bit: " <> model.telemetry_bit)]),
+      h.span([a.class("bit")], [
+        h.text("Bit: " <> projection.telemetry_bit(model)),
+      ]),
     ]),
   ])
 }
