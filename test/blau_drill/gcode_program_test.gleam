@@ -867,6 +867,45 @@ pub fn drill_golden_drilled_set_test() {
   set.size(emitted) |> should.equal(130)
 }
 
+// The COUNT alone (130) does not catch a wrong-coordinate regression — a shifted
+// hole keeps the count. This pins the ACTUAL set of `{tool, round5(x), round5(y)}`
+// by a deterministic hash of its canonical (sorted) form, so ANY coordinate /
+// tool-grouping change flips the golden. The canonical string is
+// `tool|x|y,...` sorted, hashed with FNV-1a (32-bit). The expected hash was
+// captured from the current renderer; regenerate it only on an intentional
+// geometry change.
+pub fn drill_golden_drilled_set_coords_test() {
+  let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  let emitted = drilled_set(p)
+  set.size(emitted) |> should.equal(130)
+  drilled_set_hash(emitted) |> should.equal(1_999_996_249)
+}
+
+// The canonical hash of a drilled set: each `{tool, x, y}` rendered `tool|x|y`,
+// SORTED, joined with `,`, then FNV-1a-32 hashed. Order-independent (the set is
+// sorted first), coordinate-sensitive.
+fn drilled_set_hash(s: set.Set(#(String, Float, Float))) -> Int {
+  set.to_list(s)
+  |> list.map(fn(t) {
+    let #(tool, x, y) = t
+    tool <> "|" <> float.to_string(x) <> "|" <> float.to_string(y)
+  })
+  |> list.sort(string.compare)
+  |> string.join(",")
+  |> fnv1a()
+}
+
+// FNV-1a (32-bit) over a string's UTF codepoints — a small, dependency-free,
+// deterministic byte hash for the goldens below.
+fn fnv1a(s: String) -> Int {
+  string.to_utf_codepoints(s)
+  |> list.fold(2_166_136_261, fn(h, cp) {
+    let c = string.utf_codepoint_to_int(cp)
+    let x = int.bitwise_exclusive_or(h, c)
+    int.bitwise_and(x * 16_777_619, 4_294_967_295)
+  })
+}
+
 pub fn drill_zdepths_test() {
   let p = rich_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
   // Every plunge is exactly zdrill.
@@ -1483,7 +1522,9 @@ pub fn render_wire_equals_stream_lines_test() {
 // The render is DETERMINISTIC: rendering the same ops under the same context
 // twice yields byte-identical lines (the `fmt5` FFI is the single number-format
 // authority, so wire output is byte-stable). Both modes, app_pause on and off.
-pub fn render_rich_equals_build_lines_test() {
+// (Determinism only — the byte PIN is `drill_wire_byte_golden_test` below; this
+// was the tautological self-compare formerly named `render_rich_equals_build_lines`.)
+pub fn render_is_deterministic_test() {
   [cfg(Drill), cfg(DryRun), cfg_app_pause(Drill), cfg_app_pause(DryRun)]
   |> each(fn(c) {
     let board = board_from_fixture()
@@ -1494,6 +1535,19 @@ pub fn render_rich_equals_build_lines_test() {
     // And the rich render is non-empty (it really rendered a program).
     { once != [] } |> should.be_true
   })
+}
+
+// THE byte-golden: a full-program pin of the streamed (`Wire`) render of the
+// fixture's DRILL program. Asserts the exact line COUNT and a deterministic
+// FNV-1a hash of the joined wire bytes — so ANY change to the streamed program
+// (a moved coordinate, a dropped line, a reordered op, a reformatted number)
+// flips the golden. This replaces the tautological self-compare above as the real
+// byte pin. The expected count/hash were captured from the current renderer;
+// regenerate them only on an intentional g-code change.
+pub fn drill_wire_byte_golden_test() {
+  let wire = wire_lines(board_from_fixture(), xmirror_alignment(), cfg(Drill))
+  list.length(wire) |> should.equal(459)
+  fnv1a(string.join(wire, "\n")) |> should.equal(3_798_114_000)
 }
 
 // --- origin correctness -----------------------------------------------------

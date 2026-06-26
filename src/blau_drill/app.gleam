@@ -897,39 +897,33 @@ fn can_capture(j: job.Job) -> Bool {
 fn fit(model: Model) -> #(Model, Effect(Msg)) {
   case model.job {
     HaveJob(j) ->
-      case list.length(projection.captures(model)) >= 3 {
-        False ->
+      // The ≥3-captures rule has a SINGLE runtime authority: `alignment.fit`
+      // (via `job.transition`, which maps a too-few fit to `FitTooFew`). We drive
+      // the transition directly and let the result arms carry guidance — no
+      // redundant pre-check here.
+      case job.transition(j, job.Fit(j.tol)) {
+        // Aligned or AlignmentRejected: store the advanced job; the rejected
+        // box + quality panel project off `job.state` / `job.alignment` /
+        // `job.residuals`.
+        Ok(j2) -> noeff(Model(..model, job: HaveJob(j2), upload_error: ""))
+        // A failed fit no longer silently does nothing: degenerate → geometry
+        // guidance; too-few (and any other) → count guidance. (The job stays
+        // Registering, so the rejected-box projection is empty — the guidance
+        // rides the upload-error path.)
+        Error(job.FitDegenerate) ->
           noeff(
             Model(
               ..model,
-              upload_error: "Capture at least 3 fiducials before fitting.",
+              upload_error: "Capture at least 3 well-spread (non-collinear) fiducials.",
             ),
           )
-        True ->
-          case job.transition(j, job.Fit(j.tol)) {
-            // Aligned or AlignmentRejected: store the advanced job; the rejected
-            // box + quality panel project off `job.state` / `job.alignment` /
-            // `job.residuals`.
-            Ok(j2) -> noeff(Model(..model, job: HaveJob(j2), upload_error: ""))
-            // A failed fit no longer silently does nothing: degenerate → geometry
-            // guidance; too-few → count guidance. (The job stays Registering, so
-            // the rejected-box projection is empty — the guidance rides the
-            // upload-error path.)
-            Error(job.FitDegenerate) ->
-              noeff(
-                Model(
-                  ..model,
-                  upload_error: "Capture at least 3 well-spread (non-collinear) fiducials.",
-                ),
-              )
-            Error(_) ->
-              noeff(
-                Model(
-                  ..model,
-                  upload_error: "Capture at least 3 well-spread fiducials.",
-                ),
-              )
-          }
+        Error(_) ->
+          noeff(
+            Model(
+              ..model,
+              upload_error: "Capture at least 3 well-spread fiducials.",
+            ),
+          )
       }
     NoJob -> noeff(model)
   }

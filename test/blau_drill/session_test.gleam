@@ -3,8 +3,9 @@
 ////
 ////   * `screen/2` is total — every Session × Overlay maps to a `model.Screen`.
 ////   * `ConfirmRegistration` is the ONLY constructor of `Drilling`, and its
-////     `Plan` cancels the in-flight dry-run stream FIRST, then streams the drill
-////     program (`[CancelStream, Stream(drill)]`) — so the drill can never be
+////     `Plan` QUICKSTOPS (flushes the planner of) the in-flight dry-run stream
+////     FIRST, then streams the drill program (`[Quickstop, Stream(drill)]`,
+////     ADR-0014) — so the dry-run motion is dead and the drill can never be
 ////     refused `Busy`.
 ////   * `Abort` from any active Session rolls to `Faulted` with `Plan == [Halt]`.
 ////   * each transition delegates the STAGE move to `job.transition`, so the job
@@ -304,6 +305,36 @@ pub fn run_dry_run_from_aligning_rehearses_and_streams_test() {
   }
   // The dry-run program is streamed onto the wire in the same step.
   plan |> should.equal([printer.Stream(dry_lines)])
+}
+
+// ── Deenergize (ADR-0011): discard alignment, drop to a clean Loading ─────────
+// Legal from the alignment-bearing states. The job's Deenergize edge resets it to
+// Parsed; the Session returns to Loading and the wire de-energizes (M18). From
+// Aligning there is no stream to cancel; from Rehearsing the in-flight dry-run
+// stream is cancelled FIRST, then the motors are released.
+
+pub fn deenergize_from_aligning_releases_and_loads_test() {
+  let assert Ok(#(next, plan)) =
+    session.transition(aligning_session(), session.Deenergize)
+  // The Session drops back to Loading (the alignment is discarded).
+  case next {
+    session.Loading(..) -> Nil
+    _ -> should.fail()
+  }
+  // Nothing streaming to cancel — just release the motors.
+  plan |> should.equal([printer.Release])
+}
+
+pub fn deenergize_from_rehearsing_cancels_then_releases_test() {
+  let assert Ok(#(next, plan)) =
+    session.transition(rehearsing_session(), session.Deenergize)
+  case next {
+    session.Loading(..) -> Nil
+    _ -> should.fail()
+  }
+  // The in-flight dry-run stream is cancelled BEFORE the motors release — the
+  // exact order the code emits (ADR-0011).
+  plan |> should.equal([printer.CancelStream, printer.Release])
 }
 
 // ── illegal actions → Rejected, NO partial transition ────────────────────────

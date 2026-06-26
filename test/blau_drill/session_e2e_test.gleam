@@ -1,18 +1,16 @@
 //// Session-coordination end-to-end pins (ADR-0012 / ADR-0013).
 ////
-//// TEST (a) `confirm_registration_starts_the_drill_stream` is an EXPECTED-RED
-//// bug repro. It is the failing half of a TDD cycle: the Session-coordination
-//// chunk (ADR-0012) turns it green. TODAY it FAILS on purpose. The bug: in
-//// `app.confirm_registration` the DryRun→Drilling transition does three
-//// un-atomic writes — advance the job FSM, set `screen: Drill`, and issue
-//// `Stream(drill_program)` — but the dry-run stream is STILL in flight
-//// (`Streaming`), so the printer FSM refuses the drill `Stream` with `Busy`
-//// (`printer.gleam`: `Streaming(_,_), Stream(_) -> refused(..., Busy)`). The
-//// result the operator sees: the UI flips to the Drill screen, but the wire is
-//// still running the OLD dry-run program — the drill never starts. The fix (a
-//// later chunk) makes ConfirmRegistration a single transition that cancels the
-//// in-flight stream FIRST and then streams the drill program
-//// (`Plan[CancelStream, Stream(drill)]`).
+//// TEST (a) `confirm_registration_starts_the_drill_stream` is a regression guard
+//// (was red before ADR-0012). The bug it pins: in the old `app.confirm_registration`
+//// the DryRun→Drilling transition did three un-atomic writes — advance the job
+//// FSM, set `screen: Drill`, and issue `Stream(drill_program)` — but the dry-run
+//// stream was STILL in flight (`Streaming`), so the printer FSM refused the drill
+//// `Stream` with `Busy` (`printer.gleam`: `Streaming(_,_), Stream(_) -> refused(..., Busy)`).
+//// The result the operator saw: the UI flipped to the Drill screen, but the wire
+//// was still running the OLD dry-run program — the drill never started. ADR-0012
+//// made ConfirmRegistration a single transition that cancels (now quickstops, per
+//// ADR-0014) the in-flight stream FIRST and then streams the drill program, so
+//// this is GREEN and guards against the regression.
 ////
 //// TEST (b) `abort_mid_move_stops_the_head` is the abort-stops-motion regression
 //// (ADR-0013): a move admitted to the emulator's motion queue but not yet
@@ -38,85 +36,13 @@ import blau_drill/app
 import blau_drill/control/controller
 import blau_drill/control/marlin_emulator as emu
 import blau_drill/control/printer
-import blau_drill/control/transport
-import blau_drill/domain/board_model.{Inputs}
 import blau_drill/domain/config
 import blau_drill/domain/gcode_program
-import blau_drill/domain/job
-import blau_drill/ui/bridge
-import blau_drill/ui/mock
-import blau_drill/ui/model.{
-  type Model, Connection, Front, HaveBoard, HaveBoardModel, HaveJob, Head, Model,
-  NoDiagnostic, NoOverlay,
-}
-import blau_drill/ui/sample
+import blau_drill/test_support.{aligned_jogging_model_from, base_model}
+import blau_drill/ui/model.{type Model, HaveJob}
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{Some}
 import gleeunit/should
-
-// ── fixtures (replicated from app_test.gleam — its helpers are private) ───────
-// A base, board-parsed Model (job in `Parsed`) for the sample board, Front side
-// and DISCONNECTED. SimBackend is fine for test (a): the bug is in the pure
-// app/printer coordination, no emulator needed.
-fn base_model() -> Model {
-  let cfg = mock.default_config()
-  let assert Ok(bm) =
-    board_model.parse(Inputs(drl: Some(sample.drl()), edge_cuts: None))
-  let wm = bridge.working_board_model(bm, Front)
-  Model(
-    overlay: NoOverlay,
-    board: HaveBoard(bridge.board_of(wm)),
-    diagnostic: NoDiagnostic,
-    file_selected: True,
-    outline_file: "",
-    upload_error: "",
-    head: Head(0.0, 0.0, 0.0),
-    jog_step: 1.0,
-    current_target: 0,
-    fiducial_target: 4,
-    zoom: 1.0,
-    category: Connection,
-    config: cfg,
-    config_dirty: False,
-    controller: controller.new(transport.simulator()),
-    backend_kind: model.SimBackend,
-    board_model: HaveBoardModel(wm),
-    job: HaveJob(job.new(wm)),
-    pending_drl: sample.drl(),
-    pending_edge_cuts: "",
-    applied_config: bridge.gcode_config(cfg, config.DryRun),
-    board_side: Front,
-    release_confirm: False,
-    comms_log: [],
-  )
-}
-
-// Drive the LIVE alignment path from `base` to a genuine solved transform:
-// connect, energize (→ Jogging), start registering, then capture the first three
-// board candidates with the head parked AT each candidate's coords (machine ==
-// board → an identity fit, well within the 0.1mm gate) carrying a DISTINCT
-// machine Z, and fit. Returns a connected + Jogging + Aligned Model with a real
-// transform/captures.
-fn aligned_jogging_model_from(base: Model) -> Model {
-  let #(m1, _) =
-    app.update(base, model.ControllerEvent(controller.Issue(printer.Connect)))
-  let #(m2, _) = app.update(m1, model.Energize)
-  let #(m3, _) = app.update(m2, model.StartRegistering)
-  let assert HaveBoard(b) = m3.board
-  let pts = list.take(b.candidates, 3)
-  let zs = [-1.0, -1.2, -1.4]
-  let m4 =
-    list.zip(pts, zs)
-    |> list.index_fold(m3, fn(m, pz, i) {
-      let #(#(cx, cy), z) = pz
-      let #(ms, _) = app.update(m, model.SetCurrentTarget(i))
-      let ms = Model(..ms, head: Head(cx, cy, z))
-      let #(mc, _) = app.update(ms, model.CaptureFiducial)
-      mc
-    })
-  let #(m5, _) = app.update(m4, model.Fit)
-  m5
-}
 
 // The DRILL program's streamed-line count for this model — built EXACTLY the way
 // `app.confirm_registration` builds it (same board, same alignment, Drill mode):
@@ -132,10 +58,11 @@ fn drill_program_len(m: Model) -> Int {
   |> list.length
 }
 
-// ── TEST (a): EXPECTED RED — ConfirmRegistration must start the DRILL stream ───
+// ── TEST (a): regression guard — ConfirmRegistration starts the DRILL stream ───
+// (was red before ADR-0012)
 //
 // After RunDryRun the printer is `Streaming` the DRY-RUN program. ConfirmRegistration
-// then advances the job to Drilling (that part works) and issues `Stream(drill)`.
+// then advances the job to Drilling and issues `Stream(drill)`.
 //
 // THE ASSERTION proves the drill program is ACTUALLY on the wire by comparing the
 // streaming program's total line count against the freshly-built DRILL program's
@@ -144,14 +71,13 @@ fn drill_program_len(m: Model) -> Int {
 // unambiguous discriminator: "still running the dry-run program" vs "running the
 // drill program".
 //
-//   GREEN AFTER FIX: the in-flight dry-run stream is cancelled first, then the
+//   GREEN (ADR-0012): the in-flight dry-run stream is quickstopped first, then the
 //   drill `Stream` is admitted, so `stream_progress(...).total == drill_program_len`.
 //
-//   RED TODAY: the drill `Stream` is refused `Busy` (the dry-run stream is still
-//   in flight), so the printer is STILL streaming the DRY-RUN program and its
-//   `total` is the DRY-RUN length, which does NOT equal `drill_program_len`. This
-//   assertion therefore FAILS now — by design — pinning exactly the bug ADR-0012
-//   fixes. (Empirically: dry-run total = 452, drill program = 457.)
+//   WAS RED (before the fix): the drill `Stream` was refused `Busy` (the dry-run
+//   stream was still in flight), so the printer stayed on the DRY-RUN program and
+//   its `total` was the DRY-RUN length, which did NOT equal `drill_program_len`.
+//   (Empirically: dry-run total = 452, drill program = 457.)
 pub fn confirm_registration_starts_the_drill_stream_test() {
   let m_aligned = aligned_jogging_model_from(base_model())
 
@@ -167,9 +93,9 @@ pub fn confirm_registration_starts_the_drill_stream_test() {
   // THE ACT: confirm registration (DryRun → Drilling).
   let #(m_drill, _e2) = app.update(m_dryrun, model.ConfirmRegistration)
 
-  // THE ASSERTION: the wire must now be running the DRILL program — its streaming
-  // `total` equals the drill program's length. RED today (the drill Stream was
-  // refused Busy, so the printer is still streaming the shorter dry-run program).
+  // THE ASSERTION: the wire is now running the DRILL program — its streaming
+  // `total` equals the drill program's length. (Was RED: the drill Stream was
+  // refused Busy, so the printer stayed on the shorter dry-run program.)
   let #(_sent, total) =
     printer.stream_progress(controller.state(m_drill.controller))
   total |> should.equal(want_drill_len)

@@ -196,6 +196,27 @@ fn registration_started(job: model.JobOpt) -> Bool {
   }
 }
 
+// Is `Fit` a legal job event right now? The FSM is the authority (`FitE` is
+// legal only in `Registering`), so the Fit button can be hard-disabled where a
+// click would be an inert no-op. The view ALSO keeps a captured-count guard (the
+// within-`Registering` ≥3 precondition the FSM does not encode) — both must hold.
+fn job_can_fit(model: Model) -> Bool {
+  case model.job {
+    model.HaveJob(j) -> job.can(j, job.FitE)
+    model.NoJob -> False
+  }
+}
+
+// Is `RestartAlignment` a legal job event right now? Legal in Registering /
+// Aligned / AlignmentRejected — so the button stays enabled exactly where a
+// restart is meaningful and is disabled elsewhere.
+fn job_can_restart(model: Model) -> Bool {
+  case model.job {
+    model.HaveJob(j) -> job.can(j, job.RestartAlignmentE)
+    model.NoJob -> False
+  }
+}
+
 fn load_picker(model: Model) -> Element(model.Msg) {
   h.div([a.class("stage")], [
     h.div(
@@ -356,7 +377,7 @@ pub fn align(model: Model) -> Element(model.Msg) {
         [
           a.class("btn " <> fit_emphasis <> " btn-block"),
           a.attribute("type", "button"),
-          a.disabled(captured_count < min_fit_points),
+          a.disabled(captured_count < min_fit_points || !job_can_fit(model)),
           event.on_click(Fit),
         ],
         [h.text("Fit Alignment")],
@@ -369,6 +390,7 @@ pub fn align(model: Model) -> Element(model.Msg) {
         [
           a.class("btn btn-outline btn-block"),
           a.attribute("type", "button"),
+          a.disabled(!job_can_restart(model)),
           event.on_click(RestartAlignment),
         ],
         [h.text("↺ Restart Alignment")],

@@ -1,0 +1,418 @@
+//// Tests for the pure PROJECTIONS of the `Model`'s machines (ADR-0018).
+////
+//// `ui/projection.gleam` recomputes every alignment / streaming / telemetry /
+//// summary value off its authority (the `job` FSM, the `printer`/`controller`
+//// FSM, the board, `applied_config`) each frame. This suite pins the 13
+//// projections that had no test file: the alignment group (`quality`,
+//// `residuals`/`residual_max`/`residual_rms`, `fit_diag`, `project_head`), the
+//// streaming/Done group (`drilled_count`, `confirmed_hole_ids`,
+//// `bit_changes_seen`, `summary`) and the telemetry group (`telemetry_bit`,
+//// `telemetry_eta`, `telemetry_spindle`).
+////
+//// Each projection is asserted against a constructed AUTHORITY: a `Model` built
+//// via `test_support`, its `job`/`controller` advanced to the right state, then
+//// the projection compared to an independently-derived expectation.
+
+import blau_drill/app
+import blau_drill/control/controller
+import blau_drill/control/printer
+import blau_drill/domain/config
+import blau_drill/domain/correspondence.{Correspondence}
+import blau_drill/domain/gcode_program.{
+  type RenderedLine, DrillHoleKind, LineOrigin, PauseKind, RenderedLine,
+  ToolBlockKind,
+}
+import blau_drill/domain/job
+import blau_drill/domain/transform2d
+import blau_drill/test_support.{
+  aligned_jogging_model, base_model, drilled_of, pump_through_pause,
+}
+import blau_drill/ui/model.{
+  type Model, ConfAligned, HaveBoard, HaveFitDiag, HaveJob, HaveSummary,
+  HaveTransform, NoBoard, NoFitDiag, NoSummary, Summary,
+}
+import blau_drill/ui/projection
+import gleam/float
+import gleam/int
+import gleam/list
+import gleam/option.{None, Some}
+import gleam/string
+import gleeunit/should
+
+fn approx(a: Float, b: Float) -> Bool {
+  float.absolute_value(a -. b) <. 1.0e-9
+}
+
+// ── authorities ───────────────────────────────────────────────────────────────
+
+/// A rejected (over-tolerance) fit on a real job, placed on a base model. Four
+/// near-identity correspondences with a +0.4mm Y nudge produce residuals.max ~
+/// 0.1 > the 0.05 gate, so the job lands in `AlignmentRejected` carrying the
+/// solved (over-tol) alignment + residuals — exactly the standing state the
+/// rejected-box / fit-diag projections read.
+fn rejected_model() -> Model {
+  let base = base_model()
+  let assert HaveJob(j0) = base.job
+  let assert Ok(reg) = job.transition(j0, job.StartRegistering)
+  let j =
+    [
+      Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: -1.0),
+      Correspondence(board: #(1.0, 0.0), machine: #(1.0, 0.0), machine_z: -1.0),
+      Correspondence(board: #(0.0, 1.0), machine: #(0.0, 1.0), machine_z: -1.0),
+      Correspondence(board: #(1.0, 1.0), machine: #(1.0, 1.4), machine_z: -1.0),
+    ]
+    |> list.fold(reg, fn(acc, corr) {
+      let assert Ok(acc) = job.transition(acc, job.Capture(corr))
+      acc
+    })
+  let assert Ok(rejected) = job.transition(j, job.Fit(0.05))
+  model.Model(..base, job: HaveJob(rejected))
+}
+
+/// Drive a model to `Drilling` through the REAL app: aligned → RunDryRun (dry-run
+/// stream in flight) → ConfirmRegistration (quickstop + drill stream). The job is
+/// `Drilling` and the drill program is on the wire.
+fn drilling_model() -> Model {
+  let m_aligned = aligned_jogging_model()
+  let #(m_dry, _) = app.update(m_aligned, model.RunDryRun)
+  let #(m_drill, _) = app.update(m_dry, model.ConfirmRegistration)
+  m_drill
+}
+
+/// Drive a model to `Done` through the REAL app, e2e through the genuine sim
+/// handshake: the Drilling model, drive the drill stream THROUGH every bit-change
+/// pause until the wire drains to `Idle` (the whole program streamed), then the
+/// explicit operator Complete step (Drilling → Completed; the screen derives to
+/// Done). `Complete` is the genuine app lifecycle edge — `StreamComplete` alone
+/// does NOT advance to Done by design (app.gleam: `StreamComplete -> noeff`), so
+/// the operator confirm is what closes the run. Driving the stream to Idle first
+/// is what makes `drilled_count`/`telemetry_eta` read a fully-streamed run.
+fn done_model() -> Model {
+  let m_drilling = drilling_model()
+  // Pump the drill stream through every bit-change pause until all holes drill
+  // and the wire settles back to Idle (a naturally-completed stream returns to
+  // Idle; a cancel would land in Jogging).
+  let m_streamed = pump_to_idle(m_drilling, 8000)
+  let #(m_done, _) = app.update(m_streamed, model.Complete)
+  m_done
+}
+
+/// Pump simulator acks (resuming through bit-change pauses, exactly as the
+/// operator does) until the wire leaves the streaming/paused lifecycle — i.e. the
+/// program ran to `StreamComplete` and the FSM settled back to `Idle`.
+fn pump_to_idle(m: Model, fuel: Int) -> Model {
+  case fuel <= 0 {
+    True -> m
+    False -> {
+      let wire = controller.state(m.controller)
+      case printer.is_streaming(wire) || printer.is_stream_paused(wire) {
+        False -> m
+        True -> {
+          let m2 = case printer.is_stream_paused(wire) {
+            True -> {
+              let #(mm, _) = app.update(m, model.ResumeDrilling)
+              mm
+            }
+            False -> {
+              let #(mm, _) =
+                app.update(m, model.ControllerEvent(controller.Inbound("ok")))
+              mm
+            }
+          }
+          pump_to_idle(m2, fuel - 1)
+        }
+      }
+    }
+  }
+}
+
+/// The job carried by a model.
+fn job_of(m: Model) -> job.Job {
+  let assert HaveJob(j) = m.job
+  j
+}
+
+/// The board hole count, independently of the projection.
+fn board_holes(m: Model) -> Int {
+  case m.board {
+    HaveBoard(b) -> list.length(b.holes)
+    NoBoard -> 0
+  }
+}
+
+// ── alignment group ───────────────────────────────────────────────────────────
+
+// quality is -1 before a fit (Parsed / no residuals), 0..100 once fitted.
+pub fn quality_is_minus_one_before_fit_test() {
+  projection.quality(base_model()) |> should.equal(-1)
+}
+
+pub fn quality_is_high_for_exact_fit_test() {
+  let m = aligned_jogging_model()
+  // An identity fit has ~0 residual → quality 100 (residual 0 → 100).
+  projection.quality(m) |> should.equal(100)
+}
+
+pub fn quality_is_in_range_for_rejected_fit_test() {
+  let q = projection.quality(rejected_model())
+  { q >= 0 && q <= 100 } |> should.be_true
+}
+
+// residuals / residual_max / residual_rms mirror job.alignment.residuals.
+pub fn residuals_match_the_job_residuals_test() {
+  let m = rejected_model()
+  let assert Some(r) = job_of(m).residuals
+  projection.residuals(m) |> should.equal(#(r.max, r.rms))
+  projection.residual_max(m) |> should.equal(r.max)
+  projection.residual_rms(m) |> should.equal(r.rms)
+  // The rejected fit really is over the 0.05 gate it was judged against.
+  { r.max >. 0.05 } |> should.be_true
+}
+
+pub fn residuals_are_zero_before_fit_test() {
+  projection.residuals(base_model()) |> should.equal(#(0.0, 0.0))
+  projection.residual_max(base_model()) |> should.equal(0.0)
+  projection.residual_rms(base_model()) |> should.equal(0.0)
+}
+
+// fit_diag is HaveFitDiag (per-point residuals + worst + hint) only in
+// AlignmentRejected; NoFitDiag for a clean Aligned model.
+pub fn fit_diag_present_and_names_worst_for_rejected_test() {
+  case projection.fit_diag(rejected_model()) {
+    HaveFitDiag(diag) -> {
+      // Per-point residuals for every captured point (4 here).
+      list.length(diag.points) |> should.equal(4)
+      // A worst point is named (the over-tolerance fit solved a transform, so a
+      // worst residual exists).
+      case diag.worst {
+        model.HaveWorst(_) -> Nil
+        model.NoWorst -> should.fail()
+      }
+      // The fit solved a transform → override is offered.
+      diag.can_override |> should.be_true
+    }
+    NoFitDiag -> should.fail()
+  }
+}
+
+pub fn fit_diag_absent_for_clean_aligned_test() {
+  projection.fit_diag(aligned_jogging_model()) |> should.equal(NoFitDiag)
+}
+
+pub fn fit_diag_absent_before_fit_test() {
+  projection.fit_diag(base_model()) |> should.equal(NoFitDiag)
+}
+
+// project_head inverse-projects the machine head XY through the transform.
+pub fn project_head_inverse_projects_through_transform_test() {
+  // A pure translation by (+10, +20): board → machine adds (10, 20), so the
+  // inverse takes a machine head back to (head - (10, 20)).
+  let t =
+    transform2d.Transform2D(a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 10.0, ty: 20.0)
+  let head = model.Head(15.0, 25.0, -1.0)
+  let #(bx, by) = projection.project_head(t, head)
+  approx(bx, 5.0) |> should.be_true
+  approx(by, 5.0) |> should.be_true
+}
+
+pub fn project_head_identity_is_head_xy_test() {
+  let id =
+    transform2d.Transform2D(a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0)
+  let head = model.Head(3.5, -7.25, 0.0)
+  projection.project_head(id, head) |> should.equal(#(3.5, -7.25))
+}
+
+// On an aligned model, head_pos uses project_head off the solved transform, so a
+// head parked at machine origin projects to the board origin (identity fit here).
+pub fn aligned_head_pos_uses_transform_test() {
+  let m = aligned_jogging_model()
+  projection.head_confidence(m) |> should.equal(ConfAligned)
+  case projection.transform(m) {
+    HaveTransform(_) -> Nil
+    model.NoTransform -> should.fail()
+  }
+}
+
+// ── streaming / Done group ────────────────────────────────────────────────────
+
+// confirmed_hole_ids counts the unique DrillHoleKind hole_ids in a rendered
+// prefix (deduped), ignoring non-drill lines.
+pub fn confirmed_hole_ids_counts_drill_lines_test() {
+  let rendered = [
+    rl(ToolBlockKind, None, None),
+    rl(DrillHoleKind, None, Some(0)),
+    // A second wire line for the same hole 0 (e.g. the plunge) — deduped.
+    rl(DrillHoleKind, None, Some(0)),
+    rl(DrillHoleKind, None, Some(1)),
+    rl(PauseKind, None, None),
+    rl(DrillHoleKind, None, Some(2)),
+  ]
+  projection.confirmed_hole_ids(rendered) |> should.equal([0, 1, 2])
+}
+
+pub fn confirmed_hole_ids_empty_for_no_drill_lines_test() {
+  projection.confirmed_hole_ids([rl(ToolBlockKind, None, None)])
+  |> should.equal([])
+}
+
+// drilled_count advances as the dry-run stream confirms DrillHole lines, and
+// equals the board hole count once the run has fully streamed.
+pub fn drilled_count_advances_mid_stream_test() {
+  let m_aligned = aligned_jogging_model()
+  let #(m_dry, _) = app.update(m_aligned, model.RunDryRun)
+  let m = pump_through_pause(m_dry, 3, 400)
+  // The projection agrees with the progress projection and is positive mid-run.
+  { projection.drilled_count(m) > 0 } |> should.be_true
+  projection.drilled_count(m) |> should.equal(drilled_of(m))
+}
+
+pub fn drilled_count_is_all_holes_when_done_test() {
+  let m = done_model()
+  // A Done run reads every hole drilled (the standing `Done` signal).
+  projection.drilled_count(m) |> should.equal(board_holes(m))
+}
+
+pub fn drilled_count_is_zero_before_run_test() {
+  projection.drilled_count(base_model()) |> should.equal(0)
+}
+
+// bit_changes_seen == tool_order length − 1 (one swap per tool boundary after the
+// first). Computed independently off the job's rendered tool_order.
+pub fn bit_changes_seen_is_tool_count_minus_one_test() {
+  let m = done_model()
+  let expected = tool_order_len(m) - 1
+  projection.bit_changes_seen(m) |> should.equal(expected)
+  // The fixture is multi-tool, so this is a real (positive) count.
+  { expected > 0 } |> should.be_true
+}
+
+pub fn bit_changes_seen_is_zero_with_no_alignment_test() {
+  projection.bit_changes_seen(base_model()) |> should.equal(0)
+}
+
+// summary is HaveSummary only when the job is Done: total_holes = board count,
+// bit_changes = tool count − 1, total_time a sane "M:SS"/"MM:SS" string.
+pub fn summary_present_when_done_test() {
+  let m = done_model()
+  case projection.summary(m) {
+    HaveSummary(Summary(total_holes:, total_time:, bit_changes:)) -> {
+      total_holes |> should.equal(board_holes(m))
+      bit_changes |> should.equal(tool_order_len(m) - 1)
+      is_mmss(total_time) |> should.be_true
+    }
+    NoSummary -> should.fail()
+  }
+}
+
+pub fn summary_absent_when_not_done_test() {
+  projection.summary(base_model()) |> should.equal(NoSummary)
+  projection.summary(aligned_jogging_model()) |> should.equal(NoSummary)
+  projection.summary(drilling_model()) |> should.equal(NoSummary)
+}
+
+// ── telemetry group ───────────────────────────────────────────────────────────
+
+// telemetry_bit is the run's first tool's diameter as "X.Xmm", or "—" with no
+// alignment.
+pub fn telemetry_bit_is_first_tool_diameter_test() {
+  let m = aligned_jogging_model()
+  let label = projection.telemetry_bit(m)
+  // It ends in "mm" and parses as a positive diameter.
+  string.ends_with(label, "mm") |> should.be_true
+  let num = string.drop_end(label, 2)
+  case float.parse(num) {
+    Ok(d) -> { d >. 0.0 } |> should.be_true
+    // "10" is the special-cased integer form (fmt_mm) — also valid + positive.
+    Error(_) -> { num == "10" } |> should.be_true
+  }
+}
+
+pub fn telemetry_bit_is_dash_with_no_alignment_test() {
+  projection.telemetry_bit(base_model()) |> should.equal("—")
+}
+
+// telemetry_eta is "—" before a run, an "M:SS" string mid-run, "0:00" when fully
+// streamed.
+pub fn telemetry_eta_is_dash_before_run_test() {
+  projection.telemetry_eta(base_model()) |> should.equal("—")
+}
+
+pub fn telemetry_eta_is_mmss_mid_run_test() {
+  let m_aligned = aligned_jogging_model()
+  let #(m_dry, _) = app.update(m_aligned, model.RunDryRun)
+  let m = pump_through_pause(m_dry, 1, 400)
+  is_mmss(projection.telemetry_eta(m)) |> should.be_true
+}
+
+pub fn telemetry_eta_is_zero_when_done_test() {
+  // A Done run has every hole drilled → no remaining time.
+  projection.telemetry_eta(done_model()) |> should.equal("0:00")
+}
+
+// telemetry_spindle reads the LIVE editable config (by design, ADR note in
+// projection.gleam) — assert that behavior, do not "fix" it.
+pub fn telemetry_spindle_reads_live_config_test() {
+  let base = base_model()
+  let label = projection.telemetry_spindle(base)
+  // The label is built from the live config's spindle_speed + pwm_max.
+  label
+  |> should.equal(
+    "ON · " <> base.config.spindle_speed <> "/" <> base.config.pwm_max <> " PWM",
+  )
+  // Editing the LIVE config changes the telemetry (it is not a snapshot).
+  let edited =
+    model.Model(
+      ..base,
+      config: model.Config(
+        ..base.config,
+        spindle_speed: "12345",
+        pwm_max: "200",
+      ),
+    )
+  projection.telemetry_spindle(edited)
+  |> should.equal("ON · 12345/200 PWM")
+}
+
+// ── small helpers ─────────────────────────────────────────────────────────────
+
+fn rl(
+  kind: gcode_program.OpKind,
+  tool: option.Option(String),
+  hole_id: option.Option(Int),
+) -> RenderedLine {
+  RenderedLine(
+    wire: "",
+    origin: LineOrigin(
+      op_index: 0,
+      kind: kind,
+      tool: tool,
+      hole_id: hole_id,
+      pause: None,
+    ),
+  )
+}
+
+/// The file-order tool list the projections derive bit changes off, computed
+/// independently from the job + alignment + drill config (`applied_config`,
+/// Drill) — mirroring `projection.bit_changes_seen`.
+fn tool_order_len(m: Model) -> Int {
+  let j = job_of(m)
+  let assert Some(al) = j.alignment
+  let cfg = config.GcodeConfig(..m.applied_config, mode: config.Drill)
+  gcode_program.render_context(j.board, al, cfg).tool_order |> list.length
+}
+
+// A string is a sane "M:SS" / "MM:SS" time: minutes, a colon, two-digit seconds.
+fn is_mmss(s: String) -> Bool {
+  case string.split(s, ":") {
+    [mm, ss] -> string.length(ss) == 2 && int_ok(mm) && int_ok(ss)
+    _ -> False
+  }
+}
+
+fn int_ok(s: String) -> Bool {
+  case int.parse(s) {
+    Ok(_) -> True
+    Error(_) -> False
+  }
+}

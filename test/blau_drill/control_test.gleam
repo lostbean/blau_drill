@@ -60,8 +60,16 @@ type Deferred(a)
 @external(javascript, "./control_test_ffi.mjs", "newDeferred")
 fn new_deferred() -> Deferred(a)
 
-@external(javascript, "./control_test_ffi.mjs", "deferredPromise")
-fn deferred_promise(d: Deferred(a)) -> Promise(a)
+/// Await the deferred but give up after `ms` — a never-resolving deferred (a
+/// regressed handshake that parks forever) then FAILS loudly here instead of
+/// stalling the runner. (Belt-and-braces with the gate's 8s per-test backstop.)
+@external(javascript, "./control_test_ffi.mjs", "deferredPromiseWithTimeout")
+fn deferred_promise_with_timeout(
+  d: Deferred(a),
+  ms: Int,
+  ok: fn(a) -> Result(a, Nil),
+  err: fn() -> Result(a, Nil),
+) -> Promise(Result(a, Nil))
 
 @external(javascript, "./control_test_ffi.mjs", "deferredResolve")
 fn deferred_resolve(d: Deferred(a), value: a) -> a
@@ -103,12 +111,24 @@ pub fn stream_through_sim_reaches_idle_test() -> Promise(Nil) {
     perform_writes(b, conn, started.writes)
     Nil
   })
-  |> promise.await(fn(_) { deferred_promise(done) })
-  |> promise.map(fn(confirmed) {
-    // The machine reached Idle having confirmed exactly N lines.
-    confirmed |> should.equal(total)
-    ref_get(state_ref) |> printer.state_name |> should.equal("idle")
-    Nil
+  // Bound the wait: a regressed handshake that never reaches Idle now FAILS here
+  // rather than hanging the runner. The sim acks each line ~ahead on a setTimeout,
+  // so this short program settles well under the 7s deadline (below the gate's 8s
+  // per-test backstop). Mirrors `integration_test`.
+  |> promise.await(fn(_) {
+    deferred_promise_with_timeout(done, 7000, Ok, fn() { Error(Nil) })
+  })
+  |> promise.map(fn(result) {
+    case result {
+      // The machine reached Idle having confirmed exactly N lines.
+      Ok(confirmed) -> {
+        confirmed |> should.equal(total)
+        ref_get(state_ref) |> printer.state_name |> should.equal("idle")
+        Nil
+      }
+      // Timed out: the stream never completed. Fail loudly.
+      Error(Nil) -> should.fail()
+    }
   })
 }
 

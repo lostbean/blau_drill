@@ -61,8 +61,16 @@ type Deferred(a)
 @external(javascript, "./control_test_ffi.mjs", "newDeferred")
 fn new_deferred() -> Deferred(a)
 
-@external(javascript, "./control_test_ffi.mjs", "deferredPromise")
-fn deferred_promise(d: Deferred(a)) -> Promise(a)
+/// Await the deferred but give up after `ms` — a never-resolving deferred (a
+/// regressed handshake that parks forever) then FAILS loudly here instead of
+/// stalling the runner. (Belt-and-braces with the gate's 8s per-test backstop.)
+@external(javascript, "./control_test_ffi.mjs", "deferredPromiseWithTimeout")
+fn deferred_promise_with_timeout(
+  d: Deferred(a),
+  ms: Int,
+  ok: fn(a) -> Result(a, Nil),
+  err: fn() -> Result(a, Nil),
+) -> Promise(Result(a, Nil))
 
 @external(javascript, "./control_test_ffi.mjs", "deferredResolve")
 fn deferred_resolve(d: Deferred(a), value: a) -> a
@@ -128,17 +136,24 @@ pub fn connect_then_energize_motors_on_test() -> Promise(Nil) {
     perform_writes(b, conn, energized.writes)
     tick()
   })
+  // This deferred is resolved synchronously above, so the deadline is only a
+  // backstop — but route it through the timeout for uniformity / defence-in-depth.
   |> promise.await(fn(_) {
     let assert Ok(conn) = ref_get(conn_ref)
     let _ = deferred_resolve(done, emu_motors_on(conn))
-    deferred_promise(done)
+    deferred_promise_with_timeout(done, 7000, Ok, fn() { Error(Nil) })
   })
-  |> promise.map(fn(motors_on) {
-    // FSM reached Jogging...
-    ref_get(state_ref) |> printer.state_name |> should.equal("jogging")
-    // ...AND the emulator's steppers are actually ON (wire-level proof).
-    motors_on |> should.equal(True)
-    Nil
+  |> promise.map(fn(result) {
+    case result {
+      Ok(motors_on) -> {
+        // FSM reached Jogging...
+        ref_get(state_ref) |> printer.state_name |> should.equal("jogging")
+        // ...AND the emulator's steppers are actually ON (wire-level proof).
+        motors_on |> should.equal(True)
+        Nil
+      }
+      Error(Nil) -> should.fail()
+    }
   })
 }
 
@@ -252,12 +267,19 @@ pub fn stream_completes_through_emulator_test() -> Promise(Nil) {
       printer.command(ref_get(state_ref), printer.Stream(prog(program)))
     let _ = ref_set(state_ref, started.state)
     perform_writes(b, conn, started.writes)
-    deferred_promise(done)
+    // Bound the wait: a regressed numbered handshake that never reaches
+    // StreamComplete now FAILS here rather than hanging the runner.
+    deferred_promise_with_timeout(done, 7000, Ok, fn() { Error(Nil) })
   })
-  |> promise.map(fn(confirmed) {
-    confirmed |> should.equal(total)
-    ref_get(state_ref) |> printer.state_name |> should.equal("idle")
-    Nil
+  |> promise.map(fn(result) {
+    case result {
+      Ok(confirmed) -> {
+        confirmed |> should.equal(total)
+        ref_get(state_ref) |> printer.state_name |> should.equal("idle")
+        Nil
+      }
+      Error(Nil) -> should.fail()
+    }
   })
 }
 
@@ -405,12 +427,19 @@ pub fn m0_blocks_until_resume_test() -> Promise(Nil) {
     // advance past M0 and run to completion.
     let assert Ok(conn) = ref_get(conn_ref)
     emu_resume(conn)
-    deferred_promise(done)
+    // Bound the wait: if the resume regresses and the stream never completes,
+    // FAIL here rather than hanging the runner.
+    deferred_promise_with_timeout(done, 7000, Ok, fn() { Error(Nil) })
   })
-  |> promise.map(fn(confirmed) {
-    confirmed |> should.equal(total)
-    ref_get(state_ref) |> printer.state_name |> should.equal("idle")
-    Nil
+  |> promise.map(fn(result) {
+    case result {
+      Ok(confirmed) -> {
+        confirmed |> should.equal(total)
+        ref_get(state_ref) |> printer.state_name |> should.equal("idle")
+        Nil
+      }
+      Error(Nil) -> should.fail()
+    }
   })
 }
 

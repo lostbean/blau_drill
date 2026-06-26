@@ -180,6 +180,29 @@ pub fn override_is_legal_only_when_rejected_test() {
   job.can(aj, OverrideAlignmentE) |> should.be_false
 }
 
+// The one un-hit guard in the job FSM (job.gleam:204): `AlignmentRejected,
+// OverrideAlignment` with `alignment: None` is a typed `IllegalTransition` — you
+// cannot promote a rejected fit that has no solved transform to promote. A normal
+// over-tolerance fit always KEEPS its solved alignment (it is `Some` in
+// AlignmentRejected — see `fit_over_tol_routes_to_rejected_test`), so this arm is
+// defensive: an AlignmentRejected job whose `alignment` is `None` is not reachable
+// through the public transition path. We construct that state directly (the `Job`
+// record is a public constructor) to pin that the guard refuses it rather than
+// crashing on `Some(_)`.
+pub fn override_rejected_with_no_alignment_is_illegal_test() {
+  let rejected_no_alignment =
+    job.Job(
+      state: AlignmentRejected,
+      board: board(),
+      pending: pending_alignment.new(),
+      alignment: None,
+      residuals: None,
+      tol: 0.1,
+    )
+  job.transition(rejected_no_alignment, OverrideAlignment)
+  |> should.equal(Error(IllegalTransition))
+}
+
 pub fn same_fit_looser_tol_passes_test() {
   let reject = register_with(job(), misfit_corrs())
   let accept = register_with(job(), misfit_corrs())

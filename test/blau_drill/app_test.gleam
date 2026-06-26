@@ -12,25 +12,21 @@
 import blau_drill/app
 import blau_drill/control/controller
 import blau_drill/control/printer
-import blau_drill/control/transport
-import blau_drill/domain/board_model.{Inputs}
-import blau_drill/domain/config
 import blau_drill/domain/correspondence.{Correspondence}
 import blau_drill/domain/job
-import blau_drill/ui/bridge
-import blau_drill/ui/mock
+import blau_drill/test_support.{
+  aligned_jogging_model, aligned_jogging_model_from, base_model,
+}
 import blau_drill/ui/model.{
   type Model, Align, BBox, Board, CancelRelease, ConfNone, ConfirmReleaseMotors,
-  Connection, Done, Drill, DryRun, Front, HaveBoard, HaveBoardModel, HaveJob,
-  HaveTransform, Head, Load, Model, NoBitChange, NoBoard, NoDiagnostic,
-  NoHeadPos, NoOverlay, NoTransform, Release, Settings,
+  Done, Drill, DryRun, HaveBoard, HaveJob, HaveTransform, Head, Load, Model,
+  NoBitChange, NoBoard, NoHeadPos, NoTransform, Release, Settings,
 }
 import blau_drill/ui/projection
-import blau_drill/ui/sample
 import blau_drill/ui/session
 import gleam/float
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/string
 import gleeunit/should
 
 // ── Session-derived reads (ADR-0012): the screen + wire are no longer stored ──
@@ -159,42 +155,6 @@ pub fn target_candidate_no_board_is_error_test() {
   app.target_candidate(NoBoard, 0) |> should.equal(Error(Nil))
 }
 
-// ── base fixture ──────────────────────────────────────────────────────────────
-// A base, board-parsed Model (job in `Parsed`) for the sample board, Front side
-// and DISCONNECTED — the state `init` lands in just after parsing a board.
-fn base_model() -> Model {
-  let cfg = mock.default_config()
-  let assert Ok(bm) =
-    board_model.parse(Inputs(drl: Some(sample.drl()), edge_cuts: None))
-  let wm = bridge.working_board_model(bm, Front)
-  Model(
-    overlay: NoOverlay,
-    board: HaveBoard(bridge.board_of(wm)),
-    diagnostic: NoDiagnostic,
-    file_selected: True,
-    outline_file: "",
-    upload_error: "",
-    head: Head(0.0, 0.0, 0.0),
-    jog_step: 1.0,
-    current_target: 0,
-    fiducial_target: 4,
-    zoom: 1.0,
-    category: Connection,
-    config: cfg,
-    config_dirty: False,
-    controller: controller.new(transport.simulator()),
-    backend_kind: model.SimBackend,
-    board_model: HaveBoardModel(wm),
-    job: HaveJob(job.new(wm)),
-    pending_drl: sample.drl(),
-    pending_edge_cuts: "",
-    applied_config: bridge.gcode_config(cfg, config.DryRun),
-    board_side: Front,
-    release_confirm: False,
-    comms_log: [],
-  )
-}
-
 // ── ADR-0011: a fresh init / blank-slate construction has NO alignment ─────────
 // THE INVARIANT: alignment/position is valid only while motors stay continuously
 // energized; a refresh is a new runtime, so a freshly-built base model carries NO
@@ -209,41 +169,6 @@ pub fn base_model_has_no_alignment_test() {
   projection.captures(m) |> should.equal([])
   projection.captured(m) |> should.equal([])
   projection.head_confidence(m) |> should.equal(ConfNone)
-}
-
-// Drive the LIVE alignment path from `base` to a genuine solved transform:
-// connect, energize (→ Jogging), start registering, then capture the first three
-// board candidates with the head parked AT each candidate's coords (machine ==
-// board → an identity fit, well within the 0.1mm gate) carrying a DISTINCT machine
-// Z, and fit. Returns a connected + Jogging + Aligned Model with a real
-// transform/captures. The run snapshot (`applied_config`) is taken from `base`'s
-// config at start-registering, so flip any config flag (e.g. app_pause) on `base`
-// FIRST.
-fn aligned_jogging_model_from(base: Model) -> Model {
-  let #(m1, _) =
-    app.update(base, model.ControllerEvent(controller.Issue(printer.Connect)))
-  let #(m2, _) = app.update(m1, model.Energize)
-  let #(m3, _) = app.update(m2, model.StartRegistering)
-  let assert HaveBoard(b) = m3.board
-  let pts = list.take(b.candidates, 3)
-  let zs = [-1.0, -1.2, -1.4]
-  let m4 =
-    list.zip(pts, zs)
-    |> list.index_fold(m3, fn(m, pz, i) {
-      let #(#(cx, cy), z) = pz
-      // Select the candidate, park the head at it (identity machine == board),
-      // then capture through the real path.
-      let #(ms, _) = app.update(m, model.SetCurrentTarget(i))
-      let ms = Model(..ms, head: Head(cx, cy, z))
-      let #(mc, _) = app.update(ms, model.CaptureFiducial)
-      mc
-    })
-  let #(m5, _) = app.update(m4, model.Fit)
-  m5
-}
-
-fn aligned_jogging_model() -> Model {
-  aligned_jogging_model_from(base_model())
 }
 
 // ── 2.5D: a live capture records the head Z as the correspondence machine_z ────
@@ -576,4 +501,175 @@ pub fn degenerate_fit_guides_via_upload_error_test() {
   projection.alignment_rejected(m) |> should.be_false
   projection.transform(m) |> should.equal(NoTransform)
   projection.quality(m) |> should.equal(-1)
+}
+
+// ── app-level Abort (safety-critical: M112 emergency stop) ─────────────────────
+
+fn is_faulted(m: Model) -> Bool {
+  session.is_faulted(session.of(m.job, m.board, controller.state(m.controller)))
+}
+
+// Whether the comms log recorded an M112 (the emergency-stop write).
+fn issued_m112(m: Model) -> Bool {
+  list.any(m.comms_log, fn(e) { string.contains(e.line, "M112") })
+}
+
+// A Drilling model driven through the REAL app: aligned → RunDryRun (dry-run
+// stream in flight) → ConfirmRegistration (quickstop + drill stream). The job is
+// Drilling and the drill program is streaming on the wire.
+fn drilling_model() -> Model {
+  let m_aligned = aligned_jogging_model()
+  let #(m_dry, _) = app.update(m_aligned, model.RunDryRun)
+  let #(m_drill, _) = app.update(m_dry, model.ConfirmRegistration)
+  m_drill
+}
+
+// SAFETY: Abort from a live drill issues M112 (the printer faults), the session
+// projects `is_faulted`, and the job records the loss (Drilling → Faulted).
+pub fn abort_from_drilling_faults_and_halts_test() {
+  let m = drilling_model()
+  job_state(m) |> should.equal(job.Drilling)
+  let #(m2, _e) = app.update(m, model.Abort)
+  // The emergency stop went out…
+  issued_m112(m2) |> should.be_true
+  // …the wire faulted…
+  is_faulted(m2) |> should.be_true
+  // …and the job recorded the loss.
+  job_state(m2) |> should.equal(job.Faulted)
+}
+
+// THE "e-stop is never swallowed" guarantee (app.gleam): from a Loading session
+// (board parsed, NOT aligned) the Session has no active wire state — yet Abort
+// must STILL issue a raw Halt (M112). We connect so the wire is live but the job
+// stays Parsed → the Session projects Loading, so `session.transition(_, Abort)`
+// is `Error(IllegalHere)` and the handler's fallback issues the raw Halt anyway.
+pub fn abort_from_loading_still_issues_halt_test() {
+  let #(m, _) =
+    app.update(
+      base_model(),
+      model.ControllerEvent(controller.Issue(printer.Connect)),
+    )
+  // Precondition: the Session is Loading (job still Parsed, no alignment).
+  scr(m) |> should.equal(Load)
+  job_state(m) |> should.equal(job.Parsed)
+  // Abort is illegal from Loading at the Session level, but the app's fallback
+  // issues the raw Halt — the emergency stop is NEVER swallowed.
+  let #(m2, _e) = app.update(m, model.Abort)
+  issued_m112(m2) |> should.be_true
+}
+
+// ── RedoAlignment preserves the alignment (back-nav must not clear it) ─────────
+//
+// From a Rehearsing model (a streaming dry-run), RedoAlignment cancels the
+// in-flight stream (the wire goes back to Jogging, not Streaming), returns the
+// screen to Align, AND preserves the solved transform + captures. This is the
+// headline "back-nav must not clear alignment" flow (ADR-0014).
+pub fn redo_alignment_preserves_alignment_test() {
+  let m_aligned = aligned_jogging_model()
+  let #(m_dry, _e1) = app.update(m_aligned, model.RunDryRun)
+  // Precondition: a dry-run stream is in flight on the Rehearsing wire.
+  controller.state(m_dry.controller) |> printer.is_streaming |> should.be_true
+  scr(m_dry) |> should.equal(DryRun)
+
+  let #(m2, _e2) = app.update(m_dry, model.RedoAlignment)
+  // The in-flight stream is cancelled — the wire is no longer streaming (back to
+  // Jogging, motors still energized).
+  controller.state(m2.controller) |> printer.is_streaming |> should.be_false
+  is_jogging(m2) |> should.be_true
+  // The screen returned to Align.
+  scr(m2) |> should.equal(Align)
+  // The alignment SURVIVED: transform still present and captures non-empty.
+  case projection.transform(m2) {
+    HaveTransform(_) -> True
+    NoTransform -> False
+  }
+  |> should.be_true
+  { projection.captures(m2) != [] } |> should.be_true
+  job_state(m2) |> should.equal(job.Aligned)
+}
+
+// ── end-to-end completion: the run reaches the Done screen ─────────────────────
+//
+// Drive a full run through `app.update`: aligned → RunDryRun → ConfirmRegistration
+// (the genuine sim handshake builds Drilling with the drill stream in flight) →
+// drive the drill stream through every bit-change pause to StreamComplete (the
+// wire settles to Idle) → the explicit operator Complete step closes the run. The
+// screen reaches Done and `projection.summary` reports the right totals. (Complete
+// is the genuine lifecycle edge: `StreamComplete` alone does not advance to Done.)
+fn pump_drill_to_idle(m: Model, fuel: Int) -> Model {
+  case fuel <= 0 {
+    True -> m
+    False -> {
+      let wire = controller.state(m.controller)
+      case printer.is_streaming(wire) || printer.is_stream_paused(wire) {
+        False -> m
+        True -> {
+          let m2 = case printer.is_stream_paused(wire) {
+            True -> {
+              let #(mm, _) = app.update(m, model.ResumeDrilling)
+              mm
+            }
+            False -> {
+              let #(mm, _) =
+                app.update(m, model.ControllerEvent(controller.Inbound("ok")))
+              mm
+            }
+          }
+          pump_drill_to_idle(m2, fuel - 1)
+        }
+      }
+    }
+  }
+}
+
+pub fn full_run_reaches_done_screen_test() {
+  let m_drilling = drilling_model()
+  job_state(m_drilling) |> should.equal(job.Drilling)
+  // Drive the drill stream all the way to Idle (every hole + the postamble).
+  let m_streamed = pump_drill_to_idle(m_drilling, 8000)
+  controller.state(m_streamed.controller)
+  |> printer.is_streaming
+  |> should.be_false
+  // The explicit operator Complete closes the run → Done.
+  let #(m_done, _e) = app.update(m_streamed, model.Complete)
+  job_state(m_done) |> should.equal(job.Done)
+  scr(m_done) |> should.equal(Done)
+  // The completion summary projects with the right hole + bit-change counts.
+  case projection.summary(m_done) {
+    model.HaveSummary(model.Summary(total_holes: holes, bit_changes: bits, ..)) -> {
+      holes |> should.equal(130)
+      // Multi-tool board → at least one bit change.
+      { bits > 0 } |> should.be_true
+    }
+    model.NoSummary -> should.fail()
+  }
+}
+
+// ── inert double-Fit: an illegal Fit is a no-op AT THE HANDLER (Stream B) ──────
+//
+// From an Aligned model, firing Fit again is illegal at the job FSM (Fit is only
+// legal in Registering). The handler drives `job.transition(j, Fit(tol))`, gets
+// `IllegalTransition`, lands in the `Error(_)` arm → sets the guidance string and
+// leaves the job UNCHANGED. This pins the "illegal Fit is inert at the handler"
+// contract that Stream B's button-gating (Fit disabled unless Registering∧≥3)
+// relies on — the handler is the second line of defence.
+pub fn double_fit_from_aligned_is_inert_test() {
+  let m = aligned_jogging_model()
+  job_state(m) |> should.equal(job.Aligned)
+  // Capture the transform before the inert Fit.
+  let before = projection.transform(m)
+  case before {
+    HaveTransform(_) -> True
+    NoTransform -> False
+  }
+  |> should.be_true
+
+  let #(m2, _e) = app.update(m, model.Fit)
+  // The job state is unchanged (still Aligned) — the illegal Fit no-ops.
+  job_state(m2) |> should.equal(job.Aligned)
+  // The guidance string is set (the `Error(_)` arm's count guidance).
+  m2.upload_error
+  |> should.equal("Capture at least 3 well-spread fiducials.")
+  // The transform is preserved (the projection is unchanged).
+  projection.transform(m2) |> should.equal(before)
 }
