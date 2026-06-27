@@ -240,7 +240,14 @@ pub fn view(data: CanvasData) -> Element(model.Msg) {
         outline_path(sp, data.outline, mk),
         list.map(data.holes, fn(hole) { hole_circle(sp, data.tools, hole, mk) }),
         list.map(data.fiducials, fn(fid) {
-          fiducial(sp, fid, mk, data.point_residuals, data.worst_index)
+          fiducial(
+            sp,
+            fid,
+            mk,
+            data.point_residuals,
+            data.worst_index,
+            data.stage,
+          )
         }),
         head_marker(sp, data.head_pos, data.head_confidence, mk),
       ]),
@@ -377,9 +384,15 @@ fn fiducial(
   mk: Float,
   residuals: List(PointResidual),
   worst_index: Int,
+  stage: model.Screen,
 ) -> Element(model.Msg) {
   let #(px, py) = project(sp, fid.x, fid.y)
-  let clickable = fid.state == FidPending || fid.state == Current
+  // Gate marker selection on the Align stage — mirrors the board-level
+  // `interactive = data.stage == Align`. A pending fiducial is rendered in every
+  // stage (its canvas data persists), but `SetCurrentTarget` is meaningless
+  // outside Align, so no marker is clickable elsewhere.
+  let clickable =
+    stage == Align && { fid.state == FidPending || fid.state == Current }
   // Only captured fiducials carry a residual; uncaptured points have no error.
   let residual = case fid.state {
     Captured -> residual_for(residuals, fid.index)

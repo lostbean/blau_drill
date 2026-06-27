@@ -502,7 +502,7 @@ pub fn unknown_event_typed_error_test() {
 // --- legal_events / can -----------------------------------------------------
 
 pub fn legal_events_lists_succeeding_events_test() {
-  job.legal_events(job()) |> should.equal([StartRegisteringE])
+  job.legal_events(job()) |> should.equal([StartRegisteringE, DeenergizeE])
 
   let assert Ok(registering) = job.transition(job(), StartRegistering)
   list.contains(job.legal_events(registering), job.CaptureE) |> should.be_true
@@ -556,4 +556,124 @@ pub fn full_happy_path_test() {
 
   let assert Ok(j) = job.transition(j, Complete)
   j.state |> should.equal(Done)
+}
+
+// --- N2: legal_events / can ⇔ transition correspondence property -------------
+//
+// THE INVARIANT (pins the R3 fix — `DeenergizeE` now legal in EVERY state — and
+// prevents future drift): for every State × every EventName,
+// `can(job_in_state, e) == True` IFF `transition(job_in_state, <the event>)`
+// returns `Ok(_)` (a SUCCEEDING transition — including the Deenergize no-op,
+// which is `Ok`). `can`/`legal_events` is the UI's gate authority; if it ever
+// drifts from what `transition` actually accepts, the UI offers buttons the FSM
+// refuses (or hides legal ones). This property walks the WHOLE 8×13 grid and
+// fails on any divergence.
+
+// A representative Job in each lifecycle state, constructed through the real
+// transition path so each carries the data its state implies (e.g. the rejected
+// job keeps its solved alignment, so OverrideAlignment is genuinely Ok there).
+fn job_in_state(s: job.State) -> Job {
+  case s {
+    Parsed -> job()
+    Registering -> register_with(job(), exact_corrs())
+    Aligned -> {
+      let assert Ok(j) =
+        job.transition(register_with(job(), exact_corrs()), Fit(0.1))
+      j
+    }
+    AlignmentRejected -> {
+      let assert Ok(j) =
+        job.transition(register_with(job(), misfit_corrs()), Fit(0.05))
+      j
+    }
+    DryRun -> dry_run_job()
+    Drilling -> drilling_job()
+    Done -> done_job()
+    Faulted -> faulted_job()
+  }
+}
+
+// A representative Event for each EventName, with benign payloads.
+fn event_for(name: job.EventName) -> job.Event {
+  case name {
+    job.StartRegisteringE -> StartRegistering
+    job.CaptureE ->
+      Capture(Correspondence(
+        board: #(0.0, 0.0),
+        machine: #(0.0, 0.0),
+        machine_z: 0.0,
+      ))
+    job.FitE -> Fit(0.1)
+    job.RecaptureE -> Recapture
+    job.OverrideAlignmentE -> OverrideAlignment
+    job.RestartAlignmentE -> RestartAlignment
+    job.DeenergizeE -> Deenergize
+    job.RunDryRunE -> RunDryRun
+    job.RedoAlignmentE -> RedoAlignment
+    job.ConfirmRegistrationE -> ConfirmRegistration
+    job.CompleteE -> Complete
+    job.SerialLossE -> SerialLoss("x")
+    job.ReconnectE -> Reconnect
+  }
+}
+
+fn all_states() -> List(job.State) {
+  [
+    Parsed,
+    Registering,
+    Aligned,
+    AlignmentRejected,
+    DryRun,
+    Drilling,
+    Done,
+    Faulted,
+  ]
+}
+
+fn all_event_names() -> List(job.EventName) {
+  [
+    job.StartRegisteringE,
+    job.CaptureE,
+    job.FitE,
+    job.RecaptureE,
+    job.OverrideAlignmentE,
+    job.RestartAlignmentE,
+    job.DeenergizeE,
+    job.RunDryRunE,
+    job.RedoAlignmentE,
+    job.ConfirmRegistrationE,
+    job.CompleteE,
+    job.SerialLossE,
+    job.ReconnectE,
+  ]
+}
+
+pub fn can_iff_transition_succeeds_over_whole_grid_test() {
+  list.each(all_states(), fn(s) {
+    let j = job_in_state(s)
+    // Sanity: the constructed representative really is in the intended state.
+    j.state |> should.equal(s)
+    list.each(all_event_names(), fn(name) {
+      let allowed = job.can(j, name)
+      let succeeds = case job.transition(j, event_for(name)) {
+        Ok(_) -> True
+        Error(_) -> False
+      }
+      // can(j, e) IFF transition(j, e) is Ok — for EVERY (state, event) pair.
+      allowed |> should.equal(succeeds)
+    })
+  })
+}
+
+// The R3 must-have, called out explicitly: DeenergizeE is legal — and Deenergize
+// genuinely transitions Ok — in EVERY state (the always-legal de-energize).
+pub fn deenergize_is_legal_and_ok_in_every_state_test() {
+  list.each(all_states(), fn(s) {
+    let j = job_in_state(s)
+    job.can(j, job.DeenergizeE) |> should.be_true
+    case job.transition(j, Deenergize) {
+      Ok(_) -> Nil
+      Error(_) -> should.fail()
+    }
+  })
 }

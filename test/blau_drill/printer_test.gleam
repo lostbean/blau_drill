@@ -312,6 +312,14 @@ pub fn move_to_has_no_absolute_z_move_test() {
 pub fn pulse_spindle_in_idle_writes_nothing_test() {
   let step = cmd(idle(), PulseSpindle("M3 S255", "M5"))
   step.writes |> should.equal([])
+  // Symmetric with its Jog/MoveTo siblings: not only does nothing go out, the
+  // command is explicitly REFUSED for being NotEnergized (energize-before-spindle).
+  // The old test only checked `writes == []`, so a mutation dropping the refusal
+  // event survived; this pins it.
+  has_event(step.events, fn(e) {
+    e == Refused(PulseSpindle("M3 S255", "M5"), NotEnergized)
+  })
+  |> should.be_true
 }
 
 pub fn pulse_spindle_in_jogging_emits_on_dwell_off_test() {

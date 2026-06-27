@@ -704,12 +704,25 @@ fn connect_device(model: Model) -> #(Model, Effect(Msg)) {
 }
 
 fn disconnect_device(model: Model) -> #(Model, Effect(Msg)) {
-  let #(ctrl, eff) = controller.disconnect(model.controller)
-  // ADR-0011: a disconnect de-energizes the motors, so it invalidates the
-  // alignment (involuntary → no confirm). Reset it in lockstep with the job FSM.
-  // The wire state lives on the controller now (ADR-0012), so just store it.
-  let m = deenergize_reset(Model(..model, controller: ctrl))
-  #(m, effect.map(eff, ControllerEvent))
+  // A disconnect WHILE a stream is in flight (Streaming/StreamPaused) is a serial
+  // loss, not a clean de-energize: route it through the SAME path the read loop
+  // takes when the port vanishes mid-run (`controller.Lost`). That faults the WIRE
+  // (printer.serial_lost: any active → Faulted + Faulting), and the normal
+  // `Faulting` fold (apply_controller → fold_events → `fault`) faults the JOB
+  // (Drilling/DryRun → Faulted) and raises the recoverable fault banner. We do NOT
+  // also `controller.disconnect`/`deenergize_reset` here — the fault IS the reset,
+  // and Reconnect (Faulted → Parsed) re-registers from a clean slate.
+  case session.is_streaming(current_session(model)) {
+    True -> apply_controller(model, controller.Lost("disconnect during run"))
+    False -> {
+      let #(ctrl, eff) = controller.disconnect(model.controller)
+      // ADR-0011: a disconnect de-energizes the motors, so it invalidates the
+      // alignment (involuntary → no confirm). Reset it in lockstep with the job FSM.
+      // The wire state lives on the controller now (ADR-0012), so just store it.
+      let m = deenergize_reset(Model(..model, controller: ctrl))
+      #(m, effect.map(eff, ControllerEvent))
+    }
+  }
 }
 
 fn start_registering(model: Model) -> #(Model, Effect(Msg)) {

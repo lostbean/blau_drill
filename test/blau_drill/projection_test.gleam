@@ -25,7 +25,7 @@ import blau_drill/domain/gcode_program.{
 import blau_drill/domain/job
 import blau_drill/domain/transform2d
 import blau_drill/test_support.{
-  aligned_jogging_model, base_model, drilled_of, pump_through_pause,
+  aligned_jogging_model, base_model, pump_through_pause,
 }
 import blau_drill/ui/model.{
   type Model, ConfAligned, HaveBoard, HaveFitDiag, HaveJob, HaveSummary,
@@ -158,6 +158,34 @@ pub fn quality_is_in_range_for_rejected_fit_test() {
   { q >= 0 && q <= 100 } |> should.be_true
 }
 
+// quality_pct pinned to EXACT intermediate values so the residual term cannot be
+// silently dropped (a `quality_pct` mutated to always-100 would slip past the
+// exact-fit→100 / rejected→in-range tests above; these INTERMEDIATE points fail
+// it). Formula: `round(clamp(1 - residual/(2*tol)) * 100)` → residual 0 → 100,
+// residual == tol → 50, residual == 2*tol → 0.
+pub fn quality_pct_pins_residual_term_test() {
+  // No residual → full quality.
+  projection.quality_pct(0.0, 0.1) |> should.equal(100)
+  // Residual exactly at tolerance → the half-way point (NOT 100; this is the
+  // mutation-killing pin — an always-100 quality_pct fails here).
+  projection.quality_pct(0.1, 0.1) |> should.equal(50)
+  // Residual at twice tolerance → fully degraded.
+  projection.quality_pct(0.2, 0.1) |> should.equal(0)
+  // Quarter / three-quarter points pin the linear residual response.
+  projection.quality_pct(0.05, 0.1) |> should.equal(75)
+  projection.quality_pct(0.15, 0.1) |> should.equal(25)
+}
+
+// quality_pct is strictly monotone decreasing in the residual (a bigger residual
+// is never better quality) — pins the SIGN of the residual term too.
+pub fn quality_pct_decreases_with_residual_test() {
+  { projection.quality_pct(0.05, 0.1) > projection.quality_pct(0.15, 0.1) }
+  |> should.be_true
+  // … and clamps below 0 / above 100 rather than running negative or past full.
+  projection.quality_pct(1.0, 0.1) |> should.equal(0)
+  projection.quality_pct(-1.0, 0.1) |> should.equal(100)
+}
+
 // residuals / residual_max / residual_rms mirror job.alignment.residuals.
 pub fn residuals_match_the_job_residuals_test() {
   let m = rejected_model()
@@ -182,10 +210,23 @@ pub fn fit_diag_present_and_names_worst_for_rejected_test() {
     HaveFitDiag(diag) -> {
       // Per-point residuals for every captured point (4 here).
       list.length(diag.points) |> should.equal(4)
-      // A worst point is named (the over-tolerance fit solved a transform, so a
-      // worst residual exists).
+      // The named worst point is pinned to its ACTUAL value, not a wildcard: for
+      // this +0.4mm-Y-nudge fixture the least-squares fit spreads the residual so
+      // every point sits ~0.1mm off, and `worst_point` (first strict-max wins,
+      // scanning capture order) deterministically selects index 2. Pinning the
+      // index AND its error kills a "worst is always index 0 / always present"
+      // mutation that the old `HaveWorst(_)` wildcard let through.
       case diag.worst {
-        model.HaveWorst(_) -> Nil
+        model.HaveWorst(w) -> {
+          w.index |> should.equal(2)
+          approx(w.error_mm, 0.1) |> should.be_true
+          // The named worst really is the max over all points.
+          let max_err =
+            diag.points
+            |> list.map(fn(p) { p.error_mm })
+            |> list.fold(0.0, float.max)
+          approx(w.error_mm, max_err) |> should.be_true
+        }
         model.NoWorst -> should.fail()
       }
       // The fit solved a transform → override is offered.
@@ -261,9 +302,35 @@ pub fn drilled_count_advances_mid_stream_test() {
   let m_aligned = aligned_jogging_model()
   let #(m_dry, _) = app.update(m_aligned, model.RunDryRun)
   let m = pump_through_pause(m_dry, 3, 400)
-  // The projection agrees with the progress projection and is positive mid-run.
+  // Positive mid-run …
   { projection.drilled_count(m) > 0 } |> should.be_true
-  projection.drilled_count(m) |> should.equal(drilled_of(m))
+  // … and equal to an INDEPENDENT count derived straight off the wire — the
+  // confirmed prefix's unique DrillHoleKind hole_ids — computed here WITHOUT
+  // calling `drilled_count`/`progress`/`drilled_of` (the old assertion compared
+  // `drilled_count` to `drilled_of`, which reads `progress(...).drilled`, itself
+  // `drilled_count` — a literal x == x tautology). This now FAILS if
+  // `drilled_count` is off by one or counts the wrong line kind.
+  projection.drilled_count(m) |> should.equal(independent_drilled_count(m))
+}
+
+/// Count drilled holes straight off the controller wire, mirroring what
+/// `drilled_count` SHOULD compute but derived INDEPENDENTLY in the test (the
+/// confirmed prefix = the first `sent` rendered lines; a hole is a DrillHoleKind
+/// line with a `hole_id`, deduped). Deliberately avoids `projection.drilled_count`
+/// / `progress` / `confirmed_hole_ids` so it is a true cross-check.
+fn independent_drilled_count(m: Model) -> Int {
+  let wire = controller.state(m.controller)
+  let #(sent, _total) = printer.stream_progress(wire)
+  printer.stream_rendered(wire)
+  |> list.take(sent)
+  |> list.filter_map(fn(rl: RenderedLine) {
+    case rl.origin.kind, rl.origin.hole_id {
+      DrillHoleKind, Some(id) -> Ok(id)
+      _, _ -> Error(Nil)
+    }
+  })
+  |> list.unique
+  |> list.length
 }
 
 pub fn drilled_count_is_all_holes_when_done_test() {
@@ -299,6 +366,11 @@ pub fn summary_present_when_done_test() {
       total_holes |> should.equal(board_holes(m))
       bit_changes |> should.equal(tool_order_len(m) - 1)
       is_mmss(total_time) |> should.be_true
+      // EXACT-value pin: total_time = per_hole_seconds × total_holes. For this
+      // run (per_hole = 1.5s, 130 holes) that is 195s = "3:15". Shape-checking
+      // alone (is_mmss) let a 10×-wrong feed pass; this pins the arithmetic.
+      total_holes |> should.equal(130)
+      total_time |> should.equal("3:15")
     }
     NoSummary -> should.fail()
   }
@@ -342,6 +414,20 @@ pub fn telemetry_eta_is_mmss_mid_run_test() {
   let #(m_dry, _) = app.update(m_aligned, model.RunDryRun)
   let m = pump_through_pause(m_dry, 1, 400)
   is_mmss(projection.telemetry_eta(m)) |> should.be_true
+}
+
+// EXACT-value pin for the ETA arithmetic (a 10×-wrong feed only a shape-check
+// would miss). At the dry-run START every hole is still remaining (drilled 0 of
+// 130), so the ETA is the full run estimate: `per_hole_seconds × 130`. With the
+// fixture's applied_config (DryRun snapshot: hover 1.0, drill plunge_feed 120 →
+// per_hole = 2·hover / (feed/60) + 0.5 = 2.0/2.0 + 0.5 = 1.5s), that is
+// 1.5 × 130 = 195s = "3:15". This pins the per-hole-seconds × remaining product.
+pub fn telemetry_eta_exact_value_at_dry_run_start_test() {
+  let m_aligned = aligned_jogging_model()
+  let #(m_dry, _) = app.update(m_aligned, model.RunDryRun)
+  // Precondition: nothing drilled yet, so remaining == the full board.
+  projection.drilled_count(m_dry) |> should.equal(0)
+  projection.telemetry_eta(m_dry) |> should.equal("3:15")
 }
 
 pub fn telemetry_eta_is_zero_when_done_test() {

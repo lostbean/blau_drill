@@ -284,9 +284,14 @@ fn deenergized(job: Job) -> Job {
 /// The event *names* that are legal from `job`'s current state. A UI uses this
 /// to enable exactly the right buttons. The no-shortcut invariant surfaces here
 /// too: `ConfirmRegistrationE` is never in the list while merely `Aligned`.
+///
+/// `DeenergizeE` is ALWAYS legal: `transition` accepts `Deenergize` from every
+/// state (alignment states drop to a clean `Parsed`; everywhere else it is the
+/// benign no-op documented above), so `legal_events` lists it in EVERY state to
+/// keep the `can(j, e) ⇔ transition(j, e) succeeds` invariant for Deenergize.
 pub fn legal_events(job: Job) -> List(EventName) {
   case job.state {
-    Parsed -> [StartRegisteringE]
+    Parsed -> [StartRegisteringE, DeenergizeE]
     Registering -> [CaptureE, FitE, RestartAlignmentE, DeenergizeE]
     AlignmentRejected -> [
       RecaptureE,
@@ -296,9 +301,9 @@ pub fn legal_events(job: Job) -> List(EventName) {
     ]
     Aligned -> [RunDryRunE, RestartAlignmentE, DeenergizeE]
     DryRun -> [RedoAlignmentE, ConfirmRegistrationE, DeenergizeE]
-    Drilling -> [CompleteE, SerialLossE]
-    Faulted -> [ReconnectE]
-    Done -> []
+    Drilling -> [CompleteE, SerialLossE, DeenergizeE]
+    Faulted -> [ReconnectE, DeenergizeE]
+    Done -> [DeenergizeE]
   }
 }
 

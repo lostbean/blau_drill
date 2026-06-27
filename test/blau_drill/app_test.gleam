@@ -269,12 +269,16 @@ pub fn app_pause_pauses_at_first_bit_change_and_surfaces_panel_test() {
   controller.state(m.controller) |> printer.is_stream_paused |> should.be_true
   // The bit-change modal is PROJECTED from the FSM's paused state (ADR-0018) — the
   // dry-run aside's `pause_panel` renders off `projection.bit_change`, so the
-  // operator gets a Resume affordance on the dry-run screen.
+  // operator gets a Resume affordance on the dry-run screen. Pin the DIAMETER, not
+  // just presence: the first sentinel is the first tool block, whose tool is the
+  // sample board's T1 = 0.6mm (see sample.drl tool legend). A wrong diameter tells
+  // the operator to mount the wrong bit, so the value is load-bearing — the old
+  // `HaveBitChange(_)` wildcard let a `diameter: 0.0` mutation survive.
   case projection.bit_change(m) {
-    model.HaveBitChange(_) -> True
-    model.NoBitChange -> False
+    model.HaveBitChange(model.BitChange(diameter:)) ->
+      diameter |> should.equal(0.6)
+    model.NoBitChange -> should.fail()
   }
-  |> should.be_true
 }
 
 pub fn resume_drilling_continues_the_paused_stream_test() {
@@ -538,6 +542,55 @@ pub fn abort_from_drilling_faults_and_halts_test() {
   job_state(m2) |> should.equal(job.Faulted)
 }
 
+// ── R1 regression: a disconnect DURING an active stream is a serial loss ───────
+//
+// SAFETY (R1): pulling the device while a drill stream is in flight is NOT a clean
+// de-energize — it is a serial loss. `app.disconnect_device` branches on
+// `session.is_streaming`, routing a streaming disconnect through the SAME fault
+// path the read loop takes when the port vanishes (`controller.Lost`): the WIRE
+// faults (→ Faulted) and the JOB faults (Drilling → Faulted), raising the
+// recoverable fault banner. Reconnect then recovers to a clean Parsed/Load slate.
+// This pins the just-landed fix so a regression to a silent clean-disconnect fails.
+pub fn disconnect_during_stream_faults_coherently_test() {
+  let m = drilling_model()
+  // Precondition: a drill stream is genuinely in flight.
+  session.is_streaming(session.of(
+    m.job,
+    m.board,
+    controller.state(m.controller),
+  ))
+  |> should.be_true
+  job_state(m) |> should.equal(job.Drilling)
+
+  // The disconnect during the run faults BOTH the job and the wire (the banner).
+  let #(m2, _e) = app.update(m, model.DisconnectDevice)
+  job_state(m2) |> should.equal(job.Faulted)
+  is_faulted(m2) |> should.be_true
+
+  // Reconnect recovers from the fault to a clean re-registration slate.
+  let #(m3, _e3) = app.update(m2, model.Reconnect)
+  job_state(m3) |> should.equal(job.Parsed)
+  scr(m3) |> should.equal(Load)
+}
+
+// The non-streaming counterpart is UNCHANGED: a disconnect from an Aligned/Jogging
+// model (no stream in flight) is still a clean de-energize that resets the
+// alignment to Parsed — it must NOT fault. (The full reset is pinned by
+// `disconnect_resets_alignment_test`; this pins that it is NOT the fault path.)
+pub fn disconnect_without_stream_is_clean_not_faulted_test() {
+  let m = aligned_jogging_model()
+  session.is_streaming(session.of(
+    m.job,
+    m.board,
+    controller.state(m.controller),
+  ))
+  |> should.be_false
+  let #(m2, _e) = app.update(m, model.DisconnectDevice)
+  // Clean de-energize: Parsed, and explicitly NOT faulted (no banner).
+  job_state(m2) |> should.equal(job.Parsed)
+  is_faulted(m2) |> should.be_false
+}
+
 // THE "e-stop is never swallowed" guarantee (app.gleam): from a Loading session
 // (board parsed, NOT aligned) the Session has no active wire state — yet Abort
 // must STILL issue a raw Halt (M112). We connect so the wire is live but the job
@@ -578,7 +631,13 @@ pub fn redo_alignment_preserves_alignment_test() {
   is_jogging(m2) |> should.be_true
   // The screen returned to Align.
   scr(m2) |> should.equal(Align)
-  // The alignment SURVIVED: transform still present and captures non-empty.
+  // The alignment SURVIVED *unchanged*: compare the transform + captures BY VALUE
+  // against the pre-redo Aligned model, not just `HaveTransform(_)` (a redo that
+  // returned a DIFFERENT valid transform would have passed the old tag-only
+  // check). This pins that RedoAlignment carries the exact solved alignment back.
+  projection.transform(m2) |> should.equal(projection.transform(m_aligned))
+  projection.captures(m2) |> should.equal(projection.captures(m_aligned))
+  // …and it is genuinely a present, non-empty alignment (not both-NoTransform/[]).
   case projection.transform(m2) {
     HaveTransform(_) -> True
     NoTransform -> False
@@ -656,8 +715,11 @@ pub fn full_run_reaches_done_screen_test() {
 pub fn double_fit_from_aligned_is_inert_test() {
   let m = aligned_jogging_model()
   job_state(m) |> should.equal(job.Aligned)
-  // Capture the transform before the inert Fit.
+  // Capture the transform AND captures before the inert Fit, so we can prove the
+  // double-Fit changed NOTHING (the old test bound `before` but only ever checked
+  // its TAG — a Fit that re-solved a different transform would have slipped by).
   let before = projection.transform(m)
+  let before_captures = projection.captures(m)
   case before {
     HaveTransform(_) -> True
     NoTransform -> False
@@ -670,6 +732,8 @@ pub fn double_fit_from_aligned_is_inert_test() {
   // The guidance string is set (the `Error(_)` arm's count guidance).
   m2.upload_error
   |> should.equal("Capture at least 3 well-spread fiducials.")
-  // The transform is preserved (the projection is unchanged).
+  // The transform AND the captures are preserved BY VALUE — the inert double-Fit
+  // truly changed nothing the projections can see.
   projection.transform(m2) |> should.equal(before)
+  projection.captures(m2) |> should.equal(before_captures)
 }
