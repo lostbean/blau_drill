@@ -18,6 +18,7 @@ import blau_drill/control/controller
 import blau_drill/control/printer
 import blau_drill/domain/config
 import blau_drill/domain/correspondence.{Correspondence}
+import blau_drill/domain/fit_geometry.{Mirrored, Plausible, Suspect}
 import blau_drill/domain/gcode_program.{
   type RenderedLine, DrillHoleKind, LineOrigin, PauseKind, RenderedLine,
   ToolBlockKind,
@@ -28,8 +29,9 @@ import blau_drill/test_support.{
   aligned_jogging_model, base_model, pump_through_pause,
 }
 import blau_drill/ui/model.{
-  type Model, ConfAligned, HaveBoard, HaveFitDiag, HaveJob, HaveSummary,
-  HaveTransform, NoBoard, NoFitDiag, NoSummary, Summary,
+  type Model, ConfAligned, HaveBoard, HaveFitDiag, HaveFitGeometry,
+  HaveFitSanity, HaveJob, HaveSummary, HaveTransform, NoBoard, NoFitDiag,
+  NoFitGeometry, NoFitSanity, NoSummary, Summary,
 }
 import blau_drill/ui/projection
 import gleam/float
@@ -67,6 +69,34 @@ fn rejected_model() -> Model {
     })
   let assert Ok(rejected) = job.transition(j, job.Fit(0.05))
   model.Model(..base, job: HaveJob(rejected))
+}
+
+/// A MIRRORED-but-exact fit on a real job, in the `Aligned` state. The board ->
+/// machine map mirrors X (`(bx, by) -> (-bx, by)`), so the solved transform has
+/// `det < 0` (mirrored) yet projects every captured point EXACTLY — residual 0,
+/// so a generous tolerance lands the job in `Aligned` (not `AlignmentRejected`).
+/// This is the seam for putting a KNOWN non-identity Alignment on a SOLVED-
+/// alignment model so the sanity projection has to flag `Mirrored`. (Scale,
+/// shear, tilt are all clean here, so the only flag is the mirror.)
+fn suspect_aligned_model() -> Model {
+  let base = base_model()
+  let assert HaveJob(j0) = base.job
+  let assert Ok(reg) = job.transition(j0, job.StartRegistering)
+  let j =
+    [
+      Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: -1.0),
+      Correspondence(board: #(2.0, 0.0), machine: #(-2.0, 0.0), machine_z: -1.0),
+      Correspondence(board: #(0.0, 2.0), machine: #(0.0, 2.0), machine_z: -1.0),
+      Correspondence(board: #(2.0, 2.0), machine: #(-2.0, 2.0), machine_z: -1.0),
+    ]
+    |> list.fold(reg, fn(acc, corr) {
+      let assert Ok(acc) = job.transition(acc, job.Capture(corr))
+      acc
+    })
+  // The fit is exact (residual 0), so a generous tolerance keeps it `Aligned`.
+  let assert Ok(aligned) = job.transition(j, job.Fit(1.0))
+  aligned.state |> should.equal(job.Aligned)
+  model.Model(..base, job: HaveJob(aligned))
 }
 
 /// Drive a model to `Drilling` through the REAL app: aligned → RunDryRun (dry-run
@@ -272,6 +302,96 @@ pub fn aligned_head_pos_uses_transform_test() {
     HaveTransform(_) -> Nil
     model.NoTransform -> should.fail()
   }
+}
+
+// ── fit decomposition & sanity group (ADR-0019) ───────────────────────────────
+//
+// These pin the WIRING of the F1 decomposition into the projection layer: the
+// right Alignment in → the right Opt out, with the SAME on/off gating as
+// `transform/1`. The decomposition math itself is F1's `fit_geometry_test`; here
+// we only spot-check a field or two to prove the projection passed the right
+// Alignment through.
+
+// Before a fit (a fresh/Parsed model has no solved alignment), both projections
+// are the No* variant — exactly when `transform/1` is `NoTransform`.
+pub fn fit_geometry_is_none_before_fit_test() {
+  projection.fit_geometry(base_model()) |> should.equal(NoFitGeometry)
+}
+
+pub fn fit_sanity_is_none_before_fit_test() {
+  projection.fit_sanity(base_model()) |> should.equal(NoFitSanity)
+}
+
+// After a clean identity fit (the aligned-jogging model is an identity fit), the
+// geometry is present and passes through unchanged: rotation ~0, scale ~1, not
+// mirrored. The deep math is F1-tested — this just proves the projection handed
+// the right Alignment to `decompose`.
+pub fn fit_geometry_present_for_identity_fit_test() {
+  case projection.fit_geometry(aligned_jogging_model()) {
+    HaveFitGeometry(g) -> {
+      approx(g.rotation_deg, 0.0) |> should.be_true
+      approx(g.scale_x, 1.0) |> should.be_true
+      approx(g.scale_y, 1.0) |> should.be_true
+      g.mirrored |> should.be_false
+    }
+    NoFitGeometry -> should.fail()
+  }
+}
+
+// A clean identity fit is `Plausible` (no sanity flags).
+pub fn fit_sanity_is_plausible_for_identity_fit_test() {
+  projection.fit_sanity(aligned_jogging_model())
+  |> should.equal(HaveFitSanity(Plausible))
+}
+
+// A mirrored (det < 0) but otherwise-clean fit is `Suspect([Mirrored])` — the
+// projection classifies the decomposed geometry through `default_bands()`.
+pub fn fit_sanity_is_suspect_mirrored_for_mirrored_fit_test() {
+  projection.fit_sanity(suspect_aligned_model())
+  |> should.equal(HaveFitSanity(Suspect([Mirrored])))
+}
+
+// The mirrored fixture is genuinely mirrored at the geometry layer too (so the
+// Suspect verdict above is driven by the real decomposition, not a coincidence).
+pub fn fit_geometry_is_mirrored_for_mirrored_fit_test() {
+  case projection.fit_geometry(suspect_aligned_model()) {
+    HaveFitGeometry(g) -> g.mirrored |> should.be_true
+    NoFitGeometry -> should.fail()
+  }
+}
+
+// Gating matches `transform/1` exactly: where `transform` is NoTransform, both
+// fit projections are None; where it is HaveTransform, both are present. Checked
+// across the lifecycle states the other projections exercise (before-fit,
+// rejected, aligned, drilling, done).
+pub fn fit_projections_gate_in_lockstep_with_transform_test() {
+  [
+    base_model(),
+    rejected_model(),
+    aligned_jogging_model(),
+    drilling_model(),
+    done_model(),
+  ]
+  |> list.each(fn(m) {
+    case projection.transform(m) {
+      HaveTransform(_) -> {
+        // transform present → both fit projections present.
+        case projection.fit_geometry(m) {
+          HaveFitGeometry(_) -> Nil
+          NoFitGeometry -> should.fail()
+        }
+        case projection.fit_sanity(m) {
+          HaveFitSanity(_) -> Nil
+          NoFitSanity -> should.fail()
+        }
+      }
+      model.NoTransform -> {
+        // transform absent → both fit projections absent.
+        projection.fit_geometry(m) |> should.equal(NoFitGeometry)
+        projection.fit_sanity(m) |> should.equal(NoFitSanity)
+      }
+    }
+  })
 }
 
 // ── streaming / Done group ────────────────────────────────────────────────────

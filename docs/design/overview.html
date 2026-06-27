@@ -577,6 +577,30 @@ flowchart LR
         </div>
       </section>
 
+      <!-- ============================ 12 ============================ -->
+      <section id="s12">
+        <h2><span class="num">12</span>Progressive breakdown · Fit decomposition &amp; sanity <span class="newpill">new</span></h2>
+        <h3 class="t">The geometry the fit already solved, made readable — and a second sanity signal</h3>
+        <p>The <a class="xref" href="../../CONTEXT.md#term-alignment">Alignment</a> fit already solves a 6-DOF affine <code>Transform2D</code> (rotation/scale/mirror/skew) <em>and</em> a 3-DOF board surface <code>ZPlane</code> (tilt/bend). Until now the operator saw only scalar <a class="xref" href="../../CONTEXT.md#term-residuals">Residuals</a> + a quality %. This feature <strong>decomposes those solved values into human-readable geometry</strong> and adds an <strong>advisory plausibility verdict</strong> — both pure projections, no new solver math, no stored state.</p>
+        <pre><span class="cm">// domain/fit_geometry.gleam — NEW, pure</span>
+<span class="kw">pub type</span> <span class="ty">FitGeometry</span> {
+  <span class="ty">FitGeometry</span>(rotation_deg: Float, scale_x: Float, scale_y: Float, shear_deg: Float,
+    mirrored: Bool, tilt_deg: Float, tilt_dir_deg: Float, normal: #(Float, Float, Float))
+}
+<span class="kw">pub type</span> <span class="ty">FitSanity</span> { <span class="ty">Plausible</span>  <span class="ty">Suspect</span>(reasons: <span class="ty">List</span>(<span class="ty">SanityFlag</span>)) }
+<span class="kw">pub fn</span> decompose(a: <span class="ty">Alignment</span>) -&gt; <span class="ty">FitGeometry</span>          <span class="cm">// QR/polar on the 2×2 + normal of the plane</span>
+<span class="kw">pub fn</span> classify(g: <span class="ty">FitGeometry</span>, b: <span class="ty">Bands</span>) -&gt; <span class="ty">FitSanity</span>  <span class="cm">// thresholds = tunable data</span></pre>
+        <div class="grid2">
+          <div class="panel"><h4>Orthogonal to residuals <span class="lenstag robustness">Robustness</span></h4>
+            <p>Residuals answer "is the fit <em>self-consistent</em>?". The verdict answers "is it <em>physically plausible</em>?" — catching the low-residual-but-wrong class: a mirrored solve (a Front/Back mismatch, since the side-mirror is applied <em>before</em> the fit), an off scale (wrong units), shear (a bad capture). Surfaced right where the operator decides to proceed.</p></div>
+          <div class="panel"><h4>Advisory, never a gate <span class="lenstag invariants">Invariants</span></h4>
+            <p>The verdict is display-only: it warns with reasons but <strong>never blocks</strong>. The residual stays the <em>sole</em> hard gate (<a class="xref" href="../adr/0011-energize-is-the-trust-boundary.md#adr-0011">ADR-0011</a>) — a real board can be legitimately tilted or rotated. Even <code>Mirrored</code> reads as a loud reason without locking Proceed.</p></div>
+        </div>
+        <h4>Constructible only from a solved fit <span class="lenstag invariants">Invariants</span> <span class="lenstag state">State</span></h4>
+        <p><a class="xref" href="../../CONTEXT.md#term-fitgeometry">FitGeometry</a> is built only by <code>decompose(Alignment)</code>, and <code>Alignment</code> only by <code>Alignment.fit/1</code> — so "decomposition of an unsolved fit" is unrepresentable, mirroring how <a class="xref" href="../../CONTEXT.md#term-pendingalignment">PendingAlignment</a> has no transform field. Surfaced as projections <code>project_fit_geometry</code> / <code>project_fit_sanity</code> (<a class="xref" href="../adr/0018-model-is-params-plus-machines.md#adr-0018">ADR-0018</a>), recomputed each frame, stored nowhere.</p>
+        <div class="callout win"><strong>Two view touchpoints.</strong> A verdict badge + expandable numeric breakdown in the Align quality panel, and a downhill tilt arrow on the board canvas (Align stage only). The canvas change is in the perf-sensitive hot view, so it needs real-viewport verification (CLAUDE.md), not markup inspection. Full rationale + decomposition math: <a class="xref" href="../adr/0019-fit-decomposition-and-sanity.md#adr-0019">ADR-0019</a>; terms <a class="xref" href="../../CONTEXT.md#term-fitgeometry">FitGeometry</a> / <a class="xref" href="../../CONTEXT.md#term-fitsanity">FitSanity</a>.</div>
+      </section>
+
       <div class="footer">
         blau-drill · consolidated architecture overview · designed against the five lenses
         (depth · composition · state · invariants · robustness). Single-operator pure-browser app

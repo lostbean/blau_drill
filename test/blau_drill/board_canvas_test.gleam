@@ -6,10 +6,13 @@
 //// `project` and `unproject` being exact inverses, so these tests pin
 //// project∘unproject round-trips to identity.
 
-import blau_drill/ui/board_canvas
-import blau_drill/ui/model.{BBox}
+import blau_drill/ui/board_canvas.{CanvasData}
+import blau_drill/ui/model.{BBox, ConfNone, Head, NoHeadPos}
 import gleam/float
+import gleam/option.{None, Some}
+import gleam/string
 import gleeunit/should
+import lustre/element
 
 fn approx(a: Float, b: Float) -> Bool {
   float.absolute_value(a -. b) <. 0.000001
@@ -51,4 +54,53 @@ pub fn projection_does_not_mirror_x_test() {
   approx(right.0, 70.0) |> should.be_true
   // Distinct points stay distinct (the mapping is a bijection, no collapse).
   { left.0 == right.0 } |> should.be_false
+}
+
+// ── downhill tilt arrow render guard (Align + non-flat only) ──────────────────
+// A bare CanvasData fixture varied only by stage/tilt; the arrow is rendered iff
+// stage == Align AND tilt is Some with a non-flat magnitude. We grep the SVG
+// string for the "tilt-arrow" class — see board_canvas.tilt_arrow.
+
+fn base_data(
+  stage: model.Screen,
+  tilt: option.Option(#(Float, Float)),
+) -> board_canvas.CanvasData {
+  CanvasData(
+    holes: [],
+    outline: [],
+    fiducials: [],
+    tools: [],
+    bbox: bbox(),
+    head: Head(0.0, 0.0, 0.0),
+    head_pos: NoHeadPos,
+    head_confidence: ConfNone,
+    stage: stage,
+    zoom: 1.0,
+    point_residuals: [],
+    worst_index: -1,
+    tilt: tilt,
+  )
+}
+
+fn renders_arrow(data: board_canvas.CanvasData) -> Bool {
+  board_canvas.view(data)
+  |> element.to_string
+  |> string.contains("tilt-arrow")
+}
+
+pub fn tilt_arrow_drawn_in_align_when_tilted_test() {
+  renders_arrow(base_data(model.Align, Some(#(5.0, 0.0)))) |> should.be_true
+}
+
+pub fn tilt_arrow_absent_without_tilt_test() {
+  renders_arrow(base_data(model.Align, None)) |> should.be_false
+}
+
+pub fn tilt_arrow_absent_outside_align_test() {
+  renders_arrow(base_data(model.DryRun, Some(#(5.0, 0.0)))) |> should.be_false
+}
+
+pub fn tilt_arrow_absent_when_flat_test() {
+  // A near-zero tilt is below the epsilon — a flat board gets no arrow.
+  renders_arrow(base_data(model.Align, Some(#(0.01, 0.0)))) |> should.be_false
 }

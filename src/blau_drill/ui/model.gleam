@@ -35,6 +35,7 @@
 import blau_drill/control/controller
 import blau_drill/domain/board_model
 import blau_drill/domain/config
+import blau_drill/domain/fit_geometry
 import blau_drill/domain/job
 import blau_drill/domain/transform2d.{type Point}
 
@@ -225,6 +226,24 @@ pub type WorstOpt {
 pub type FitDiagOpt {
   NoFitDiag
   HaveFitDiag(FitDiag)
+}
+
+// ── Fit decomposition & sanity (ADR-0019) ───────────────────────────────────
+
+/// The decomposed geometry of a solved fit, or `NoFitGeometry` before a fit. A
+/// pure PROJECTION of `job.alignment` (ADR-0018) — see `ui/projection`. Wraps the
+/// domain `fit_geometry.FitGeometry` so the views never touch the domain type.
+pub type FitGeometryOpt {
+  NoFitGeometry
+  HaveFitGeometry(fit_geometry.FitGeometry)
+}
+
+/// The advisory sanity verdict over the decomposed geometry, or `NoFitSanity`
+/// before a fit. A pure PROJECTION classifying `FitGeometryOpt` with the default
+/// bands (ADR-0019; advisory only, never gates).
+pub type FitSanityOpt {
+  NoFitSanity
+  HaveFitSanity(fit_geometry.FitSanity)
 }
 
 // ── Live head ───────────────────────────────────────────────────────────────

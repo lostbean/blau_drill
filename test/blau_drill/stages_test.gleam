@@ -11,6 +11,7 @@
 //// the view boundary.
 
 import blau_drill/domain/correspondence.{type Correspondence, Correspondence}
+import blau_drill/domain/fit_geometry.{Mirrored, ScaleOff, Sheared, Tilted}
 import blau_drill/domain/job
 import blau_drill/test_support.{base_model}
 import blau_drill/ui/model.{type Model, HaveJob}
@@ -150,4 +151,106 @@ pub fn restart_button_disabled_when_parsed_test() {
   // base_model() is a fresh Parsed job → RestartAlignmentE is illegal → disabled.
   let html = render_align(base_model())
   restart_is_disabled(html) |> should.be_true
+}
+
+// ── F3: advisory fit verdict + breakdown (ADR-0019) ──────────────────────────
+
+// sanity_reason_text: the exact human-readable line per SanityFlag variant.
+pub fn sanity_reason_text_mirrored_test() {
+  stages.sanity_reason_text(Mirrored)
+  |> should.equal("board may be mirrored — check Front/Back")
+}
+
+pub fn sanity_reason_text_scale_x_test() {
+  stages.sanity_reason_text(ScaleOff("x", 1.07))
+  |> should.equal("scale X 1.07×")
+}
+
+pub fn sanity_reason_text_scale_y_test() {
+  stages.sanity_reason_text(ScaleOff("y", 0.95))
+  |> should.equal("scale Y 0.95×")
+}
+
+pub fn sanity_reason_text_sheared_test() {
+  stages.sanity_reason_text(Sheared(3.5))
+  |> should.equal("shear 3.5° (check captures)")
+}
+
+pub fn sanity_reason_text_tilted_test() {
+  stages.sanity_reason_text(Tilted(4.25))
+  |> should.equal("board tilted 4.25°")
+}
+
+// A MIRRORED-but-exact fit on a real job, in `Aligned`. The board→machine map
+// mirrors X (`(bx, by) -> (-bx, by)`), so the solved transform has `det < 0`
+// (mirrored) yet projects every captured point EXACTLY — residual 0, so a
+// generous tolerance lands the job in `Aligned` (Proceed enabled), with the only
+// sanity flag being `Mirrored` (a Suspect verdict). Lifted from projection_test's
+// `suspect_aligned_model` (the F2 fixture).
+fn suspect_aligned_model() -> Model {
+  let base = base_model()
+  let assert HaveJob(j0) = base.job
+  let assert Ok(reg) = job.transition(j0, job.StartRegistering)
+  let j =
+    [
+      Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: -1.0),
+      Correspondence(board: #(2.0, 0.0), machine: #(-2.0, 0.0), machine_z: -1.0),
+      Correspondence(board: #(0.0, 2.0), machine: #(0.0, 2.0), machine_z: -1.0),
+      Correspondence(board: #(2.0, 2.0), machine: #(-2.0, 2.0), machine_z: -1.0),
+    ]
+    |> list.fold(reg, fn(acc, corr) {
+      let assert Ok(acc) = job.transition(acc, job.Capture(corr))
+      acc
+    })
+  // The fit is exact (residual 0), so a generous tolerance keeps it `Aligned`.
+  let assert Ok(aligned) = job.transition(j, job.Fit(1.0))
+  model.Model(..base, job: HaveJob(aligned))
+}
+
+// Render smoke: a clean (identity) aligned fit renders the Plausible verdict and
+// the numeric breakdown (tilt + scale labels with values).
+pub fn align_renders_plausible_verdict_test() {
+  let html = render_align(aligned_model())
+  string.contains(html, "Plausible") |> should.be_true
+  // breakdown is present (labels + a scale value)
+  string.contains(html, "tilt") |> should.be_true
+  string.contains(html, "scale X") |> should.be_true
+  string.contains(html, "1.0×") |> should.be_true
+}
+
+// Render smoke: a mirrored aligned fit renders the Suspect verdict and the
+// mirror reason line.
+pub fn align_renders_suspect_mirrored_verdict_test() {
+  let html = render_align(suspect_aligned_model())
+  string.contains(html, "Suspect") |> should.be_true
+  string.contains(html, "mirrored") |> should.be_true
+  // the breakdown shows mirror yes
+  string.contains(html, "yes") |> should.be_true
+}
+
+// The Proceed-to-Dry-run button renders with its label; the disabled form (when
+// present) puts `disabled` immediately before the type attribute.
+const proceed_marker = "type=\"button\">Proceed to Dry-run"
+
+const proceed_disabled = "disabled type=\"button\">Proceed to Dry-run"
+
+fn proceed_is_enabled(html: String) -> Bool {
+  string.contains(html, proceed_marker)
+  && !string.contains(html, proceed_disabled)
+}
+
+// THE ADVISORY INVARIANT: a Suspect verdict must NOT gate Proceed. Both a clean
+// (Plausible) aligned fit and a mirrored (Suspect) aligned fit have residual 0
+// (well within tolerance), so for the SAME good residual the Proceed button is
+// ENABLED regardless of the verdict — the verdict is display-only. This pins that
+// surfacing the verdict changed no gating (ADR-0011/0019).
+pub fn suspect_verdict_does_not_gate_proceed_test() {
+  let plausible_html = render_align(aligned_model())
+  let suspect_html = render_align(suspect_aligned_model())
+  // sanity: the two fixtures really do differ in verdict
+  string.contains(plausible_html, "Plausible") |> should.be_true
+  string.contains(suspect_html, "Suspect") |> should.be_true
+  // identical Proceed enablement: both ENABLED for a good residual.
+  proceed_is_enabled(plausible_html) |> should.be_true
+  proceed_is_enabled(suspect_html) |> should.be_true
 }

@@ -116,7 +116,7 @@ offset all collapse into it.
 _Avoid:_ "offset" or "G92 offset" — those describe only the translation part; a
 Transform2D is the whole affine.
 
-### Residuals
+### Residuals {#term-residuals}
 
 The per-point fit error of an `Alignment`, reported as `%{rms, max}` in
 millimetres. This is the **honesty/trust signal**: it tells the operator whether
@@ -124,6 +124,32 @@ the fit is trustworthy *before* the bit touches copper. `residuals.max` gates th
 real run (see **residual gate**).
 _Avoid:_ "error score" / "accuracy %"; the UI may show a quality percentage, but
 the domain value is `residuals` (rms + max).
+
+### FitGeometry {#term-fitgeometry}
+
+The **decomposition** of a solved `Alignment` into human-readable geometry:
+`rotation_deg`, `scale_x`/`scale_y`, `shear_deg`, `mirrored` (bool),
+`tilt_deg`, `tilt_dir_deg` (downhill azimuth), and the surface `normal`. A pure
+value computed by `fit_geometry.decompose/1` from the already-solved
+`Transform2D` (the 2×2 linear part → rotation/scale/shear/mirror) and `ZPlane`
+(slopes → tilt/normal); **no new solver math**. Constructible **only** from an
+`Alignment`, so a decomposition of an unsolved fit is unrepresentable (ADR-0019).
+Surfaced as a projection (`project_fit_geometry`), never stored (ADR-0018).
+_Avoid:_ treating it as part of `Alignment` — it is a derived view of one, not a
+field on it.
+
+### FitSanity {#term-fitsanity}
+
+An **advisory** plausibility verdict over a `FitGeometry`: `Plausible` or
+`Suspect(reasons)` where each reason is a `SanityFlag` (`ScaleOff` / `Sheared` /
+`Mirrored` / `Tilted`). Computed by `fit_geometry.classify/2` against tunable
+`Bands` thresholds. It answers "is the fit **physically plausible**?" — orthogonal
+to `Residuals`, which answers "is it **self-consistent**?". A low-residual fit can
+still be `Suspect` (e.g. a mirrored solve from a Front/Back mismatch). It is
+**display-only**: it warns but **never gates** — the `Residuals` (residual gate)
+stays the sole hard gate for proceeding (ADR-0019, ADR-0011).
+_Avoid:_ describing it as a "second trust gate" — it is a hint, not a gate; only
+the residual blocks the run.
 
 ### PrinterConnection {#term-printerconnection}
 

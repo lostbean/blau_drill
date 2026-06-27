@@ -9,6 +9,10 @@
 ////     two-step gate routed through dry-run.
 
 import blau_drill/control/controller
+import blau_drill/domain/fit_geometry.{
+  type FitGeometry, type SanityFlag, Mirrored, Plausible, ScaleOff, Sheared,
+  Suspect, Tilted,
+}
 import blau_drill/domain/job
 import blau_drill/ui/board_canvas.{type CanvasData, CanvasData}
 import blau_drill/ui/mock
@@ -26,6 +30,7 @@ import blau_drill/ui/session
 import gleam/float
 import gleam/int
 import gleam/list
+import gleam/option
 import lustre/attribute as a
 import lustre/element.{type Element}
 import lustre/element/html as h
@@ -75,6 +80,13 @@ fn canvas_data(model: Model) -> CanvasData {
     zoom: model.zoom,
     point_residuals: point_residuals,
     worst_index: worst_index,
+    // The downhill tilt arrow's source: the decomposed fit's tilt magnitude +
+    // azimuth, or None before a fit. A pure projection (ADR-0018) — the canvas
+    // draws it only in the Align stage and only when non-flat.
+    tilt: case projection.fit_geometry(model) {
+      model.HaveFitGeometry(g) -> option.Some(#(g.tilt_deg, g.tilt_dir_deg))
+      model.NoFitGeometry -> option.None
+    },
   )
 }
 
@@ -621,8 +633,87 @@ fn quality_panel(model: Model) -> Element(model.Msg) {
             <> " mm",
           ),
         ]),
+        // Advisory fit verdict + numeric breakdown (ADR-0019). DISPLAY ONLY — a
+        // Suspect verdict warns the operator but does NOT gate Proceed (the
+        // residual stays the sole hard gate). No stored state: both are pure
+        // projections of the solved fit (ADR-0018).
+        verdict_badge(model),
+        fit_breakdown(model),
       ])
     }
+  }
+}
+
+// The advisory verdict badge from the fit-sanity projection. `Plausible` reads as
+// a green confirmation; `Suspect` is an amber warning followed by one
+// human-readable line per `SanityFlag`. `NoFitSanity` (unreachable inside the
+// quality>=0 branch) renders nothing — kept total.
+fn verdict_badge(model: Model) -> Element(model.Msg) {
+  case projection.fit_sanity(model) {
+    model.HaveFitSanity(Plausible) ->
+      h.div([a.class("verdict plausible")], [
+        h.span([a.class("verdict-badge")], [h.text("✓ Plausible")]),
+      ])
+    model.HaveFitSanity(Suspect(reasons)) ->
+      h.div(
+        [a.class("verdict suspect")],
+        [h.span([a.class("verdict-badge")], [h.text("⚠ Suspect")])]
+          |> list.append(
+            list.map(reasons, fn(flag) {
+              h.p([a.class("verdict-reason")], [
+                h.text(sanity_reason_text(flag)),
+              ])
+            }),
+          ),
+      )
+    model.NoFitSanity -> element.none()
+  }
+}
+
+/// The human-readable advisory line for one `SanityFlag`. Pure (no model) so the
+/// exact wording is unit-tested per variant.
+pub fn sanity_reason_text(flag: SanityFlag) -> String {
+  case flag {
+    Mirrored -> "board may be mirrored — check Front/Back"
+    ScaleOff("x", v) -> "scale X " <> fmt2(v) <> "×"
+    ScaleOff("y", v) -> "scale Y " <> fmt2(v) <> "×"
+    ScaleOff(axis, v) -> "scale " <> axis <> " " <> fmt2(v) <> "×"
+    Sheared(d) -> "shear " <> fmt3(d) <> "° (check captures)"
+    Tilted(d) -> "board tilted " <> fmt3(d) <> "°"
+  }
+}
+
+// The always-visible numeric breakdown of the eight decomposed quantities
+// (ADR-0019). Always-visible (not a toggle): a disclosure toggle would need
+// stored Model state, which is forbidden (ADR-0018), and the bench display has
+// room. Laid out as labelled `summary-cell` rows inside a compact grid.
+fn fit_breakdown(model: Model) -> Element(model.Msg) {
+  case projection.fit_geometry(model) {
+    model.HaveFitGeometry(g) ->
+      h.div([a.class("fit-breakdown")], [
+        breakdown_cell("tilt", fmt3(g.tilt_deg) <> "°"),
+        breakdown_cell("toward", fmt0(g.tilt_dir_deg) <> "°"),
+        breakdown_cell("rotation", fmt3(g.rotation_deg) <> "°"),
+        breakdown_cell("shear", fmt3(g.shear_deg) <> "°"),
+        breakdown_cell("scale X", fmt2(g.scale_x) <> "×"),
+        breakdown_cell("scale Y", fmt2(g.scale_y) <> "×"),
+        breakdown_cell("mirror", mirror_label(g)),
+      ])
+    model.NoFitGeometry -> element.none()
+  }
+}
+
+fn breakdown_cell(label: String, value: String) -> Element(model.Msg) {
+  h.div([a.class("breakdown-cell")], [
+    h.span([a.class("label")], [h.text(label)]),
+    h.span([a.class("value")], [h.text(value)]),
+  ])
+}
+
+fn mirror_label(g: FitGeometry) -> String {
+  case g.mirrored {
+    True -> "yes"
+    False -> "no"
   }
 }
 
@@ -1606,6 +1697,12 @@ fn fmt2(v: Float) -> String {
 fn fmt3(v: Float) -> String {
   let scaled = int.to_float(float.round(v *. 1000.0)) /. 1000.0
   float.to_string(scaled)
+}
+
+// Round to a whole number (for the tilt azimuth, where sub-degree precision is
+// noise).
+fn fmt0(v: Float) -> String {
+  int.to_string(float.round(v))
 }
 
 // A jog step / diameter as a tidy label: 0.1, 1.0, 10, 1.2 …

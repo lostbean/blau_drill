@@ -23,6 +23,7 @@
 ////     projection here).
 ////   * Zoom buttons → `ZoomIn` / `ZoomOut` / `ResetView`.
 
+import blau_drill/domain/fit_geometry
 import blau_drill/ui/model.{
   type Fiducial, type Head, type HeadConfidence, type HeadPosOpt, type Hole,
   type PointResidual, type Tool, Active, Align, Captured, ConfAligned,
@@ -79,6 +80,10 @@ pub type CanvasData {
     /// The fiducial index of the WORST residual, or -1 when none (no fit yet).
     /// The marker at this index is highlighted distinctly.
     worst_index: Int,
+    /// The fitted board tilt for the downhill arrow: `#(tilt_deg, tilt_dir_deg)`,
+    /// or `None` before a fit. Drawn only in the Align stage and only when the
+    /// board is non-flat. From `projection.fit_geometry`.
+    tilt: Option(#(Float, Float)),
   )
 }
 
@@ -250,6 +255,7 @@ pub fn view(data: CanvasData) -> Element(model.Msg) {
           )
         }),
         head_marker(sp, data.head_pos, data.head_confidence, mk),
+        tilt_arrow(sp, data.bbox, data.stage, data.tilt, mk),
       ]),
     )
 
@@ -647,6 +653,100 @@ fn head_tick(
     a.attribute("stroke-width", sw),
     a.attribute("stroke-linecap", "round"),
   ])
+}
+
+// ── downhill tilt arrow (Align only) ─────────────────────────────────────────
+
+// Minimum tilt (degrees) worth an arrow. Below this the board is effectively
+// flat and an arrow would point in a meaningless direction.
+const tilt_epsilon_deg = 0.05
+
+// A downhill tilt arrow centred on the board, drawn ONLY in the Align stage and
+// ONLY for a non-flat fit (tilt above `tilt_epsilon_deg`). It points downhill in
+// the direction `tilt_dir_deg` (board azimuth: 0 = +X, 90 = +Y). The arrow is a
+// PURE render of `projection.fit_geometry` — no stored Model state (ADR-0018).
+//
+// AZIMUTH → SCREEN: `tilt_dir_deg` is a BOARD-space azimuth, so the downhill
+// board-unit vector is `(cos dir, sin dir)` (via `fit_geometry.downhill_unit`).
+// The canvas Y is FLIPPED (board +Y is up, SVG +Y down — see `project`), so the
+// screen delta NEGATES the Y component: board `(ux, uy)` → screen `(ux, -uy)`.
+// Hence dir=0 points screen-right (board +X) and dir=90 points screen-UP
+// (board +Y). The anchor is the projected board centre.
+fn tilt_arrow(
+  sp: Span,
+  bbox: model.BBox,
+  stage: model.Screen,
+  tilt: Option(#(Float, Float)),
+  mk: Float,
+) -> List(Element(model.Msg)) {
+  case stage, tilt {
+    Align, Some(#(deg, dir)) if deg >. tilt_epsilon_deg -> {
+      // Anchor: projected board centre.
+      let cx = { bbox.minx +. bbox.maxx } /. 2.0
+      let cy = { bbox.miny +. bbox.maxy } /. 2.0
+      let #(ax, ay) = project(sp, cx, cy)
+
+      // Board downhill unit vector, then flip Y for the screen.
+      let #(ux, uy) = fit_geometry.downhill_unit(dir)
+      let sx = ux
+      let sy = float.negate(uy)
+
+      // On-screen length: a constant base (via mk) plus a small, clamped bump
+      // with tilt magnitude, so a steeper tilt reads as a longer arrow.
+      let len = { 6.0 +. float.min(deg, 12.0) *. 0.5 } *. mk
+      let tip_x = ax +. sx *. len
+      let tip_y = ay +. sy *. len
+
+      // Arrowhead: two short barbs swept back from the tip. Rotate the downhill
+      // unit by ±150° (cos150 ≈ -0.866, sin150 ≈ 0.5) about the tip, in screen
+      // space, scaled to a small head length.
+      let head = 2.2 *. mk
+      // (sx, sy) rotated by +150° and -150° in screen coords.
+      let b1x = sx *. -0.8660254 -. sy *. 0.5
+      let b1y = sx *. 0.5 +. sy *. -0.8660254
+      let b2x = sx *. -0.8660254 -. sy *. -0.5
+      let b2y = sx *. -0.5 +. sy *. -0.8660254
+
+      [
+        svg.g([a.class("tilt-arrow")], [
+          // shaft
+          svg.line([
+            a.attribute("x1", num(ax)),
+            a.attribute("y1", num(ay)),
+            a.attribute("x2", num(tip_x)),
+            a.attribute("y2", num(tip_y)),
+            a.attribute("stroke-width", num(0.4 *. mk)),
+            a.attribute("stroke-linecap", "round"),
+          ]),
+          // arrowhead barb 1
+          svg.line([
+            a.attribute("x1", num(tip_x)),
+            a.attribute("y1", num(tip_y)),
+            a.attribute("x2", num(tip_x +. b1x *. head)),
+            a.attribute("y2", num(tip_y +. b1y *. head)),
+            a.attribute("stroke-width", num(0.4 *. mk)),
+            a.attribute("stroke-linecap", "round"),
+          ]),
+          // arrowhead barb 2
+          svg.line([
+            a.attribute("x1", num(tip_x)),
+            a.attribute("y1", num(tip_y)),
+            a.attribute("x2", num(tip_x +. b2x *. head)),
+            a.attribute("y2", num(tip_y +. b2y *. head)),
+            a.attribute("stroke-width", num(0.4 *. mk)),
+            a.attribute("stroke-linecap", "round"),
+          ]),
+          // anchor dot
+          svg.circle([
+            a.attribute("cx", num(ax)),
+            a.attribute("cy", num(ay)),
+            a.attribute("r", num(0.4 *. mk)),
+          ]),
+        ]),
+      ]
+    }
+    _, _ -> []
+  }
 }
 
 // ── overlays: caption / zoom / legend ───────────────────────────────────────

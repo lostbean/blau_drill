@@ -33,6 +33,7 @@ import blau_drill/control/printer
 import blau_drill/domain/alignment
 import blau_drill/domain/board_model
 import blau_drill/domain/config
+import blau_drill/domain/fit_geometry
 import blau_drill/domain/gcode_program
 import blau_drill/domain/job
 import blau_drill/domain/transform2d
@@ -40,8 +41,9 @@ import blau_drill/ui/bridge
 import blau_drill/ui/model.{
   type Head, type Model, BitChange, Capture, Captured, ConfAligned, ConfEstimate,
   ConfNone, ConfRough, DrillMode, DryRunMode, Fiducial, HaveBitChange, HaveBoard,
-  HaveFitDiag, HaveHeadPos, HaveJob, HaveProgress, HaveSummary, HaveTransform,
-  NoBitChange, NoBoard, NoFitDiag, NoHeadPos, NoJob, NoProgress, NoSummary,
+  HaveFitDiag, HaveFitGeometry, HaveFitSanity, HaveHeadPos, HaveJob,
+  HaveProgress, HaveSummary, HaveTransform, NoBitChange, NoBoard, NoFitDiag,
+  NoFitGeometry, NoFitSanity, NoHeadPos, NoJob, NoProgress, NoSummary,
   NoTransform, Progress, Summary,
 }
 import gleam/dict
@@ -211,6 +213,38 @@ pub fn fit_diag(model: Model) -> model.FitDiagOpt {
         _, _ -> NoFitDiag
       }
     NoJob -> NoFitDiag
+  }
+}
+
+/// The decomposed geometry of the solved fit (ADR-0019), or `NoFitGeometry`
+/// before a fit. PROJECTED from `job.alignment` with the SAME gating as
+/// `transform/1` — a solved (trusted) `Alignment` exists only in
+/// `Aligned`/`DryRun`/`Drilling`/`Done`, so this projection turns on/off in
+/// lockstep with `transform`. The decomposition itself is pure (no math here).
+pub fn fit_geometry(model: Model) -> model.FitGeometryOpt {
+  case model.job {
+    HaveJob(j) ->
+      case j.state, j.alignment {
+        job.Aligned, Some(al)
+        | job.DryRun, Some(al)
+        | job.Drilling, Some(al)
+        | job.Done, Some(al)
+        -> HaveFitGeometry(fit_geometry.decompose(al))
+        _, _ -> NoFitGeometry
+      }
+    NoJob -> NoFitGeometry
+  }
+}
+
+/// The advisory sanity verdict over the decomposed geometry (ADR-0019), or
+/// `NoFitSanity` before a fit. Classifies `fit_geometry`'s result with
+/// `fit_geometry.default_bands()`, so it is present iff `fit_geometry` is.
+/// Advisory only — it never gates (the residuals stay the sole hard gate).
+pub fn fit_sanity(model: Model) -> model.FitSanityOpt {
+  case fit_geometry(model) {
+    HaveFitGeometry(g) ->
+      HaveFitSanity(fit_geometry.classify(g, fit_geometry.default_bands()))
+    NoFitGeometry -> NoFitSanity
   }
 }
 
