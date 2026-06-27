@@ -633,6 +633,12 @@ fn quality_panel(model: Model) -> Element(model.Msg) {
             <> " mm",
           ),
         ]),
+        // The Z-plane residual line (ADR-0020). An Aligned fit means Z passed the
+        // gate too (or, at < 4 captures, Z was unverified — the fit is valid on XY
+        // but its depth is unchecked, surfaced as a muted-amber nudge to capture a
+        // 4th fiducial). NOT an error here — a Z-FAILING fit lands in
+        // AlignmentRejected, whose box shows the over-tolerance Z number instead.
+        z_quality_line(model),
         // Advisory fit verdict + numeric breakdown (ADR-0019). DISPLAY ONLY — a
         // Suspect verdict warns the operator but does NOT gate Proceed (the
         // residual stays the sole hard gate). No stored state: both are pure
@@ -641,6 +647,37 @@ fn quality_panel(model: Model) -> Element(model.Msg) {
         fit_breakdown(model),
       ])
     }
+  }
+}
+
+// The Z-plane residual line for the quality panel (ADR-0020). The quality panel
+// co-renders with the rejected box (quality is computed whenever residuals exist),
+// so the Z verdict depends on which state we're in:
+//   * REJECTED (Z over tolerance, n >= 4): say nothing here — the rejected box
+//     below owns the Z message ("Z residual … over tolerance"). A green
+//     "Z residual" number here would contradict it.
+//   * >= 4 captures AND not rejected (an Aligned fit): Z is meaningful and passed
+//     the gate, so show the verified green residual number.
+//   * < 4 captures: a plane fits the points exactly, so the Z residual proves
+//     nothing — a muted-amber "unverified" nudge to capture a 4th fiducial,
+//     WITHOUT implying the fit is wrong (it is valid on XY).
+fn z_quality_line(model: Model) -> Element(model.Msg) {
+  let rejected = projection.alignment_rejected(model)
+  case projection.capture_count(model) >= 4, rejected {
+    // Z-rejected: the rejected box carries the Z message; suppress it here.
+    True, True -> element.none()
+    // Verified Z (Aligned, n >= 4): the gate-passed residual number.
+    True, False ->
+      h.p([a.class("residuals z-residual")], [
+        h.text(
+          "Z residual max " <> fmt3(projection.z_residual_max(model)) <> " mm",
+        ),
+      ])
+    // Z unverified (< 4 captures) — a non-error depth nudge.
+    False, _ ->
+      h.p([a.class("residuals z-unverified")], [
+        h.text("Z unverified — capture a 4th fiducial to check depth"),
+      ])
   }
 }
 
@@ -745,6 +782,12 @@ fn rejected_box(model: Model) -> Element(model.Msg) {
             h.p([a.class("rejected-title")], [h.text("⚠ Alignment rejected")]),
             h.p([a.class("rejected-hint")], [h.text(hint)]),
           ],
+          // The Z residual when DEPTH is the failing axis (ADR-0020): an
+          // XY-perfect fit can be rejected solely for an inconsistent capture
+          // height. Show the over-tolerance Z number so the operator sees the
+          // rejection is about depth, not XY. (If both fail, both lines show — the
+          // XY one rides the per-point residual list + hint below.)
+          rejected_z_line(model),
           points,
           [
             h.button(
@@ -786,6 +829,25 @@ fn rejected_box(model: Model) -> Element(model.Msg) {
         ]),
       )
     }
+  }
+}
+
+// The over-tolerance Z residual line for a Z-rejected fit (ADR-0020), or nothing
+// when Z is not the failing axis. Z is the failing residual only when it is
+// MEANINGFUL (>= 4 captures) AND over tolerance — exactly the condition that lands
+// an XY-passing fit in AlignmentRejected for DEPTH. Returned as a list so it
+// flattens into the rejected-box body (empty list = no line, e.g. a pure-XY
+// failure where Z passed / is unverified).
+fn rejected_z_line(model: Model) -> List(Element(model.Msg)) {
+  let z_max = projection.z_residual_max(model)
+  let over = z_max >. projection.tolerance(model)
+  case projection.capture_count(model) >= 4 && over {
+    True -> [
+      h.p([a.class("rejected-hint z-rejected")], [
+        h.text("Z residual " <> fmt3(z_max) <> " mm (over tolerance)"),
+      ]),
+    ]
+    False -> []
   }
 }
 

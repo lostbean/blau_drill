@@ -400,6 +400,126 @@ pub fn degenerate_with_z_still_degenerate_test() {
   |> should.equal(Error(Degenerate))
 }
 
+// --- Z residual (the plane's honesty signal, ADR-0020) ----------------------
+
+// z_point_errors over a flat plane whose constant matches every captured Z is
+// ~0 everywhere (the captures lie on the plane).
+pub fn z_point_errors_flat_plane_zero_test() {
+  let plane = ZPlane(a: 0.0, b: 0.0, c: 2.0)
+  let corrs = [
+    corr_with_z(0.0, 0.0, 2.0),
+    corr_with_z(10.0, 0.0, 2.0),
+    corr_with_z(5.0, 7.0, 2.0),
+  ]
+  let errors = alignment.z_point_errors(plane, corrs)
+  errors
+  |> each(fn(e) { close(e, 0.0, prop_delta) |> should.be_true })
+}
+
+// z_point_errors flags a capture sitting off the plane by exactly its offset.
+pub fn z_point_errors_offset_point_test() {
+  let plane = ZPlane(a: 0.0, b: 0.0, c: 2.0)
+  // Second capture is 1.5 mm above the plane; the others lie on it.
+  let corrs = [
+    corr_with_z(0.0, 0.0, 2.0),
+    corr_with_z(10.0, 0.0, 3.5),
+    corr_with_z(5.0, 7.0, 2.0),
+  ]
+  let errors = alignment.z_point_errors(plane, corrs)
+  let assert [e0, e1, e2] = errors
+  close(e0, 0.0, prop_delta) |> should.be_true
+  close(e1, 1.5, prop_delta) |> should.be_true
+  close(e2, 0.0, prop_delta) |> should.be_true
+}
+
+// THE 3-point blind spot: with exactly 3 captures a plane fits them exactly, so
+// the Z residual is ~0 regardless of how inconsistent the captured heights are.
+// n is carried through as 3 so the gate (Z2) can mark Z "unverified".
+pub fn three_captures_z_max_zero_with_arbitrary_z_test() {
+  let corrs = [
+    corr_with_z(0.0, 0.0, 3.0),
+    corr_with_z(10.0, 0.0, 9.0),
+    corr_with_z(0.0, 10.0, -4.0),
+  ]
+  let assert Ok(Alignment(residuals: r, ..)) = alignment.fit(corrs)
+  close(r.z_max, 0.0, prop_delta) |> should.be_true
+  close(r.z_rms, 0.0, prop_delta) |> should.be_true
+  r.n |> should.equal(3)
+}
+
+// THE scenario (ADR-0020): 4 captures where two same-side fiducials were jogged
+// to wildly different heights (Z3 vs Z9). The least-squares plane cannot pass
+// through an inconsistent 4th point, so z_max blows past any sane tolerance.
+pub fn four_captures_inconsistent_z_large_z_max_test() {
+  // Three coplanar captures define a flat plane at Z=3; the 4th, on the same
+  // side, was jogged to Z=9 (a ~6 mm discrepancy) — the Z3/Z9 garbage capture.
+  let corrs = [
+    corr_with_z(0.0, 0.0, 3.0),
+    corr_with_z(10.0, 0.0, 3.0),
+    corr_with_z(0.0, 10.0, 3.0),
+    corr_with_z(10.0, 10.0, 9.0),
+  ]
+  let assert Ok(Alignment(residuals: r, ..)) = alignment.fit(corrs)
+  { r.z_max >. 1.0 } |> should.be_true
+  r.n |> should.equal(4)
+}
+
+// 4 consistent (coplanar) captures fit the plane exactly -> z_max ~0, n == 4.
+pub fn four_captures_consistent_z_small_z_max_test() {
+  // A genuine tilt: z = 0.2*bx + 0.1*by + 1.0, sampled at four points that all
+  // lie on it. The plane fits them all -> residual ~0.
+  let plane_z = fn(bx: Float, by: Float) { 0.2 *. bx +. 0.1 *. by +. 1.0 }
+  let corrs = [
+    corr_with_z(0.0, 0.0, plane_z(0.0, 0.0)),
+    corr_with_z(10.0, 0.0, plane_z(10.0, 0.0)),
+    corr_with_z(0.0, 10.0, plane_z(0.0, 10.0)),
+    corr_with_z(10.0, 10.0, plane_z(10.0, 10.0)),
+  ]
+  let assert Ok(Alignment(residuals: r, ..)) = alignment.fit(corrs)
+  close(r.z_max, 0.0, prop_delta) |> should.be_true
+  close(r.z_rms, 0.0, prop_delta) |> should.be_true
+  r.n |> should.equal(4)
+}
+
+// The XY residual is UNCHANGED by the Z addition: a known 4-point fit with a
+// perturbed XY capture but inconsistent Z still reports the same XY rms/max as
+// the perturbation alone drives, independent of the captured heights.
+pub fn xy_residual_unchanged_by_z_test() {
+  let source = Transform2D(a: -1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0)
+  let boards = [#(0.0, 0.0), #(10.0, 0.0), #(0.0, 10.0), #(10.0, 10.0)]
+
+  // Build correspondences with an XY perturbation on the first point and
+  // ARBITRARY (inconsistent) captured Z on every point.
+  let delta_perturb = 0.4
+  let zs = [3.0, 9.0, -2.0, 5.0]
+  let corrs =
+    list.map2(boards, zs, fn(b, z) {
+      let #(mx, my) = t2d.apply(source, b)
+      Correspondence(board: b, machine: #(mx, my), machine_z: z)
+    })
+  let assert [
+    Correspondence(board: b0, machine: #(m0x, m0y), machine_z: z0),
+    ..rest
+  ] = corrs
+  let perturbed = [
+    Correspondence(
+      board: b0,
+      machine: #(m0x +. delta_perturb, m0y),
+      machine_z: z0,
+    ),
+    ..rest
+  ]
+
+  let assert Ok(Alignment(residuals: r, ..)) = alignment.fit(perturbed)
+  // The XY signal is exactly the perturbation-driven residual (same as the
+  // pre-Z `perturbation_drives_residual_max_test`): wild Z does not touch it.
+  { r.max >. 0.0 } |> should.be_true
+  { r.rms >. 0.0 } |> should.be_true
+  { r.rms <. r.max +. 1.0e-9 } |> should.be_true
+  { r.max <=. delta_perturb +. 1.0e-9 } |> should.be_true
+  { r.max >=. delta_perturb /. 4.0 -. 1.0e-12 } |> should.be_true
+}
+
 // --- helper -----------------------------------------------------------------
 
 fn each(xs: List(a), f: fn(a) -> b) -> Nil {

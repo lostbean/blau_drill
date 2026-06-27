@@ -118,12 +118,18 @@ Transform2D is the whole affine.
 
 ### Residuals {#term-residuals}
 
-The per-point fit error of an `Alignment`, reported as `%{rms, max}` in
-millimetres. This is the **honesty/trust signal**: it tells the operator whether
-the fit is trustworthy *before* the bit touches copper. `residuals.max` gates the
-real run (see **residual gate**).
+The per-point fit error of an `Alignment`, in millimetres. Two parts: the **XY**
+residual (`rms`/`max`, the affine fit error `sqrt(dx²+dy²)`) and the **Z** residual
+(`z_rms`/`z_max`, the surface-plane error `machine_z − surface_z(plane, board)`),
+plus `n` (the capture count). This is the **honesty/trust signal**: it tells the
+operator whether the fit is trustworthy *before* the bit touches copper. The
+**residual gate is XY AND Z** (ADR-0020): `residuals.max <= tol` always, and
+`residuals.z_max <= tol` once `n >= 4` (with 3 captures a plane fits exactly, so the
+Z residual is meaningless — the UI shows **"Z unverified — capture a 4th"** rather
+than implying depth is trusted). Failing either gate → `AlignmentRejected`.
 _Avoid:_ "error score" / "accuracy %"; the UI may show a quality percentage, but
-the domain value is `residuals` (rms + max).
+the domain value is `residuals` (XY rms/max + Z rms/max + n). Avoid calling the XY
+residual "the" residual now that Z is gated too.
 
 ### FitGeometry {#term-fitgeometry}
 

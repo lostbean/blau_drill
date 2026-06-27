@@ -152,6 +152,56 @@ pub fn residual_rms(model: Model) -> Float {
   residuals(model).1
 }
 
+/// The Z-plane max residual (mm), or `0.0`. PROJECTED from `job.residuals.z_max`
+/// (ADR-0020). Mirrors `residual_max` but over the fitted surface plane's
+/// `machine_z` residual — the depth honesty signal that gates the fit at `n >= 4`.
+pub fn z_residual_max(model: Model) -> Float {
+  case model.job {
+    HaveJob(j) ->
+      case j.residuals {
+        Some(r) -> r.z_max
+        None -> 0.0
+      }
+    NoJob -> 0.0
+  }
+}
+
+/// The Z-plane RMS residual (mm), or `0.0`. PROJECTED from `job.residuals.z_rms`.
+pub fn z_residual_rms(model: Model) -> Float {
+  case model.job {
+    HaveJob(j) ->
+      case j.residuals {
+        Some(r) -> r.z_rms
+        None -> 0.0
+      }
+    NoJob -> 0.0
+  }
+}
+
+/// The capture count `n` of the last fit, or `0` before a fit. PROJECTED from
+/// `job.residuals.n` (ADR-0020) — the UI needs it to show "Z unverified" at
+/// `n < 4` (where the Z residual is structurally ~0 and proves nothing).
+pub fn capture_count(model: Model) -> Int {
+  case model.job {
+    HaveJob(j) ->
+      case j.residuals {
+        Some(r) -> r.n
+        None -> 0
+      }
+    NoJob -> 0
+  }
+}
+
+/// The session's residual-gate tolerance (mm). PROJECTED from `job.tol` so the
+/// rejected box can tell which residual (XY and/or Z) is over tolerance and label
+/// the failing one (ADR-0020). `0.0` with no job.
+pub fn tolerance(model: Model) -> Float {
+  case model.job {
+    HaveJob(j) -> j.tol
+    NoJob -> 0.0
+  }
+}
+
 /// Alignment quality 0..100, or `-1` when not yet fitted. PROJECTED from the
 /// max residual vs `job.tol`. Quality only shows once a fit has produced
 /// residuals (the job is `Aligned`/`AlignmentRejected`/`DryRun`/`Drilling`/

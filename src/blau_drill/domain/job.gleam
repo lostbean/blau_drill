@@ -161,7 +161,14 @@ pub fn transition(job: Job, event: Event) -> Result(Job, TransitionError) {
       case alignment.fit(job.pending.captured) {
         Ok(al) -> {
           let r = al.residuals
-          case r.max <=. tol {
+          // ADR-0020: the residual gate is now XY-AND-Z. XY always gates; the Z
+          // plane residual gates only when it is MEANINGFUL (`n >= 4`) — with < 4
+          // captures a plane fits the points exactly (z_max ~0) so Z is UNVERIFIED
+          // (not a failure, allowed on XY). So a fit can be XY-perfect yet
+          // Z-rejected when 4+ captures expose an inconsistent capture height.
+          let xy_ok = r.max <=. tol
+          let z_ok = r.n < 4 || r.z_max <=. tol
+          case xy_ok && z_ok {
             True ->
               Ok(
                 Job(

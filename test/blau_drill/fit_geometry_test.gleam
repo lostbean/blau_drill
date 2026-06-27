@@ -35,7 +35,7 @@ fn approx(a: Float, b: Float, tol: Float) -> Bool {
 
 // A benign residuals value — decompose ignores it entirely.
 fn benign() -> Residuals {
-  Residuals(rms: 0.0, max: 0.0)
+  Residuals(rms: 0.0, max: 0.0, z_rms: 0.0, z_max: 0.0, n: 0)
 }
 
 // Build an Alignment from a linear/translation transform and a flat-at-z plane.

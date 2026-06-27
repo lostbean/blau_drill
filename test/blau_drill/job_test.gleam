@@ -54,6 +54,58 @@ fn misfit_corrs() -> List(Correspondence) {
   ]
 }
 
+// THE Z3/Z9 scenario (ADR-0020): 4 captures, XY EXACT (machine == board, identity
+// fit → XY residual ~0), but the 4th same-side fiducial was jogged to Z9 while the
+// other three are coplanar at Z3 — a ~6 mm height discrepancy. The least-squares
+// plane cannot pass through the inconsistent 4th point, so z_max blows past tol.
+// XY-perfect yet Z-rejected (the new behavior).
+fn z_inconsistent_corrs() -> List(Correspondence) {
+  [
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 3.0),
+    Correspondence(board: #(10.0, 0.0), machine: #(10.0, 0.0), machine_z: 3.0),
+    Correspondence(board: #(0.0, 10.0), machine: #(0.0, 10.0), machine_z: 3.0),
+    Correspondence(board: #(10.0, 10.0), machine: #(10.0, 10.0), machine_z: 9.0),
+  ]
+}
+
+// 3 captures, XY exact, with ARBITRARY (wildly inconsistent) captured Z. A plane
+// fits 3 points exactly → z_max ~0 → Z UNVERIFIED, not a failure. n == 3.
+fn three_arbitrary_z_corrs() -> List(Correspondence) {
+  [
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 3.0),
+    Correspondence(board: #(10.0, 0.0), machine: #(10.0, 0.0), machine_z: 9.0),
+    Correspondence(board: #(0.0, 10.0), machine: #(0.0, 10.0), machine_z: -4.0),
+  ]
+}
+
+// 4 captures, XY exact, with CONSISTENT (coplanar) captured Z on a genuine tilt
+// z = 0.2*bx + 0.1*by + 1.0. The plane fits them all → z_max ~0, n == 4 → Aligned.
+fn z_consistent_corrs() -> List(Correspondence) {
+  let plane_z = fn(bx: Float, by: Float) { 0.2 *. bx +. 0.1 *. by +. 1.0 }
+  [
+    Correspondence(
+      board: #(0.0, 0.0),
+      machine: #(0.0, 0.0),
+      machine_z: plane_z(0.0, 0.0),
+    ),
+    Correspondence(
+      board: #(10.0, 0.0),
+      machine: #(10.0, 0.0),
+      machine_z: plane_z(10.0, 0.0),
+    ),
+    Correspondence(
+      board: #(0.0, 10.0),
+      machine: #(0.0, 10.0),
+      machine_z: plane_z(0.0, 10.0),
+    ),
+    Correspondence(
+      board: #(10.0, 10.0),
+      machine: #(10.0, 10.0),
+      machine_z: plane_z(10.0, 10.0),
+    ),
+  ]
+}
+
 // Drive a job from Parsed to Registering with the given correspondences.
 fn register_with(j: Job, corrs: List(Correspondence)) -> Job {
   let assert Ok(j) = job.transition(j, StartRegistering)
@@ -212,6 +264,73 @@ pub fn same_fit_looser_tol_passes_test() {
   aj.state |> should.equal(Aligned)
   let assert Some(r) = rj.residuals
   { r.max >. 0.05 && r.max <=. 0.5 } |> should.be_true
+}
+
+// --- the Z gate (ADR-0020): the fit gate is XY AND Z -------------------------
+
+// THE scenario / THE fix: 4 captures, XY EXACT (XY residual ~0, would pass the XY
+// gate cleanly) but with an inconsistent Z3/Z9 capture → the plane residual blows
+// past tol → AlignmentRejected. Before the Z gate this read Aligned (100% GOOD on
+// a garbage Z capture); now it is REJECTED for depth.
+pub fn fit_xy_perfect_but_z_inconsistent_rejects_test() {
+  let j = register_with(job(), z_inconsistent_corrs())
+  let assert Ok(j) = job.transition(j, Fit(0.1))
+  j.state |> should.equal(AlignmentRejected)
+  let assert Some(r) = j.residuals
+  // XY passed (residual ~0) yet the fit is rejected — for DEPTH (z_max > tol).
+  { r.max <=. 0.1 } |> should.be_true
+  { r.z_max >. 0.1 } |> should.be_true
+  r.n |> should.equal(4)
+  // The over-tolerance alignment is KEPT for inspect/override (unchanged arm).
+  case j.alignment {
+    Some(_) -> Nil
+    None -> should.fail()
+  }
+}
+
+// 3 captures with arbitrary (inconsistent) Z → Z is UNVERIFIED, not a failure: a
+// plane fits 3 points exactly so the Z residual is structurally ~0. The fit still
+// passes on XY → Aligned, n == 3. (Do not block 3-capture fits.)
+pub fn fit_three_captures_arbitrary_z_aligns_test() {
+  let j = register_with(job(), three_arbitrary_z_corrs())
+  let assert Ok(j) = job.transition(j, Fit(0.1))
+  j.state |> should.equal(Aligned)
+  let assert Some(r) = j.residuals
+  r.n |> should.equal(3)
+  // Z is structurally ~0 at 3 captures (unverified, not trusted).
+  { r.z_max <=. 0.1 } |> should.be_true
+}
+
+// 4 CONSISTENT (coplanar) captures on a genuine tilt → the plane fits them all →
+// z_max ~0 → Aligned, n == 4. The Z gate passes a real tilted board.
+pub fn fit_four_consistent_z_aligns_test() {
+  let j = register_with(job(), z_consistent_corrs())
+  let assert Ok(j) = job.transition(j, Fit(0.1))
+  j.state |> should.equal(Aligned)
+  let assert Some(r) = j.residuals
+  r.n |> should.equal(4)
+  { r.max <=. 0.1 } |> should.be_true
+  { r.z_max <=. 0.1 } |> should.be_true
+}
+
+// Boundary: 4 inconsistent-Z captures (z_max ≈ 4.5 mm with this set) sit just
+// UNDER a loose tol → Aligned; just OVER a tight tol → AlignmentRejected. Same
+// captures, only the tolerance differs — the Z gate is the swing factor (XY is ~0
+// either way).
+pub fn fit_z_boundary_under_and_over_tol_test() {
+  // z_max for z_inconsistent_corrs is ≈ 4.5 mm. A tol just above it passes (XY
+  // also passes), a tol just below it rejects.
+  let under = register_with(job(), z_inconsistent_corrs())
+  let assert Ok(uj) = job.transition(under, Fit(10.0))
+  uj.state |> should.equal(Aligned)
+  let assert Some(ur) = uj.residuals
+  { ur.z_max <=. 10.0 } |> should.be_true
+
+  let over = register_with(job(), z_inconsistent_corrs())
+  let assert Ok(oj) = job.transition(over, Fit(0.1))
+  oj.state |> should.equal(AlignmentRejected)
+  let assert Some(or) = oj.residuals
+  { or.z_max >. 0.1 } |> should.be_true
 }
 
 pub fn fit_too_few_stays_registering_test() {

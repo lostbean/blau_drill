@@ -22,12 +22,18 @@ import gleam/list
 // fraction of the cube of the matrix's entry scale.
 const epsilon = 1.0e-9
 
-/// The per-point fit error, in millimetres.
+/// The fit error signal, in millimetres.
 ///
-/// * `rms` — root-mean-square of the per-correspondence Euclidean errors.
-/// * `max` — the largest single-correspondence error.
+/// * `rms` — root-mean-square of the per-correspondence XY Euclidean errors.
+/// * `max` — the largest single-correspondence XY error.
+/// * `z_rms` — root-mean-square of the per-correspondence Z plane residuals
+///   (`|machine_z − surface_z(plane, board)|`).
+/// * `z_max` — the largest single-correspondence Z plane residual.
+/// * `n` — the capture count. The Z residual is structurally ~0 at exactly 3
+///   captures (a plane fits 3 points exactly), so the gate needs `n` to know
+///   whether the Z residual is meaningful (`n >= 4`).
 pub type Residuals {
-  Residuals(rms: Float, max: Float)
+  Residuals(rms: Float, max: Float, z_rms: Float, z_max: Float, n: Int)
 }
 
 /// A fitted board **surface plane** in the BOARD frame: `z = a*bx + b*by + c`.
@@ -111,10 +117,11 @@ fn fit_nonempty(
       let zc = zc_c -. { za *. cx +. zb *. cy }
 
       let transform = Transform2D(a: a, b: b, c: c, d: d, tx: tx, ty: ty)
+      let z_plane = ZPlane(a: za, b: zb, c: zc)
       Ok(Alignment(
         transform: transform,
-        z_plane: ZPlane(a: za, b: zb, c: zc),
-        residuals: residuals(transform, correspondences),
+        z_plane: z_plane,
+        residuals: residuals(transform, z_plane, correspondences),
       ))
     }
     // solve3 only returns Degenerate or Ok, but the compiler wants exhaustive
@@ -246,15 +253,30 @@ fn max_abs9(
 // --- residuals ---------------------------------------------------------
 
 // Apply the fitted transform to each board point and measure the Euclidean
-// error to the captured machine point; report rms and max (mm).
+// error to the captured machine point (XY); separately measure the fitted
+// surface plane's residual over each captured machine_z (Z). Report rms/max for
+// both and the capture count `n`.
 fn residuals(
   transform: Transform2D,
+  plane: ZPlane,
   correspondences: List(Correspondence),
 ) -> Residuals {
+  let count = list.length(correspondences)
+  let n = int.to_float(count)
+
   let errors = point_errors(transform, correspondences)
-  let n = int.to_float(list.length(errors))
   let sum_sq = list.fold(errors, 0.0, fn(acc, e) { acc +. e *. e })
-  Residuals(rms: float_sqrt(sum_sq /. n), max: max_list(errors))
+
+  let z_errors = z_point_errors(plane, correspondences)
+  let z_sum_sq = list.fold(z_errors, 0.0, fn(acc, e) { acc +. e *. e })
+
+  Residuals(
+    rms: float_sqrt(sum_sq /. n),
+    max: max_list(errors),
+    z_rms: float_sqrt(z_sum_sq /. n),
+    z_max: max_list(z_errors),
+    n: count,
+  )
 }
 
 /// The per-correspondence residual: the Euclidean distance (mm) between where the
@@ -271,6 +293,21 @@ pub fn point_errors(
     let dx = px -. mx
     let dy = py -. my
     float_sqrt(dx *. dx +. dy *. dy)
+  })
+}
+
+/// The per-correspondence **Z residual**: `|machine_z − surface_z(plane, board)|`
+/// (mm), in the SAME order as `correspondences`. The plane is least-squares, so
+/// with exactly 3 captures these are ~0 (a plane fits 3 points exactly); they
+/// only become meaningful at 4+ captures. Lets the UI flag the worst-Z (the
+/// bad-capture) point.
+pub fn z_point_errors(
+  plane: ZPlane,
+  correspondences: List(Correspondence),
+) -> List(Float) {
+  list.map(correspondences, fn(corr) {
+    let Correspondence(board: #(bx, by), machine_z: mz, ..) = corr
+    float.absolute_value(mz -. surface_z(plane, bx, by))
   })
 }
 

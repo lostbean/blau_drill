@@ -78,6 +78,63 @@ fn three_exact_corrs() -> List(Correspondence) {
   ]
 }
 
+// 4 CONSISTENT (coplanar) captures, XY exact → an Aligned fit with n == 4 and a
+// Z residual ~0 (the Z gate passed). Drives the quality panel's "Z residual" line.
+fn four_consistent_z_corrs() -> List(Correspondence) {
+  let plane_z = fn(bx: Float, by: Float) { 0.2 *. bx +. 0.1 *. by +. 1.0 }
+  [
+    Correspondence(
+      board: #(0.0, 0.0),
+      machine: #(0.0, 0.0),
+      machine_z: plane_z(0.0, 0.0),
+    ),
+    Correspondence(
+      board: #(10.0, 0.0),
+      machine: #(10.0, 0.0),
+      machine_z: plane_z(10.0, 0.0),
+    ),
+    Correspondence(
+      board: #(0.0, 10.0),
+      machine: #(0.0, 10.0),
+      machine_z: plane_z(0.0, 10.0),
+    ),
+    Correspondence(
+      board: #(10.0, 10.0),
+      machine: #(10.0, 10.0),
+      machine_z: plane_z(10.0, 10.0),
+    ),
+  ]
+}
+
+// THE Z3/Z9 scenario (ADR-0020): 4 captures, XY EXACT, but the 4th same-side
+// fiducial was jogged to Z9 while the others are coplanar at Z3 → z_max blows past
+// tol → AlignmentRejected (for DEPTH, not XY).
+fn z_inconsistent_corrs() -> List(Correspondence) {
+  [
+    Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 3.0),
+    Correspondence(board: #(10.0, 0.0), machine: #(10.0, 0.0), machine_z: 3.0),
+    Correspondence(board: #(0.0, 10.0), machine: #(0.0, 10.0), machine_z: 3.0),
+    Correspondence(board: #(10.0, 10.0), machine: #(10.0, 10.0), machine_z: 9.0),
+  ]
+}
+
+// An Aligned model over 4 CONSISTENT-Z captures (n == 4, Z verified).
+fn aligned_four_consistent_model() -> Model {
+  let m = registering_model(four_consistent_z_corrs())
+  let assert HaveJob(j) = m.job
+  let assert Ok(aligned) = job.transition(j, job.Fit(0.1))
+  model.Model(..m, job: HaveJob(aligned))
+}
+
+// A Z-REJECTED model: XY-perfect 4-capture Z3/Z9 fit at the default 0.1 tol →
+// AlignmentRejected for depth. The rejected box should surface the Z residual.
+fn z_rejected_model() -> Model {
+  let m = registering_model(z_inconsistent_corrs())
+  let assert HaveJob(j) = m.job
+  let assert Ok(rejected) = job.transition(j, job.Fit(0.1))
+  model.Model(..m, job: HaveJob(rejected))
+}
+
 fn render_align(m: Model) -> String {
   element.to_string(stages.align(m))
 }
@@ -151,6 +208,56 @@ pub fn restart_button_disabled_when_parsed_test() {
   // base_model() is a fresh Parsed job → RestartAlignmentE is illegal → disabled.
   let html = render_align(base_model())
   restart_is_disabled(html) |> should.be_true
+}
+
+// ── Z2: the Z-plane residual surfaces in the Align UI (ADR-0020) ─────────────
+
+// An Aligned fit with >= 4 captures shows the verified Z residual line ("Z
+// residual") in the quality panel — Z passed the gate, so it reads as a number.
+pub fn quality_panel_shows_z_residual_at_four_captures_test() {
+  let html = render_align(aligned_four_consistent_model())
+  string.contains(html, "Z residual") |> should.be_true
+  // It is the verified line, NOT the unverified nudge.
+  string.contains(html, "Z unverified") |> should.be_false
+}
+
+// An Aligned fit with exactly 3 captures cannot self-check its plane, so the
+// quality panel shows the muted "Z unverified — capture a 4th fiducial" hint
+// instead of a residual number.
+pub fn quality_panel_shows_z_unverified_at_three_captures_test() {
+  // aligned_model() is a clean fit over THREE exact correspondences (n == 3).
+  let html = render_align(aligned_model())
+  string.contains(html, "Z unverified") |> should.be_true
+  // No verified Z residual number is shown at n == 3.
+  string.contains(html, "Z residual") |> should.be_false
+}
+
+// A Z-rejected fit (4-capture Z3/Z9, XY-perfect) renders the rejected box with
+// the over-tolerance Z residual text — the operator sees the rejection is for
+// DEPTH, not XY.
+pub fn rejected_box_shows_z_over_tolerance_text_test() {
+  let html = render_align(z_rejected_model())
+  // The rejected box is shown (it is AlignmentRejected).
+  string.contains(html, "Alignment rejected") |> should.be_true
+  // …with the Z residual called out as over tolerance.
+  string.contains(html, "Z residual") |> should.be_true
+  string.contains(html, "over tolerance") |> should.be_true
+  // The rejected-box Z line carries the over-tolerance class.
+  string.contains(html, "rejected-hint z-rejected") |> should.be_true
+  // And the quality panel's VERIFIED (green) Z line is SUPPRESSED — it must not
+  // claim "100% GOOD" Z above a rejected-for-depth fit.
+  string.contains(html, "residuals z-residual") |> should.be_false
+}
+
+// The quality % is UNCHANGED for an XY-good fit regardless of Z: a 4-consistent-Z
+// Aligned fit (XY residual ~0) reads 100% GOOD exactly like a 3-capture clean fit
+// — Z is NOT folded into the quality projection (it gates separately).
+pub fn quality_pct_unchanged_by_z_test() {
+  let three_html = render_align(aligned_model())
+  let four_html = render_align(aligned_four_consistent_model())
+  // Both are XY-perfect → 100% GOOD; the Z addition did not alter the %.
+  string.contains(three_html, "100% GOOD") |> should.be_true
+  string.contains(four_html, "100% GOOD") |> should.be_true
 }
 
 // ── F3: advisory fit verdict + breakdown (ADR-0019) ──────────────────────────

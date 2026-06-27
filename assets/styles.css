@@ -1156,6 +1156,21 @@ button {
   font-size: 0.75rem;
   color: var(--on-surface-variant);
 }
+/* The Z-plane residual line (ADR-0020). A verified Z (>=4 captures, gate-passed)
+   reads green like the rest of an accepted fit; an unverified Z (<4 captures)
+   reads muted amber — a non-error nudge, not a warning that the fit is wrong. */
+.residuals.z-residual {
+  color: var(--secondary);
+}
+.residuals.z-unverified {
+  color: var(--primary-container);
+  opacity: 0.85;
+}
+/* The over-tolerance Z line inside the rejected box reads as an error (red), like
+   the XY rejection it sits beside. */
+.rejected-hint.z-rejected {
+  color: var(--error);
+}
 
 /* Advisory fit verdict (ADR-0019) — DISPLAY ONLY, never gates. Plausible reads
    green; Suspect reads amber (warning), with one reason line per flag. */
