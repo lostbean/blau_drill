@@ -228,6 +228,20 @@ pub type FitDiagOpt {
   HaveFitDiag(FitDiag)
 }
 
+/// Which of a fit's two independent quality axes is over tolerance, driving the
+/// rejected box's headline / per-point list / override (ADR-0020). A fit has a
+/// REGISTRATION (XY) axis and a DEPTH (Z) axis, each gated on its own; the
+/// rejected box names the failing one. `NoFailure` is the not-rejected case.
+pub type FitFailure {
+  NoFailure
+  /// REGISTRATION (XY) over tolerance (`residual_max > tol`).
+  XyFailure
+  /// DEPTH (Z) over tolerance and meaningful (`z_residual_max > tol`, `n >= 4`).
+  ZFailure
+  /// Both axes over tolerance.
+  BothFailure
+}
+
 // ── Fit decomposition & sanity (ADR-0019) ───────────────────────────────────
 
 /// The decomposed geometry of a solved fit, or `NoFitGeometry` before a fit. A

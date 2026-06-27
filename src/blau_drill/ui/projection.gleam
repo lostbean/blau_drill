@@ -39,12 +39,12 @@ import blau_drill/domain/job
 import blau_drill/domain/transform2d
 import blau_drill/ui/bridge
 import blau_drill/ui/model.{
-  type Head, type Model, BitChange, Capture, Captured, ConfAligned, ConfEstimate,
-  ConfNone, ConfRough, DrillMode, DryRunMode, Fiducial, HaveBitChange, HaveBoard,
-  HaveFitDiag, HaveFitGeometry, HaveFitSanity, HaveHeadPos, HaveJob,
-  HaveProgress, HaveSummary, HaveTransform, NoBitChange, NoBoard, NoFitDiag,
-  NoFitGeometry, NoFitSanity, NoHeadPos, NoJob, NoProgress, NoSummary,
-  NoTransform, Progress, Summary,
+  type Head, type Model, BitChange, BothFailure, Capture, Captured, ConfAligned,
+  ConfEstimate, ConfNone, ConfRough, DrillMode, DryRunMode, Fiducial,
+  HaveBitChange, HaveBoard, HaveFitDiag, HaveFitGeometry, HaveFitSanity,
+  HaveHeadPos, HaveJob, HaveProgress, HaveSummary, HaveTransform, NoBitChange,
+  NoBoard, NoFailure, NoFitDiag, NoFitGeometry, NoFitSanity, NoHeadPos, NoJob,
+  NoProgress, NoSummary, NoTransform, Progress, Summary, XyFailure, ZFailure,
 }
 import gleam/dict
 import gleam/float
@@ -263,6 +263,56 @@ pub fn fit_diag(model: Model) -> model.FitDiagOpt {
         _, _ -> NoFitDiag
       }
     NoJob -> NoFitDiag
+  }
+}
+
+/// The per-point DEPTH diagnosis (ADR-0020) — the Z mirror of `fit_diag`. Built
+/// from `alignment.z_point_errors(al.z_plane, j.pending.captured)` (each capture's
+/// distance off the fitted surface plane) via the SAME axis-agnostic
+/// `bridge.diagnose_fit` builder, reusing `FitDiag`/`PointResidual`/`WorstOpt` (a
+/// residual is a residual). Gated like `fit_diag` — present only in
+/// `AlignmentRejected` with a solved alignment, so the rejected box can quote the
+/// FAILING axis's per-point errors when DEPTH is the failure. The hint inside the
+/// returned `FitDiag` is XY-flavored and unused for the Z box (the view builds the
+/// DEPTH message); only `points`/`worst`/`can_override` are consumed.
+pub fn z_fit_diag(model: Model) -> model.FitDiagOpt {
+  case model.job {
+    HaveJob(j) ->
+      case j.state, j.alignment {
+        job.AlignmentRejected, Some(al) -> {
+          let z_errs = alignment.z_point_errors(al.z_plane, j.pending.captured)
+          HaveFitDiag(bridge.diagnose_fit(z_errs, j.tol))
+        }
+        _, _ -> NoFitDiag
+      }
+    NoJob -> NoFitDiag
+  }
+}
+
+/// Which of the fit's two independent quality axes is over tolerance (ADR-0020),
+/// driving the rejected box's headline / per-point list / override. A fit has a
+/// REGISTRATION (XY) axis (`residual_max`) and a DEPTH (Z) axis (`z_residual_max`,
+/// meaningful only at `n >= 4`), each gated on the SAME `tol`. The DEPTH axis fails
+/// only when MEANINGFUL — at `n < 4` a plane fits the points exactly, so Z proves
+/// nothing and never counts as a failure here (it shows "unverified" instead). The
+/// classification is a pure read of the residual projections; it does NOT recompute
+/// or change the gate. `NoFailure` whenever the fit is not rejected.
+pub fn fit_failure(model: Model) -> model.FitFailure {
+  case alignment_rejected(model) {
+    False -> NoFailure
+    True -> {
+      let tol = tolerance(model)
+      let xy_over = residual_max(model) >. tol
+      let z_over = capture_count(model) >= 4 && z_residual_max(model) >. tol
+      case xy_over, z_over {
+        True, True -> BothFailure
+        False, True -> ZFailure
+        True, False -> XyFailure
+        // Rejected but neither residual reads over tol (shouldn't happen for a
+        // residual-gated rejection); treat as the XY axis (the historical default).
+        False, False -> XyFailure
+      }
+    }
   }
 }
 

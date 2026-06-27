@@ -602,43 +602,26 @@ fn align_error(model: Model) -> Element(model.Msg) {
   }
 }
 
+// The Align quality panel (ADR-0020): TWO PARALLEL READOUTS — REGISTRATION (XY)
+// and DEPTH (Z) — each with its own value + pass/fail color, so the operator reads
+// the two independent quality axes in MATCHED terms. There is no single green
+// "quality %" headline that could hide a Z failure: the % lives INSIDE the
+// REGISTRATION readout, and DEPTH stands beside it (red when over tolerance, an
+// amber "Z unverified" nudge at < 4 captures). The actionable detail + recapture /
+// override for a FAILING axis lives in the rejected box below (`rejected_box`).
 fn quality_panel(model: Model) -> Element(model.Msg) {
   let quality = projection.quality(model)
   case quality < 0 {
     True -> element.none()
-    False -> {
-      let #(cls, label) = quality_class(quality)
+    False ->
       h.div([a.class("panel")], [
         h.div([a.class("panel-head")], [
-          h.span([a.class("panel-head-label")], [h.text("Est. Quality")]),
-          h.span([a.class("quality-value " <> cls)], [
-            h.text(int.to_string(quality) <> "% " <> label),
-          ]),
+          h.span([a.class("panel-head-label")], [h.text("Alignment Quality")]),
         ]),
-        h.div([a.class("quality-track")], [
-          h.div(
-            [
-              a.class("quality-fill " <> cls),
-              a.style("width", int.to_string(quality) <> "%"),
-            ],
-            [],
-          ),
+        h.div([a.class("quality-axes")], [
+          registration_readout(model, quality),
+          depth_readout(model),
         ]),
-        h.p([a.class("residuals")], [
-          h.text(
-            "residual max "
-            <> fmt3(projection.residual_max(model))
-            <> " mm · rms "
-            <> fmt3(projection.residual_rms(model))
-            <> " mm",
-          ),
-        ]),
-        // The Z-plane residual line (ADR-0020). An Aligned fit means Z passed the
-        // gate too (or, at < 4 captures, Z was unverified — the fit is valid on XY
-        // but its depth is unchecked, surfaced as a muted-amber nudge to capture a
-        // 4th fiducial). NOT an error here — a Z-FAILING fit lands in
-        // AlignmentRejected, whose box shows the over-tolerance Z number instead.
-        z_quality_line(model),
         // Advisory fit verdict + numeric breakdown (ADR-0019). DISPLAY ONLY — a
         // Suspect verdict warns the operator but does NOT gate Proceed (the
         // residual stays the sole hard gate). No stored state: both are pure
@@ -646,38 +629,94 @@ fn quality_panel(model: Model) -> Element(model.Msg) {
         verdict_badge(model),
         fit_breakdown(model),
       ])
-    }
   }
 }
 
-// The Z-plane residual line for the quality panel (ADR-0020). The quality panel
-// co-renders with the rejected box (quality is computed whenever residuals exist),
-// so the Z verdict depends on which state we're in:
-//   * REJECTED (Z over tolerance, n >= 4): say nothing here — the rejected box
-//     below owns the Z message ("Z residual … over tolerance"). A green
-//     "Z residual" number here would contradict it.
-//   * >= 4 captures AND not rejected (an Aligned fit): Z is meaningful and passed
-//     the gate, so show the verified green residual number.
-//   * < 4 captures: a plane fits the points exactly, so the Z residual proves
-//     nothing — a muted-amber "unverified" nudge to capture a 4th fiducial,
-//     WITHOUT implying the fit is wrong (it is valid on XY).
-fn z_quality_line(model: Model) -> Element(model.Msg) {
-  let rejected = projection.alignment_rejected(model)
-  case projection.capture_count(model) >= 4, rejected {
-    // Z-rejected: the rejected box carries the Z message; suppress it here.
-    True, True -> element.none()
-    // Verified Z (Aligned, n >= 4): the gate-passed residual number.
-    True, False ->
-      h.p([a.class("residuals z-residual")], [
-        h.text(
-          "Z residual max " <> fmt3(projection.z_residual_max(model)) <> " mm",
-        ),
+// The REGISTRATION (XY) readout: the existing quality % + its pass/fail, plus the
+// XY `residual_max`/`rms`. Pass = `residual_max <= tol` (the XY gate). The %, its
+// label, and color are the EXISTING `quality_class` mapping — unchanged math.
+fn registration_readout(model: Model, quality: Int) -> Element(model.Msg) {
+  let #(cls, label) = quality_class(quality)
+  let xy_pass = projection.residual_max(model) <=. projection.tolerance(model)
+  let mark = case xy_pass {
+    True -> "✓"
+    False -> "✗"
+  }
+  h.div([a.class("axis-readout")], [
+    h.span([a.class("axis-label")], [h.text("REGISTRATION (XY)")]),
+    h.span([a.class("quality-value " <> cls)], [
+      h.text(int.to_string(quality) <> "% " <> label <> "  " <> mark),
+    ]),
+    h.div([a.class("quality-track")], [
+      h.div(
+        [
+          a.class("quality-fill " <> cls),
+          a.style("width", int.to_string(quality) <> "%"),
+        ],
+        [],
+      ),
+    ]),
+    h.p([a.class("residuals")], [
+      h.text(
+        "max "
+        <> fmt3(projection.residual_max(model))
+        <> " mm · rms "
+        <> fmt3(projection.residual_rms(model))
+        <> " mm",
+      ),
+    ]),
+  ])
+}
+
+// The DEPTH (Z) readout (ADR-0020): how consistent the captured heights are — the
+// fitted plane's per-point residual. Its state by capture count:
+//   * n >= 4: pass/fail on `z_residual_max <= tol`. A pass reads green ("✓  max …
+//     mm (tol …)"); a fail reads red ("✗  max … mm (tol …)") — the depth axis is
+//     the headline of a depth rejection, mirrored in the rejected box below.
+//   * n < 4: a plane fits the points exactly, so Z proves nothing — a muted-amber
+//     "Z unverified — capture a 4th fiducial to check depth" nudge (NOT a pass,
+//     NOT a fail), WITHOUT implying the XY fit is wrong.
+fn depth_readout(model: Model) -> Element(model.Msg) {
+  let tol = projection.tolerance(model)
+  let z_max = projection.z_residual_max(model)
+  case projection.capture_count(model) >= 4 {
+    False ->
+      h.div([a.class("axis-readout")], [
+        h.span([a.class("axis-label")], [h.text("DEPTH (Z)")]),
+        h.span([a.class("quality-value unverified")], [h.text("Z unverified")]),
+        h.p([a.class("residuals z-unverified")], [
+          h.text("capture a 4th fiducial to check depth"),
+        ]),
       ])
-    // Z unverified (< 4 captures) — a non-error depth nudge.
-    False, _ ->
-      h.p([a.class("residuals z-unverified")], [
-        h.text("Z unverified — capture a 4th fiducial to check depth"),
+    True -> {
+      let pass = z_max <=. tol
+      let #(value_cls, fill_cls, mark) = case pass {
+        True -> #("good", "good", "✓")
+        False -> #("bad", "bad", "✗")
+      }
+      // The DEPTH bar mirrors REGISTRATION's quality bar, reusing the same 0..100
+      // scale (residual 0 → 100, residual == 2*tol → 0), so a depth-good fit fills
+      // green and a depth-bad fit drains red.
+      let depth_pct = projection.quality_pct(z_max, tol)
+      h.div([a.class("axis-readout")], [
+        h.span([a.class("axis-label")], [h.text("DEPTH (Z)")]),
+        h.span([a.class("quality-value " <> value_cls)], [
+          h.text(mark <> "  max " <> fmt3(z_max) <> " mm"),
+        ]),
+        h.div([a.class("quality-track")], [
+          h.div(
+            [
+              a.class("quality-fill " <> fill_cls),
+              a.style("width", int.to_string(depth_pct) <> "%"),
+            ],
+            [],
+          ),
+        ]),
+        h.p([a.class("residuals")], [
+          h.text("max " <> fmt3(z_max) <> " mm (tol " <> fmt2(tol) <> ")"),
+        ]),
       ])
+    }
   }
 }
 
@@ -762,32 +801,75 @@ fn quality_class(pct: Int) -> #(String, String) {
   }
 }
 
+// The rejected box (ADR-0020): when a fit is over tolerance, the FAILING axis is
+// the headline. A fit has two independent axes — REGISTRATION (XY) and DEPTH (Z) —
+// and `projection.fit_failure` says which is over tolerance. The headline, the
+// per-point list, AND the override all switch to that axis's values, so nothing on
+// screen contradicts the reason for rejection:
+//   * DEPTH (Z) failure → the per-point DEPTH errors (from `z_fit_diag`, ~1.2–1.4
+//     mm for the Z3/Z9 case — substantial, which EXPLAINS the rejection) and an
+//     override quoting the depth error ("PROCEED ANYWAY (X mm depth)").
+//   * REGISTRATION (XY) failure → the existing XY per-point list + override (the
+//     `fit_diag` worst-point story).
+//   * BOTH → headline + message name both; the list/override lead with DEPTH (the
+//     usually-larger, capture-consistency failure), so the operator fixes heights
+//     first, then re-fits.
 fn rejected_box(model: Model) -> Element(model.Msg) {
   case projection.alignment_rejected(model) {
     False -> element.none()
     True -> {
-      let residual_max = projection.residual_max(model)
-      let #(hint, points, can_override) = case projection.fit_diag(model) {
-        model.HaveFitDiag(d) -> #(d.hint, fit_point_rows(d), d.can_override)
-        model.NoFitDiag -> #(
-          "Alignment rejected — residual over tolerance.",
-          [],
-          False,
+      let failure = projection.fit_failure(model)
+      let xy_max = projection.residual_max(model)
+      let z_max = projection.z_residual_max(model)
+      let tol = projection.tolerance(model)
+
+      // Which axis owns the per-point list + override: DEPTH for a Z (or BOTH)
+      // failure, REGISTRATION for a pure XY failure. (BOTH leads with DEPTH.)
+      let depth_is_headline = case failure {
+        model.ZFailure | model.BothFailure -> True
+        _ -> False
+      }
+      let diag = case depth_is_headline {
+        True -> projection.z_fit_diag(model)
+        False -> projection.fit_diag(model)
+      }
+      let #(points, can_override) = case diag {
+        model.HaveFitDiag(d) -> #(fit_point_rows(d), d.can_override)
+        model.NoFitDiag -> #([], False)
+      }
+
+      let title = rejected_title(failure)
+      let hint = rejected_message(model, failure)
+      // The override quotes the FAILING axis's error: the depth amount for a Z /
+      // BOTH headline, the XY error otherwise. (Today's bug was always quoting XY.)
+      let #(override_warn, override_label) = case depth_is_headline {
+        True -> #(
+          "Override: proceed on this fit despite "
+            <> fmt3(z_max)
+            <> " mm depth inconsistency. Holes may drill to the wrong DEPTH by "
+            <> "this much. Only do this if you understand the risk.",
+          "Proceed anyway (" <> fmt3(z_max) <> " mm depth)",
+        )
+        False -> #(
+          "Override: proceed on this fit despite "
+            <> fmt3(xy_max)
+            <> " mm error. Holes may be off by this much. Only do this if you "
+            <> "understand the risk.",
+          "Proceed anyway (" <> fmt3(xy_max) <> " mm)",
         )
       }
+
       h.div(
         [a.class("rejected-box")],
         list.flatten([
           [
-            h.p([a.class("rejected-title")], [h.text("⚠ Alignment rejected")]),
+            h.p([a.class("rejected-title")], [h.text(title)]),
             h.p([a.class("rejected-hint")], [h.text(hint)]),
           ],
-          // The Z residual when DEPTH is the failing axis (ADR-0020): an
-          // XY-perfect fit can be rejected solely for an inconsistent capture
-          // height. Show the over-tolerance Z number so the operator sees the
-          // rejection is about depth, not XY. (If both fail, both lines show — the
-          // XY one rides the per-point residual list + hint below.)
-          rejected_z_line(model),
+          // When BOTH axes fail, the per-point list leads with DEPTH (above); add a
+          // one-line note that XY is also over tolerance so it is not silently
+          // dropped. (The tol is the same for both axes.)
+          rejected_secondary_line(failure, xy_max, tol),
           points,
           [
             h.button(
@@ -804,23 +886,14 @@ fn rejected_box(model: Model) -> Element(model.Msg) {
           case can_override {
             True -> [
               h.div([a.class("override-box")], [
-                h.p([a.class("override-warn")], [
-                  h.text(
-                    "Override: proceed on this fit despite "
-                    <> fmt3(residual_max)
-                    <> " mm error. Holes may be off by this much. Only do this if "
-                    <> "you understand the risk.",
-                  ),
-                ]),
+                h.p([a.class("override-warn")], [h.text(override_warn)]),
                 h.button(
                   [
                     a.class("btn btn-danger btn-block"),
                     a.attribute("type", "button"),
                     event.on_click(model.OverrideAlignment),
                   ],
-                  [
-                    h.text("Proceed anyway (" <> fmt3(residual_max) <> " mm)"),
-                  ],
+                  [h.text(override_label)],
                 ),
               ]),
             ]
@@ -832,22 +905,65 @@ fn rejected_box(model: Model) -> Element(model.Msg) {
   }
 }
 
-// The over-tolerance Z residual line for a Z-rejected fit (ADR-0020), or nothing
-// when Z is not the failing axis. Z is the failing residual only when it is
-// MEANINGFUL (>= 4 captures) AND over tolerance — exactly the condition that lands
-// an XY-passing fit in AlignmentRejected for DEPTH. Returned as a list so it
-// flattens into the rejected-box body (empty list = no line, e.g. a pure-XY
-// failure where Z passed / is unverified).
-fn rejected_z_line(model: Model) -> List(Element(model.Msg)) {
+// The rejected-box headline, naming the FAILING axis (ADR-0020).
+fn rejected_title(failure: model.FitFailure) -> String {
+  case failure {
+    model.ZFailure -> "⚠ Rejected — DEPTH (Z) over tolerance"
+    model.XyFailure -> "⚠ Rejected — REGISTRATION (XY) over tolerance"
+    model.BothFailure ->
+      "⚠ Rejected — REGISTRATION (XY) and DEPTH (Z) over tolerance"
+    // Not reachable inside the rejected branch, but keeps the match total.
+    model.NoFailure -> "⚠ Alignment rejected"
+  }
+}
+
+// The actionable message for the failing axis (ADR-0020):
+//   * DEPTH (Z): the captured heights don't form a consistent surface — jog to the
+//     SAME contact height on each pad, then recapture. (The XY per-point story is
+//     irrelevant when XY is fine, so it is NOT shown for a pure-Z failure.)
+//   * REGISTRATION (XY): the existing worst-point hint from `fit_diag`.
+//   * BOTH: lead with the DEPTH guidance (recapture heights first); the XY excess
+//     is flagged by `rejected_secondary_line` below.
+fn rejected_message(model: Model, failure: model.FitFailure) -> String {
   let z_max = projection.z_residual_max(model)
-  let over = z_max >. projection.tolerance(model)
-  case projection.capture_count(model) >= 4 && over {
-    True -> [
+  let tol = projection.tolerance(model)
+  let depth_msg =
+    "The captured heights don't form a consistent surface (max "
+    <> fmt3(z_max)
+    <> " mm off the fitted plane, tol "
+    <> fmt2(tol)
+    <> "). Jog the bit to the same contact height on each pad, then recapture."
+  case failure {
+    model.ZFailure | model.BothFailure -> depth_msg
+    model.XyFailure ->
+      case projection.fit_diag(model) {
+        model.HaveFitDiag(d) -> d.hint
+        model.NoFitDiag -> "Alignment rejected — XY residual over tolerance."
+      }
+    model.NoFailure -> "Alignment rejected — residual over tolerance."
+  }
+}
+
+// For a BOTH-axis failure, a one-line note that REGISTRATION (XY) is ALSO over
+// tolerance (the per-point list leads with DEPTH). Empty for a single-axis failure.
+fn rejected_secondary_line(
+  failure: model.FitFailure,
+  xy_max: Float,
+  tol: Float,
+) -> List(Element(model.Msg)) {
+  case failure {
+    model.BothFailure -> [
       h.p([a.class("rejected-hint z-rejected")], [
-        h.text("Z residual " <> fmt3(z_max) <> " mm (over tolerance)"),
+        h.text(
+          "REGISTRATION (XY) is also over tolerance — max "
+          <> fmt3(xy_max)
+          <> " mm (tol "
+          <> fmt2(tol)
+          <> "). Fix the heights, then re-check XY.",
+        ),
       ]),
     ]
-    False -> []
+    _ -> []
   }
 }
 

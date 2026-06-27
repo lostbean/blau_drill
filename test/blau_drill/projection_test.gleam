@@ -29,9 +29,9 @@ import blau_drill/test_support.{
   aligned_jogging_model, base_model, pump_through_pause,
 }
 import blau_drill/ui/model.{
-  type Model, ConfAligned, HaveBoard, HaveFitDiag, HaveFitGeometry,
-  HaveFitSanity, HaveJob, HaveSummary, HaveTransform, NoBoard, NoFitDiag,
-  NoFitGeometry, NoFitSanity, NoSummary, Summary,
+  type Model, BothFailure, ConfAligned, HaveBoard, HaveFitDiag, HaveFitGeometry,
+  HaveFitSanity, HaveJob, HaveSummary, HaveTransform, NoBoard, NoFailure,
+  NoFitDiag, NoFitGeometry, NoFitSanity, NoSummary, Summary, XyFailure, ZFailure,
 }
 import blau_drill/ui/projection
 import gleam/float
@@ -69,6 +69,74 @@ fn rejected_model() -> Model {
     })
   let assert Ok(rejected) = job.transition(j, job.Fit(0.05))
   model.Model(..base, job: HaveJob(rejected))
+}
+
+/// A Z-REJECTED fit (ADR-0020): 4 captures, XY EXACT, but the 4th same-side
+/// fiducial was jogged to Z9 while the others are coplanar at Z3 → the fitted
+/// plane cannot pass through all four heights, so `z_max` blows past the 0.1 tol
+/// → `AlignmentRejected` for DEPTH (XY residual is ~0). The per-point Z errors are
+/// substantial (~1.2–1.4 mm each), which is the point: they EXPLAIN the rejection.
+fn z_rejected_model() -> Model {
+  let base = base_model()
+  let assert HaveJob(j0) = base.job
+  let assert Ok(reg) = job.transition(j0, job.StartRegistering)
+  let j =
+    [
+      Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 3.0),
+      Correspondence(board: #(10.0, 0.0), machine: #(10.0, 0.0), machine_z: 3.0),
+      Correspondence(board: #(0.0, 10.0), machine: #(0.0, 10.0), machine_z: 3.0),
+      Correspondence(
+        board: #(10.0, 10.0),
+        machine: #(10.0, 10.0),
+        machine_z: 9.0,
+      ),
+    ]
+    |> list.fold(reg, fn(acc, corr) {
+      let assert Ok(acc) = job.transition(acc, job.Capture(corr))
+      acc
+    })
+  let assert Ok(rejected) = job.transition(j, job.Fit(0.1))
+  rejected.state |> should.equal(job.AlignmentRejected)
+  model.Model(..base, job: HaveJob(rejected))
+}
+
+/// A clean 4-capture fit with CONSISTENT (coplanar) heights → both axes pass, so
+/// the job lands in `Aligned` with a verified Z (n == 4, z_max ~0).
+fn aligned_four_consistent_model() -> Model {
+  let base = base_model()
+  let assert HaveJob(j0) = base.job
+  let assert Ok(reg) = job.transition(j0, job.StartRegistering)
+  let plane_z = fn(bx: Float, by: Float) { 0.2 *. bx +. 0.1 *. by +. 1.0 }
+  let j =
+    [
+      Correspondence(
+        board: #(0.0, 0.0),
+        machine: #(0.0, 0.0),
+        machine_z: plane_z(0.0, 0.0),
+      ),
+      Correspondence(
+        board: #(10.0, 0.0),
+        machine: #(10.0, 0.0),
+        machine_z: plane_z(10.0, 0.0),
+      ),
+      Correspondence(
+        board: #(0.0, 10.0),
+        machine: #(0.0, 10.0),
+        machine_z: plane_z(0.0, 10.0),
+      ),
+      Correspondence(
+        board: #(10.0, 10.0),
+        machine: #(10.0, 10.0),
+        machine_z: plane_z(10.0, 10.0),
+      ),
+    ]
+    |> list.fold(reg, fn(acc, corr) {
+      let assert Ok(acc) = job.transition(acc, job.Capture(corr))
+      acc
+    })
+  let assert Ok(aligned) = job.transition(j, job.Fit(0.1))
+  aligned.state |> should.equal(job.Aligned)
+  model.Model(..base, job: HaveJob(aligned))
 }
 
 /// A MIRRORED-but-exact fit on a real job, in the `Aligned` state. The board ->
@@ -272,6 +340,103 @@ pub fn fit_diag_absent_for_clean_aligned_test() {
 
 pub fn fit_diag_absent_before_fit_test() {
   projection.fit_diag(base_model()) |> should.equal(NoFitDiag)
+}
+
+// ── z_fit_diag: the per-point DEPTH diagnosis (ADR-0020) ─────────────────────
+
+// z_fit_diag is HaveFitDiag (per-point Z residuals + worst + override) only in
+// AlignmentRejected, mirroring fit_diag — but over the Z residual, not XY. For
+// the Z3/Z9 case every captured point sits a substantial distance off the fitted
+// plane (>0.5 mm — the inconsistency the gate caught), so the diagnosis EXPLAINS
+// the depth rejection (vs the ~0.001 mm XY residuals, which looked fine).
+pub fn z_fit_diag_present_with_substantial_per_point_errors_test() {
+  case projection.z_fit_diag(z_rejected_model()) {
+    HaveFitDiag(diag) -> {
+      // Per-point Z residuals for every captured point (4 here).
+      list.length(diag.points) |> should.equal(4)
+      // Each per-point DEPTH error is substantial (>0.5 mm) — NOT the tiny XY
+      // residual. (The Z3/Z9 plane misses each point by ~1.2–1.4 mm.)
+      let all_substantial =
+        diag.points
+        |> list.all(fn(p) { p.error_mm >. 0.5 })
+      all_substantial |> should.be_true
+      // A worst point is named (the bad capture).
+      case diag.worst {
+        model.HaveWorst(w) -> {
+          let max_err =
+            diag.points
+            |> list.map(fn(p) { p.error_mm })
+            |> list.fold(0.0, float.max)
+          approx(w.error_mm, max_err) |> should.be_true
+          { w.error_mm >. 0.5 } |> should.be_true
+        }
+        model.NoWorst -> should.fail()
+      }
+      // The transform solved → override is offered (quoting the Z error in-view).
+      diag.can_override |> should.be_true
+    }
+    NoFitDiag -> should.fail()
+  }
+}
+
+// z_fit_diag is gated exactly like fit_diag: NoFitDiag for a clean Aligned fit…
+pub fn z_fit_diag_absent_for_clean_aligned_test() {
+  projection.z_fit_diag(aligned_jogging_model()) |> should.equal(NoFitDiag)
+}
+
+// …and NoFitDiag before any fit.
+pub fn z_fit_diag_absent_before_fit_test() {
+  projection.z_fit_diag(base_model()) |> should.equal(NoFitDiag)
+}
+
+// ── fit_failure: which axis is over tolerance (ADR-0020) ─────────────────────
+
+// An XY-perfect-but-Z-bad rejected fit → ZFailure (DEPTH is the failing axis).
+pub fn fit_failure_z_for_z_rejected_test() {
+  projection.fit_failure(z_rejected_model()) |> should.equal(ZFailure)
+}
+
+// An XY-bad rejected fit (Z ~0) → XyFailure (REGISTRATION is the failing axis).
+pub fn fit_failure_xy_for_xy_rejected_test() {
+  projection.fit_failure(rejected_model()) |> should.equal(XyFailure)
+}
+
+// A clean fit (both axes within tolerance) → NoFailure.
+pub fn fit_failure_none_for_good_fit_test() {
+  projection.fit_failure(aligned_four_consistent_model())
+  |> should.equal(NoFailure)
+}
+
+// Before a fit → NoFailure (nothing rejected).
+pub fn fit_failure_none_before_fit_test() {
+  projection.fit_failure(base_model()) |> should.equal(NoFailure)
+}
+
+// A fit that fails BOTH axes → BothFailure. Four captures, XY nudged off AND the
+// 4th height inconsistent — both residuals exceed the tol.
+pub fn fit_failure_both_when_both_axes_over_tol_test() {
+  let base = base_model()
+  let assert HaveJob(j0) = base.job
+  let assert Ok(reg) = job.transition(j0, job.StartRegistering)
+  let j =
+    [
+      Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: 3.0),
+      Correspondence(board: #(10.0, 0.0), machine: #(10.0, 0.0), machine_z: 3.0),
+      Correspondence(board: #(0.0, 10.0), machine: #(0.0, 10.0), machine_z: 3.0),
+      Correspondence(
+        board: #(10.0, 10.0),
+        machine: #(10.0, 12.0),
+        machine_z: 9.0,
+      ),
+    ]
+    |> list.fold(reg, fn(acc, corr) {
+      let assert Ok(acc) = job.transition(acc, job.Capture(corr))
+      acc
+    })
+  let assert Ok(rejected) = job.transition(j, job.Fit(0.1))
+  rejected.state |> should.equal(job.AlignmentRejected)
+  let m = model.Model(..base, job: HaveJob(rejected))
+  projection.fit_failure(m) |> should.equal(BothFailure)
 }
 
 // project_head inverse-projects the machine head XY through the transform.

@@ -1116,6 +1116,33 @@ button {
 }
 
 /* quality readout */
+/* Two parallel quality axes (ADR-0020): REGISTRATION (XY) and DEPTH (Z) sit side
+   by side, each its own readout with its own value + pass/fail color, so a green
+   XY can never be the lone headline above a red Z. Collapses to one column when
+   the aside is narrow. */
+.quality-axes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+@media (max-width: 28rem) {
+  .quality-axes {
+    grid-template-columns: 1fr;
+  }
+}
+.axis-readout {
+  min-width: 0;
+}
+.axis-label {
+  display: block;
+  font-family: var(--font-data);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--on-surface-variant);
+  margin-bottom: 0.25rem;
+}
 .quality-value {
   font-family: var(--font-data);
   font-size: 1.125rem;
@@ -1129,6 +1156,16 @@ button {
 }
 .quality-value.poor {
   color: var(--error);
+}
+/* DEPTH (Z) over tolerance — the failing axis reads emergency red. */
+.quality-value.bad {
+  color: var(--error);
+}
+/* DEPTH (Z) unverified (< 4 captures) — a muted amber nudge, not a pass/fail. */
+.quality-value.unverified {
+  color: var(--primary-container);
+  opacity: 0.9;
+  font-size: 0.9375rem;
 }
 .quality-track {
   margin-top: 0.5rem;
@@ -1150,24 +1187,25 @@ button {
 .quality-fill.poor {
   background: var(--error);
 }
+/* DEPTH (Z) over tolerance — the failing axis's bar drains red. */
+.quality-fill.bad {
+  background: var(--error);
+}
 .residuals {
   margin: 0.5rem 0 0;
   font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--on-surface-variant);
 }
-/* The Z-plane residual line (ADR-0020). A verified Z (>=4 captures, gate-passed)
-   reads green like the rest of an accepted fit; an unverified Z (<4 captures)
-   reads muted amber — a non-error nudge, not a warning that the fit is wrong. */
-.residuals.z-residual {
-  color: var(--secondary);
-}
+/* The DEPTH (Z) readout's sub-line (ADR-0020). An unverified Z (< 4 captures)
+   reads muted amber — a non-error nudge to capture a 4th, not a warning that the
+   fit is wrong. */
 .residuals.z-unverified {
   color: var(--primary-container);
   opacity: 0.85;
 }
-/* The over-tolerance Z line inside the rejected box reads as an error (red), like
-   the XY rejection it sits beside. */
+/* The secondary over-tolerance line inside the rejected box (e.g. the XY excess
+   noted on a BOTH-axis failure) reads as an error (red). */
 .rejected-hint.z-rejected {
   color: var(--error);
 }

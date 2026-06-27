@@ -76,8 +76,33 @@ a legal fit for the XY registration; we are honest that its Z is unchecked.)
 
 A fit that passes XY but fails Z (≥4 captures, `z_max > tol`) lands in
 `AlignmentRejected` exactly like an XY failure — the operator inspects the per-point Z
-residuals (the worst-Z point is the bad capture), Recaptures, and re-fits. The rejected
-box surfaces the Z residual alongside the XY one.
+residuals (the worst-Z point is the bad capture), Recaptures, and re-fits.
+
+### The panel shows two parallel axes; the failing one is the headline
+
+A fit has **two independent quality axes** — **REGISTRATION (XY)** (where holes land) and
+**DEPTH (Z)** (how deep they drill) — and either can pass or fail on its own. The earlier
+design showed XY as *the* "quality %" and the Z residual as one extra line, so an
+XY-perfect-but-Z-failing fit read "99% GOOD" *and* "rejected" at once, with the per-point
+list and the override button quoting the **XY** error (0.002 mm) while the real problem was
+2.6 mm in Z — internally contradictory and unactionable. The Align quality panel is
+redesigned so the two axes are presented in **matched terms**:
+
+- **Two parallel readouts**: REGISTRATION (XY) and DEPTH (Z), each with its own value
+  (`max … mm`) and pass/fail color. The overall verdict is GOOD only if **both** pass; if
+  one fails it shows red and is the headline. No single "quality %" that hides a Z failure.
+- **DEPTH (Z) is framed for the operator**: "DEPTH — how consistent your capture heights
+  are", "max 2.6 mm off the surface (tol 0.1 mm)", with the actionable fix "jog the bit to
+  the **same contact height** on each pad". (The Z residual = how far the captured heights
+  miss a single consistent plane — it is a *capture-consistency* signal, not a board
+  property.)
+- **The rejected box shows the FAILING axis's detail**: when Z fails, the per-point list,
+  the worst-point callout, AND the override button all switch to **Z** values (per-point
+  depth errors, "PROCEED ANYWAY — holes may drill ±X mm in DEPTH"). So nothing on screen
+  contradicts the reason for rejection. (This needs a per-point Z projection — a
+  `z_fit_diag`/extended `fit_diag` over `z_point_errors`, mirroring the XY `fit_diag`.)
+- At `n < 4` the DEPTH readout shows **"Z unverified — capture a 4th"** rather than a green
+  pass; REGISTRATION still shows its real XY quality.
 
 ## Consequences
 
@@ -86,8 +111,9 @@ box surfaces the Z residual alongside the XY one.
 - `Residuals` grows two fields + the capture count; `point_errors` is unchanged (still XY),
   a new `z_point_errors(plane, correspondences)` computes the Z residual. The XY residual,
   the too-few/degenerate paths, and `RestartAlignment` are unchanged.
-- The trust gate is now **XY AND Z** (amending ADR-0010's "XY only"); the quality % and
-  the rejected box show both residuals; the Align panel shows "Z unverified" at 3 captures.
+- The trust gate is now **XY AND Z** (amending ADR-0010's "XY only"); the Align panel shows
+  the two axes as parallel readouts (above), the failing one as the headline, "Z unverified"
+  at 3 captures.
 - [ADR-0019](0019-fit-decomposition-and-sanity.md#adr-0019)'s tilt verdict stays advisory
   and complementary: tilt says "this board slopes"; the Z residual says "the captures are
   (in)consistent with that slope". They answer different questions.

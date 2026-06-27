@@ -15,7 +15,10 @@ import blau_drill/domain/fit_geometry.{Mirrored, ScaleOff, Sheared, Tilted}
 import blau_drill/domain/job
 import blau_drill/test_support.{base_model}
 import blau_drill/ui/model.{type Model, HaveJob}
+import blau_drill/ui/projection
 import blau_drill/ui/stages.{CaptureNext, FitNext}
+import gleam/float
+import gleam/int
 import gleam/list
 import gleam/string
 import gleeunit/should
@@ -135,8 +138,37 @@ fn z_rejected_model() -> Model {
   model.Model(..m, job: HaveJob(rejected))
 }
 
+// An XY-REJECTED model: 4 captures, Z consistent (~0 Z residual) but the 4th XY
+// nudged +0.4 mm in Y → XY residual ~0.1 > the 0.05 gate → AlignmentRejected for
+// REGISTRATION (XY), not DEPTH.
+fn xy_rejected_model() -> Model {
+  let base = base_model()
+  let assert HaveJob(j0) = base.job
+  let assert Ok(reg) = job.transition(j0, job.StartRegistering)
+  let j =
+    [
+      Correspondence(board: #(0.0, 0.0), machine: #(0.0, 0.0), machine_z: -1.0),
+      Correspondence(board: #(1.0, 0.0), machine: #(1.0, 0.0), machine_z: -1.0),
+      Correspondence(board: #(0.0, 1.0), machine: #(0.0, 1.0), machine_z: -1.0),
+      Correspondence(board: #(1.0, 1.0), machine: #(1.0, 1.4), machine_z: -1.0),
+    ]
+    |> list.fold(reg, fn(acc, c) {
+      let assert Ok(acc) = job.transition(acc, job.Capture(c))
+      acc
+    })
+  let assert Ok(rejected) = job.transition(j, job.Fit(0.05))
+  model.Model(..base, job: HaveJob(rejected))
+}
+
 fn render_align(m: Model) -> String {
   element.to_string(stages.align(m))
+}
+
+// Mirror of stages' private `fmt3` (round to 3 decimals) so a test can assert the
+// exact formatted Z value that the view renders.
+fn fmt3_local(v: Float) -> String {
+  let scaled = int.to_float(float.round(v *. 1000.0)) /. 1000.0
+  float.to_string(scaled)
 }
 
 // The Align stage renders each button as `<button class="…" [disabled]
@@ -210,54 +242,105 @@ pub fn restart_button_disabled_when_parsed_test() {
   restart_is_disabled(html) |> should.be_true
 }
 
-// ── Z2: the Z-plane residual surfaces in the Align UI (ADR-0020) ─────────────
+// ── Z3: the two-parallel-axes quality panel + failing-axis rejected box ───────
+//        (ADR-0020 — "The panel shows two parallel axes; the failing one is the
+//         headline"). These supersede the Z2 single-line assertions: the redesign
+//         replaced the flat "Z residual max …" line with a DEPTH (Z) readout that
+//         sits beside REGISTRATION (XY) and carries its own pass/fail.
 
-// An Aligned fit with >= 4 captures shows the verified Z residual line ("Z
-// residual") in the quality panel — Z passed the gate, so it reads as a number.
-pub fn quality_panel_shows_z_residual_at_four_captures_test() {
+// The quality panel always shows BOTH axes by name, so the operator reads the two
+// quality dimensions in matched terms.
+pub fn quality_panel_shows_both_axes_test() {
   let html = render_align(aligned_four_consistent_model())
-  string.contains(html, "Z residual") |> should.be_true
-  // It is the verified line, NOT the unverified nudge.
-  string.contains(html, "Z unverified") |> should.be_false
+  string.contains(html, "REGISTRATION") |> should.be_true
+  string.contains(html, "DEPTH") |> should.be_true
 }
 
-// An Aligned fit with exactly 3 captures cannot self-check its plane, so the
-// quality panel shows the muted "Z unverified — capture a 4th fiducial" hint
-// instead of a residual number.
+// An Aligned fit with >= 4 CONSISTENT captures: DEPTH passes (a green readout with
+// the max-off-plane number + tol), NOT the "unverified" nudge and NOT a rejection.
+pub fn quality_panel_depth_passes_at_four_consistent_captures_test() {
+  let html = render_align(aligned_four_consistent_model())
+  // The DEPTH readout shows its max-off-plane number with the tolerance.
+  string.contains(html, "max") |> should.be_true
+  string.contains(html, "tol") |> should.be_true
+  // It is verified (not the unverified nudge) and the fit is not rejected.
+  string.contains(html, "Z unverified") |> should.be_false
+  string.contains(html, "Rejected") |> should.be_false
+}
+
+// An Aligned fit with exactly 3 captures cannot self-check its plane, so the DEPTH
+// readout shows the muted "Z unverified — capture a 4th fiducial" hint instead of
+// a pass.
 pub fn quality_panel_shows_z_unverified_at_three_captures_test() {
   // aligned_model() is a clean fit over THREE exact correspondences (n == 3).
   let html = render_align(aligned_model())
   string.contains(html, "Z unverified") |> should.be_true
-  // No verified Z residual number is shown at n == 3.
-  string.contains(html, "Z residual") |> should.be_false
+  // REGISTRATION still shows its real XY quality alongside.
+  string.contains(html, "REGISTRATION") |> should.be_true
 }
 
-// A Z-rejected fit (4-capture Z3/Z9, XY-perfect) renders the rejected box with
-// the over-tolerance Z residual text — the operator sees the rejection is for
-// DEPTH, not XY.
-pub fn rejected_box_shows_z_over_tolerance_text_test() {
+// A Z-rejected fit (4-capture Z3/Z9, XY-perfect): the rejected box's HEADLINE
+// names DEPTH (Z) as the failing axis, the per-point list shows substantial Z
+// errors (>0.5 mm, NOT the ~0.001 mm XY residuals), and the override button quotes
+// the Z error — so nothing on screen contradicts the depth rejection.
+pub fn rejected_box_headlines_depth_for_z_failure_test() {
   let html = render_align(z_rejected_model())
-  // The rejected box is shown (it is AlignmentRejected).
-  string.contains(html, "Alignment rejected") |> should.be_true
-  // …with the Z residual called out as over tolerance.
-  string.contains(html, "Z residual") |> should.be_true
-  string.contains(html, "over tolerance") |> should.be_true
-  // The rejected-box Z line carries the over-tolerance class.
-  string.contains(html, "rejected-hint z-rejected") |> should.be_true
-  // And the quality panel's VERIFIED (green) Z line is SUPPRESSED — it must not
-  // claim "100% GOOD" Z above a rejected-for-depth fit.
-  string.contains(html, "residuals z-residual") |> should.be_false
+  // The rejected box headline names the DEPTH (Z) axis.
+  string.contains(html, "Rejected") |> should.be_true
+  string.contains(html, "DEPTH") |> should.be_true
+  // The actionable depth message tells the operator to match contact heights.
+  string.contains(html, "contact height") |> should.be_true
+  // The override button quotes the Z error AS A DEPTH amount (not the XY 0.002 mm).
+  string.contains(html, "depth") |> should.be_true
+}
+
+// The Z-rejected per-point list shows SUBSTANTIAL depth errors (the Z3/Z9 plane
+// misses each point by ~1.2–1.4 mm), NOT the tiny 0.001 mm XY residuals that made
+// the old panel look fine. We assert a value clearly in the Z range (1.x mm) is
+// present and the misleading 0.001 / 0.002 XY values are NOT the headline.
+pub fn rejected_box_per_point_list_shows_z_errors_test() {
+  let html = render_align(z_rejected_model())
+  let z_max = projection.z_residual_max(z_rejected_model())
+  // The worst Z residual (≈1.5 mm) is formatted and present in the box.
+  string.contains(html, fmt3_local(z_max)) |> should.be_true
+  // The per-point list is over a substantial range, not 0.001 mm.
+  string.contains(html, "0.001 mm") |> should.be_false
+}
+
+// A Z-rejected fit shows NO lone green GOOD headline that hides the Z failure —
+// the old bug where the screen read "99% GOOD" AND "rejected" at once. In the
+// redesign the XY % lives INSIDE the (truthfully-passing) REGISTRATION readout,
+// while the DEPTH axis is RED (`quality-value bad`) and the rejected box headlines
+// DEPTH — so the green is never the standalone verdict.
+pub fn z_rejected_fit_has_no_lone_good_headline_test() {
+  let html = render_align(z_rejected_model())
+  // The fit is rejected for depth, so it must read as Rejected.
+  string.contains(html, "Rejected") |> should.be_true
+  // The DEPTH axis renders RED (the failing-axis color) — the panel does not read
+  // as a flat green pass.
+  string.contains(html, "quality-value bad") |> should.be_true
+  // The DEPTH axis is the headline of the rejection: the rejected title names it.
+  string.contains(html, "DEPTH (Z) over tolerance") |> should.be_true
 }
 
 // The quality % is UNCHANGED for an XY-good fit regardless of Z: a 4-consistent-Z
 // Aligned fit (XY residual ~0) reads 100% GOOD exactly like a 3-capture clean fit
-// — Z is NOT folded into the quality projection (it gates separately).
+// — Z is NOT folded into the quality projection (it gates separately). The % lives
+// in the REGISTRATION readout in the new layout.
 pub fn quality_pct_unchanged_by_z_test() {
   let three_html = render_align(aligned_model())
   let four_html = render_align(aligned_four_consistent_model())
   // Both are XY-perfect → 100% GOOD; the Z addition did not alter the %.
   string.contains(three_html, "100% GOOD") |> should.be_true
   string.contains(four_html, "100% GOOD") |> should.be_true
+}
+
+// A pure-XY rejection still headlines REGISTRATION and quotes the XY error in the
+// override — the redesign keeps the existing XY path when XY is the failing axis.
+pub fn rejected_box_headlines_registration_for_xy_failure_test() {
+  let html = render_align(xy_rejected_model())
+  string.contains(html, "Rejected") |> should.be_true
+  string.contains(html, "REGISTRATION") |> should.be_true
 }
 
 // ── F3: advisory fit verdict + breakdown (ADR-0019) ──────────────────────────
