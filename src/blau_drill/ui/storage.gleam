@@ -131,13 +131,26 @@ pub fn save_backend(kind: BackendKind) -> Nil {
   set_item(backend_key, v)
 }
 
-/// Load the selected transport backend (defaults to the simulator).
-pub fn load_backend() -> BackendKind {
-  case get_item(backend_key) {
+/// Decode a persisted backend string into a `BackendKind`. The single source of
+/// truth for the string → backend mapping, shared by `load_backend` and the
+/// shell's picker decoder.
+///
+/// ADR-0021: the Emulator is the default hardware-free backend; the Simulator is
+/// test-only. So everything but `"real"` and `"emu"` resolves to `EmuBackend` —
+/// a legacy `"sim"` (migrated, not stranded), a missing key, or any unknown
+/// value all become the Emulator default.
+pub fn decode_backend(v: String) -> BackendKind {
+  case v {
     "real" -> model.RealBackend
     "emu" -> model.EmuBackend
-    _ -> model.SimBackend
+    // "sim" (legacy → migrated), missing, or unknown → the Emulator default.
+    _ -> model.EmuBackend
   }
+}
+
+/// Load the selected transport backend (defaults to the Emulator, ADR-0021).
+pub fn load_backend() -> BackendKind {
+  decode_backend(get_item(backend_key))
 }
 
 fn bool_str(b: Bool) -> String {

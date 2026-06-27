@@ -514,7 +514,7 @@ flowchart LR
     classDef new fill:#1c232d,stroke:#5ad6a8,color:#e6edf3;
     class CORE,SH,TP new;
         </div>
-        <div class="callout win"><strong>Same core, both uses.</strong> The deterministic driver makes CI assertions exact; the auto-pump shim makes the emulator a faithful virtual machine you can run the live UI against — exposed as a third operator-selectable <code>BackendKind</code> (<code>EmuBackend</code>, beside <code>SimBackend</code> / <code>RealBackend</code>) — so the flow is both <em>tested</em> and <em>demonstrable</em> without the bench. See <a class="xref" href="../adr/0013-faithful-emulator-motion-queue-and-envelope.md#adr-0013">ADR-0013</a>.</div>
+        <div class="callout win"><strong>Same core, both uses.</strong> The deterministic driver makes CI assertions exact; the auto-pump shim makes the emulator a faithful virtual machine you can run the live UI against — the <strong>default operator backend</strong> (<code>EmuBackend</code>, beside <code>RealBackend</code> in the picker) — so the flow is both <em>tested</em> and <em>demonstrable</em> without the bench. The thin <code>simulator</code> is <strong>test-only</strong> (<a class="xref" href="../adr/0021-emulator-is-the-default-hardware-free-backend.md#adr-0021">ADR-0021</a>): a cheap CI double, not an operator choice. See <a class="xref" href="../adr/0013-faithful-emulator-motion-queue-and-envelope.md#adr-0013">ADR-0013</a>.</div>
       </section>
 
       <!-- ============================ 10 ============================ -->

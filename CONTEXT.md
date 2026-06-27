@@ -213,12 +213,15 @@ is *not* admitted (the head does not advance). A `force` seam sets arbitrary
 `tick` by hand (deterministic CI/e2e); an `emulator_ffi.mjs` shim auto-pumps it
 on a JS interval so the same core runs as a live in-app virtual machine
 (ADR-0013).
-It is an **operator-selectable backend**: `EmuBackend` is a third
-`model.BackendKind` (with `SimBackend` / `RealBackend`), wired to
-`transport.emulator()`, so the operator can drive the live UI against the
-faithful virtual machine — the same backend the app-level e2e tests use.
-_Avoid:_ confusing it with the **thin `simulator`** (which acks everything and
-masks real bugs); the emulator is the faithful one. Bounds are **test-injected**,
+It is the **default operator backend** (ADR-0021): `EmuBackend` and `RealBackend`
+are the two `model.BackendKind`s the picker offers, wired to `transport.emulator()`
+/ `transport.web_serial()`, so an operator's hardware-free mode is the *faithful*
+one — the same backend the app-level e2e tests use. `EmuBackend` is the boot
+default.
+_Avoid:_ confusing it with the **thin `simulator`** (`SimBackend` /
+`transport.simulator()`, which acks everything and masks real bugs). The simulator
+is **test-only** now (ADR-0021): it stays a cheap test double but is NOT an operator
+picker choice; the emulator is the faithful one. Bounds are **test-injected**,
 never a hardcoded product default (motion limits are operator/hardware config).
 
 ### GcodeProgram {#term-gcodeprogram}

@@ -79,7 +79,7 @@ pub fn main() {
 
 fn init(_flags) -> #(Model, Effect(Msg)) {
   // Restore the persisted operator config + selected backend; default to the
-  // simulator so the app works with no hardware.
+  // faithful Emulator so the app works with no hardware (ADR-0021).
   let seed = mock.default_config()
   let cfg = storage.load_config(seed)
   let backend_kind = storage.load_backend()

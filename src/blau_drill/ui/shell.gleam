@@ -13,6 +13,7 @@ import blau_drill/ui/model.{
 }
 import blau_drill/ui/projection
 import blau_drill/ui/session
+import blau_drill/ui/storage
 import gleam/float
 import gleam/int
 import gleam/list
@@ -158,35 +159,30 @@ fn connection_card(model: Model) -> Element(model.Msg) {
         [a.attribute("for", "device-select"), a.class("visually-hidden")],
         [h.text("Backend")],
       ),
-      // Backend choice: the simulator (no hardware) vs the real Web Serial port.
-      // It is NOT a device list — Web Serial can't enumerate devices; the actual
-      // USB device is chosen in the browser's picker when you click Connect.
+      // Backend choice: the faithful Emulator (no hardware, default) vs the real
+      // Web Serial port. The thin Simulator is test-only and not offered here
+      // (ADR-0021). It is NOT a device list — Web Serial can't enumerate
+      // devices; the actual USB device is chosen in the browser's picker when
+      // you click Connect.
       h.select(
         [
           a.id("device-select"),
           a.class("conn-select"),
           a.disabled(connected),
           a.attribute("aria-label", "Connection backend"),
-          event.on_change(fn(v) {
-            case v {
-              "real" -> SelectBackend(RealBackend)
-              "emu" -> SelectBackend(EmuBackend)
-              _ -> SelectBackend(SimBackend)
-            }
-          }),
+          // Delegate to the single source of truth for the string → backend
+          // mapping, so the picker and `storage.load_backend` stay in lockstep
+          // (unknown → EmuBackend, the default).
+          event.on_change(fn(v) { SelectBackend(storage.decode_backend(v)) }),
         ],
         [
-          h.option(
-            [a.value("sim"), a.selected(model.backend_kind == SimBackend)],
-            "Simulator",
-          ),
           h.option(
             [a.value("real"), a.selected(model.backend_kind == RealBackend)],
             "Web Serial (CNC)",
           ),
           h.option(
             [a.value("emu"), a.selected(model.backend_kind == EmuBackend)],
-            "Emulator (faithful)",
+            "Emulator",
           ),
         ],
       ),
